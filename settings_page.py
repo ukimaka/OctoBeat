@@ -622,4 +622,4 @@ class SettingsPage(QWidget):
             self.settings.setValue("youtube_cookies", path)
 
     def _on_report_bug(self):
-        QDesktopServices.openUrl(QUrl(PROJECT_GITHUB_URL))
+        QDesktopServices.openUrl(QUrl("https://github.com/ukimaka/OctoBeat"))
