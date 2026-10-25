@@ -1,0 +1,30 @@
+{
+    "include": ["."],
+    "exclude": ["**/node_modules", "**/__pycache__"],
+
+    // PyQt5 поставляет неполные .pyi: enum'ы и часть атрибутов Qt видятся
+    // как Unknown. Строгий режим basedpyright из-за этого сыпет ошибками
+    // там, где код корректен. Держим разумный "standard", а не "strict".
+    "typeCheckingMode": "standard",
+
+    "reportArgumentType": "warning",
+    "reportBlindExcept": "none",
+
+    // --- PyQt5-специфичные (enum/атрибуты неизвестны без полных стабов) ---
+    "reportAttributeAccessIssue": "none",
+    "reportUnknownMemberType": "none",
+    "reportUnknownParameterType": "none",
+    "reportUnknownVariableType": "none",
+    "reportUnknownArgumentType": "none",
+    "reportUnknownLambdaType": "none",
+
+    // --- Слишком строгие правила basedpyright для этого проекта ---
+    "reportUnannotatedClassAttribute": "none",
+    "reportMissingOverride": "none",
+    "reportIncompatibleMethodOverride": "none",
+    "reportImplicitStringConcatenation": "none",
+
+    // --- Мелочи, которые просто шумят ---
+    "reportUnusedImport": "warning",
+    "reportUnusedExpression": "none"
+}
