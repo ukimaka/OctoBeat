@@ -43,8 +43,9 @@ from PyQt5.QtWidgets import (
 
 import db
 import metadata
+from musicbrainz_client import get_cached_source_for_path
 from pixmap_utils import (
-    draw_centered, draw_cover, svg_file_pixmap,
+    draw_centered, draw_cover, draw_source_badge, svg_file_pixmap,
 )
 from translations import tr
 
@@ -554,6 +555,15 @@ class _BulkTrackDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self._check_mark = colored_pixmap("confirm.svg", 12, "#ffffff")
         self._note = colored_pixmap("music-note.svg", 20, self.NOTE)
+        self._show_metadata_badges = False
+
+    def set_show_metadata_badges(self, enabled: bool):
+        """Включает/выключает отрисовку бейджей источников метаданных."""
+        if self._show_metadata_badges != enabled:
+            self._show_metadata_badges = enabled
+            parent = self.parent()
+            if parent is not None:
+                parent.viewport().update()
 
     def sizeHint(self, option, index):
         return QSize(option.rect.width(), self.ROW_HEIGHT)
@@ -611,6 +621,8 @@ class _BulkTrackDelegate(QStyledItemDelegate):
             painter.fillRect(cover_rect, self.COVER_BG)
             draw_centered(painter, cover_rect, self._note)
         painter.restore()
+        if self._show_metadata_badges:
+            draw_source_badge(painter, cover_rect, data.get("metadata_source"), size=11)
 
         # Название и исполнитель.
         text_x = cover_rect.right() + 12
@@ -680,7 +692,13 @@ class BulkAddDialog(_FramelessDialog):
 
         self.list = _BulkListWidget()
         self.list.setObjectName("cdBulkList")
-        self.list.setItemDelegate(_BulkTrackDelegate(self.list))
+        self._bulk_delegate = _BulkTrackDelegate(self.list)
+        self.list.setItemDelegate(self._bulk_delegate)
+        # Применяем текущую настройку бейджей
+        settings = QSettings("MusicPlayer", "MusicPlayer")
+        self._bulk_delegate.set_show_metadata_badges(
+            bool(settings.value("show_metadata_source_badges", False, type=bool))
+        )
         self.list.setSelectionMode(QAbstractItemView.NoSelection)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -691,12 +709,14 @@ class BulkAddDialog(_FramelessDialog):
         for row in db.get_all_tracks():
             path = row["file_path"]
             cover_path = metadata.extract_cover(path, row["id"]) if path else None
+            source = get_cached_source_for_path(path) if path else None
             item = QListWidgetItem()
             item.setData(Qt.UserRole, {
                 "id": row["id"],
                 "title": row["title"] or "Unknown Title",
                 "artist": row["artist"] or "Unknown Artist",
                 "cover_path": cover_path,
+                "metadata_source": source,
             })
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)

@@ -30,6 +30,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtCore import QSettings
 
 from metadata import clean_youtube_title
+from musicbrainz_client import get_track_metadata_with_fallback
 
 MUSIC_FOLDER = Path.home() / "Music"
 
@@ -51,6 +52,18 @@ _UNSAFE_FS_RE = re.compile(r'[\\/:*?"<>|]')
 _VIDEO_ID_RE = re.compile(
     r"(?:v=|youtu\.be/|/shorts/|/embed/|/v/)([A-Za-z0-9_-]{11})"
 )
+
+
+def _image_mime(path):
+    """MIME-тип обложки по расширению файла."""
+    suffix = Path(path).suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    return "image/jpeg"
 
 
 def _find_cookies_file(extra_folder=None):
@@ -171,7 +184,11 @@ class YoutubeWorker(QObject):
             self.error.emit("Загрузка прошла, но не удалось определить путь к файлу")
             return
 
-        # --- Вшиваем обложку из скачанного jpg файла ---
+        # --- Метаданные: MusicBrainz → YouTube → имя файла ---
+        raw_title = Path(final_path).stem
+        fallback_artist, fallback_title = clean_youtube_title(raw_title)
+
+        # yt-dlp мог скачать превью рядом с mp3 (--write-thumbnail).
         base_path = os.path.splitext(final_path)[0]
         img_path = None
         for ext in (".jpg", ".webp", ".png"):
@@ -179,22 +196,39 @@ class YoutubeWorker(QObject):
                 img_path = base_path + ext
                 break
 
-        if img_path:
+        try:
+            info = get_track_metadata_with_fallback(
+                fallback_artist,
+                fallback_title,
+                file_path=final_path,
+                youtube_thumbnail_path=img_path,
+            )
+        except Exception as e:
+            print(f"[metadata] lookup failed, using filename: {e}")
+            info = {
+                "title": fallback_title,
+                "artist": fallback_artist,
+                "album": None,
+                "cover_path": img_path,
+                "source": "filename",
+            }
+
+        artist = info.get("artist") or fallback_artist
+        clean_title = info.get("title") or fallback_title
+        album = info.get("album")
+
+        # --- Обложка: MusicBrainz/Cover Art Archive или превью YouTube ---
+        cover_source = info.get("cover_path") or img_path
+        embedded_ok = False
+        if cover_source and os.path.exists(cover_source):
             try:
                 try:
                     audio = ID3(final_path)
                 except ID3NoHeaderError:
                     audio = ID3()
 
-                # Определяем mime по расширению
-                if img_path.endswith(".jpg"):
-                    mime = "image/jpeg"
-                elif img_path.endswith(".png"):
-                    mime = "image/png"
-                else:
-                    mime = "image/webp"
-
-                with open(img_path, "rb") as img:
+                mime = _image_mime(cover_source)
+                with open(cover_source, "rb") as img:
                     audio.add(APIC(
                         encoding=3,
                         mime=mime,
@@ -204,34 +238,57 @@ class YoutubeWorker(QObject):
                     ))
 
                 audio.save(final_path, v2_version=3)
-                os.remove(img_path)
-                print(f"[yt-dlp] Обложка вшита: {mime}")
+                embedded_ok = True
+                print(
+                    f"[tags] Обложка вшита ({info.get('source', 'youtube')}): "
+                    f"{mime}"
+                )
             except Exception as e:
-                print(f"[yt-dlp] Ошибка вшивания обложки: {e}")
+                print(f"[tags] Ошибка вшивания обложки: {e}")
 
-        # --- ЧИСТИМ НАЗВАНИЕ И ВШИВАЕМ ТЕГИ ---
-        raw_title = Path(final_path).stem
-        artist, clean_title = clean_youtube_title(raw_title)
-
-        if artist != "Unknown Artist":
-            from mutagen.easyid3 import EasyID3
+        # Временное превью yt-dlp больше не нужно (кэш MusicBrainz не трогаем).
+        if embedded_ok and img_path and os.path.exists(img_path):
             try:
-                audio = EasyID3(final_path)
-            except Exception:
-                audio = EasyID3()
+                os.remove(img_path)
+            except OSError:
+                pass
 
+        # --- Теги: MusicBrainz/YouTube либо очищенное имя файла ---
+        if clean_title:
             try:
-                audio["artist"] = artist
+                try:
+                    audio = EasyID3(final_path)
+                except Exception:
+                    audio = EasyID3()
+
+                if artist and artist != "Unknown Artist":
+                    audio["artist"] = artist
                 audio["title"] = clean_title
+                if album:
+                    audio["album"] = album
                 audio.save(final_path, v2_version=3)
-                print(f"[tags] Set Artist='{artist}', Title='{clean_title}'")
+                print(
+                    f"[tags] Artist='{artist}', Title='{clean_title}', "
+                    f"Album='{album}'"
+                )
             except Exception as e:
                 print(f"[tags] Cannot write tags: {e}")
 
-            new_name = f"{artist} - {clean_title}.mp3"
+        if artist and artist != "Unknown Artist" and clean_title:
+            safe_name = _UNSAFE_FS_RE.sub("_", f"{artist} - {clean_title}").strip()
+            suffix = Path(final_path).suffix or ".mp3"
+            new_name = f"{safe_name}{suffix}"
             new_path = os.path.join(os.path.dirname(final_path), new_name)
             try:
-                if final_path != new_path:
+                if os.path.abspath(final_path) != os.path.abspath(new_path):
+                    if os.path.exists(new_path):
+                        counter = 2
+                        while os.path.exists(new_path):
+                            new_name = f"{safe_name} ({counter}){suffix}"
+                            new_path = os.path.join(
+                                os.path.dirname(final_path), new_name
+                            )
+                            counter += 1
                     os.rename(final_path, new_path)
                     final_path = new_path
                     print(f"[rename] Renamed to {new_name}")

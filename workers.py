@@ -29,6 +29,10 @@ from mutagen.id3 import ID3, APIC, ID3NoHeaderError
 
 import db
 import metadata
+from musicbrainz_client import (
+    get_track_metadata_with_fallback,
+    metadata_needs_refresh,
+)
 
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav"}
@@ -48,6 +52,16 @@ def find_audio_files(folder):
         str(p) for p in folder.rglob("*")
         if p.is_file() and p.suffix.lower() in AUDIO_EXTS
     ]
+
+
+def find_sidecar_image(file_path):
+    """Ищет превью, скачанное yt-dlp рядом с аудиофайлом."""
+    base_path = os.path.splitext(str(file_path))[0]
+    for ext in (".jpg", ".webp", ".png"):
+        candidate = base_path + ext
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 
 def get_mean_volume(path):
@@ -173,9 +187,34 @@ class RescanWorker(QObject):
         for row in meta_rows:
             try:
                 path = row["file_path"]
+                current = metadata.read_metadata(path)
+                lookup_title = current["title"] or Path(path).stem
+                lookup_artist = current["artist"] or "Unknown Artist"
 
-                # Чистим название YouTube и при необходимости переименовываем файл
-                artist, clean_title = metadata.clean_youtube_title(Path(path).stem)
+                # Пустые теги или YouTube-мусор в них — повод сходить в
+                # MusicBrainz (функция сама сделает YouTube-fallback).
+                info = None
+                if metadata_needs_refresh(lookup_artist, lookup_title):
+                    try:
+                        info = get_track_metadata_with_fallback(
+                            lookup_artist,
+                            lookup_title,
+                            file_path=path,
+                        )
+                    except Exception as e:
+                        print(f"[rescan] metadata lookup failed {path}: {e}")
+
+                if info:
+                    artist = info.get("artist") or lookup_artist
+                    clean_title = info.get("title") or lookup_title
+                    album = info.get("album") or current["album"]
+                else:
+                    artist, clean_title = metadata.clean_youtube_title(
+                        Path(path).stem
+                    )
+                    album = current["album"]
+
+                # При необходимости переименовываем файл.
                 new_path = path
                 if artist != "Unknown Artist" and clean_title:
                     ext = Path(path).suffix or ".mp3"
@@ -194,6 +233,20 @@ class RescanWorker(QObject):
                 if new_path != path:
                     db.update_track_path(row["id"], new_path)
 
+                # Вшиваем обложку, найденную MusicBrainz/YouTube.
+                if info and info.get("cover_path"):
+                    CsvImportWorker._embed_cover(
+                        new_path, info["cover_path"]
+                    )
+                    # Сбрасываем старую закэшированную обложку, чтобы UI
+                    # перечитал её из файла.
+                    try:
+                        old_cover = metadata.COVERS_DIR / f"{row['id']}.jpg"
+                        if old_cover.exists():
+                            old_cover.unlink()
+                    except OSError as e:
+                        print(f"[rescan] cover cache reset failed: {e}")
+
                 # Записываем новые теги
                 if artist != "Unknown Artist":
                     try:
@@ -203,6 +256,8 @@ class RescanWorker(QObject):
                             audio = EasyID3()
                         audio["artist"] = artist
                         audio["title"] = clean_title
+                        if album:
+                            audio["album"] = album
                         audio.save(new_path, v2_version=3)
                     except Exception as e:
                         print(f"[rescan] tag write failed {new_path}: {e}")
@@ -326,11 +381,38 @@ class CsvImportWorker(QObject):
         if not final_path:
             return None
 
-        # --- Обложка: jpg рядом с mp3 -> APIC -> удалить jpg ---
-        self._embed_cover(final_path)
+        # --- Метаданные: MusicBrainz → YouTube → CSV ---
+        thumb_path = find_sidecar_image(final_path)
+        try:
+            info = get_track_metadata_with_fallback(
+                artist,
+                track_name,
+                file_path=final_path,
+                youtube_thumbnail_path=thumb_path,
+            )
+        except Exception as e:
+            print(f"[csv-import] metadata lookup failed: {e}")
+            info = {
+                "title": track_name,
+                "artist": artist,
+                "album": None,
+                "cover_path": thumb_path,
+            }
 
-        # --- Теги из CSV, чтобы в плеере были красивые artist/title ---
-        self._write_tags(final_path, artist, track_name)
+        # --- Обложка: MusicBrainz/Cover Art Archive или превью YouTube ---
+        cover_path = info.get("cover_path") or thumb_path
+        self._embed_cover(final_path, cover_path)
+
+        # --- Теги: найденные метаданные либо значения из CSV ---
+        final_artist = info.get("artist") or artist
+        final_title = info.get("title") or track_name
+        final_album = info.get("album")
+        self._write_tags(
+            final_path,
+            final_artist,
+            final_title,
+            album=final_album,
+        )
 
         # --- БД ---
         track_id = db.add_track(final_path)
@@ -339,9 +421,9 @@ class CsvImportWorker(QObject):
                 md = metadata.read_metadata(final_path)
                 db.update_track_metadata(
                     track_id,
-                    title=md["title"] or track_name,
-                    artist=md["artist"] or artist,
-                    album=md["album"],
+                    title=md["title"] or final_title,
+                    artist=md["artist"] or final_artist,
+                    album=md["album"] or final_album,
                     duration=md["duration"],
                 )
             except Exception as e:
@@ -481,15 +563,14 @@ class CsvImportWorker(QObject):
     #  Обложка и теги
     # ------------------------------------------------------------------
     @staticmethod
-    def _embed_cover(final_path):
+    def _embed_cover(final_path, cover_path=None):
+        """Вшивает обложку в файл. Кэшированные обложки не удаляет."""
         base_path = os.path.splitext(final_path)[0]
-        img_path = None
-        for ext in (".jpg", ".webp", ".png"):
-            if os.path.exists(base_path + ext):
-                img_path = base_path + ext
-                break
+        img_path = cover_path if cover_path and os.path.isfile(cover_path) else None
         if not img_path:
-            return
+            img_path = find_sidecar_image(final_path)
+        if not img_path:
+            return False
 
         try:
             try:
@@ -497,12 +578,15 @@ class CsvImportWorker(QObject):
             except ID3NoHeaderError:
                 audio = ID3()
 
-            if img_path.endswith(".jpg"):
-                mime = "image/jpeg"
-            elif img_path.endswith(".png"):
+            suffix = Path(img_path).suffix.lower()
+            if suffix == ".png":
                 mime = "image/png"
-            else:
+            elif suffix == ".webp":
                 mime = "image/webp"
+            elif suffix == ".gif":
+                mime = "image/gif"
+            else:
+                mime = "image/jpeg"
 
             with open(img_path, "rb") as img:
                 audio.add(APIC(
@@ -514,23 +598,36 @@ class CsvImportWorker(QObject):
                 ))
 
             audio.save(final_path, v2_version=3)
-            os.remove(img_path)
+
+            # Удаляем только временное превью yt-dlp рядом с mp3,
+            # а обложку из кэша MusicBrainz/YouTube оставляем.
+            if os.path.splitext(img_path)[0] == base_path:
+                os.remove(img_path)
             print(f"[csv-import] Обложка вшита: {mime}")
+            return True
         except Exception as e:
             print(f"[csv-import] Ошибка вшивания обложки: {e}")
+            return False
 
     @staticmethod
-    def _write_tags(final_path, artist, title):
+    def _write_tags(final_path, artist, title, album=None):
         try:
             try:
                 audio = EasyID3(final_path)
             except Exception:
                 audio = EasyID3()
 
-            audio["artist"] = artist
-            audio["title"] = title
+            if artist:
+                audio["artist"] = artist
+            if title:
+                audio["title"] = title
+            if album:
+                audio["album"] = album
             audio.save(final_path, v2_version=3)
-            print(f"[csv-import] Теги: Artist='{artist}', Title='{title}'")
+            print(
+                f"[csv-import] Теги: Artist='{artist}', Title='{title}', "
+                f"Album='{album}'"
+            )
         except Exception as e:
             print(f"[csv-import] Не удалось записать теги: {e}")
 

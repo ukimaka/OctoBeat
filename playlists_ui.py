@@ -43,6 +43,7 @@ from dialogs import (
     colored_icon,
     colored_pixmap,
 )
+from musicbrainz_client import get_cached_source_for_path
 from pixmap_utils import draw_centered, draw_cover, pixmap_size
 from translations import tr
 
@@ -755,6 +756,11 @@ class PlaylistsPage(QWidget):
 
         self.tracks_list = PlaylistTracksWidget()
         self.track_delegate = TrackDelegate(self.tracks_list)
+        # Применяем текущую настройку бейджей источников метаданных
+        settings = QSettings("MusicPlayer", "MusicPlayer")
+        self.track_delegate.set_show_metadata_badges(
+            bool(settings.value("show_metadata_source_badges", False, type=bool))
+        )
         self.tracks_list.setItemDelegate(self.track_delegate)
         # Полностью отключаем системное выделение: никаких рамок/фонов при клике.
         # Двойной клик и контекстное меню работают по координатам мыши.
@@ -907,6 +913,7 @@ class PlaylistsPage(QWidget):
         for i, row in enumerate(rows):
             path = row["file_path"]
             item = QListWidgetItem()
+            source = get_cached_source_for_path(path)
             item.setData(Qt.UserRole, {
                 "id": row["id"],
                 "path": path,
@@ -914,6 +921,7 @@ class PlaylistsPage(QWidget):
                 "artist": row["artist"] or "Unknown Artist",
                 "duration": row["duration"],
                 "cover_path": metadata.extract_cover(path, row["id"]),
+                "metadata_source": source,
                 "index": i + 1,
             })
             self.tracks_list.addItem(item)

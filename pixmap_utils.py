@@ -158,6 +158,69 @@ def draw_cover(painter, rect, pixmap):
     return True
 
 
+SOURCE_BADGE_LABELS = {
+    "musicbrainz": "M",
+    "youtube": "Y",
+    "fallback": "F",
+}
+SOURCE_BADGE_COLORS = {
+    "musicbrainz": QColor("#5151ab"),
+    "youtube": QColor("#c62828"),
+    "fallback": QColor("#6d6d6d"),
+}
+SOURCE_BADGE_NAMES = {
+    "musicbrainz": "MusicBrainz",
+    "youtube": "YouTube",
+    "fallback": "filename / fallback",
+}
+
+
+def source_display_name(source):
+    """Человекочитаемое имя источника метаданных для тултипа."""
+    return SOURCE_BADGE_NAMES.get(str(source or "").casefold(), "")
+
+
+def draw_source_badge(painter, rect, source, size=14):
+    """Рисует маленький бейдж M/Y/F в правом нижнем углу обложки.
+
+    Используется только как debug-индикация источника метаданных.
+    """
+    key = str(source or "").casefold()
+    label = SOURCE_BADGE_LABELS.get(key)
+    color = SOURCE_BADGE_COLORS.get(key)
+    if painter is None or not label or color is None:
+        return False
+
+    rect = QRectF(rect)
+    badge_size = min(
+        float(size),
+        max(9.0, min(rect.width(), rect.height()) * 0.34),
+    )
+    margin = max(2.0, badge_size * 0.16)
+    badge_rect = QRectF(
+        rect.right() - badge_size - margin,
+        rect.bottom() - badge_size - margin,
+        badge_size,
+        badge_size,
+    )
+
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    radius = badge_size * 0.25
+    painter.drawRoundedRect(badge_rect, radius, radius)
+
+    font = painter.font()
+    font.setPixelSize(max(7, int(round(badge_size * 0.62))))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.setPen(QColor("#ffffff"))
+    painter.drawText(badge_rect, Qt.AlignCenter, label)
+    painter.restore()
+    return True
+
+
 def draw_centered(painter, rect, pixmap):
     """Рисует pixmap по центру логического прямоугольника ``rect``."""
     if pixmap is None or pixmap.isNull():

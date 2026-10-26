@@ -120,6 +120,17 @@ def read_metadata(path):
     return result
 
 
+def _cached_musicbrainz_cover(file_path):
+    """Обложка из локального кэша MusicBrainz/YouTube (без сети)."""
+    try:
+        from musicbrainz_client import get_cached_cover_for_path
+
+        return get_cached_cover_for_path(file_path)
+    except Exception as e:
+        print(f"[metadata] musicbrainz cover lookup failed: {e}")
+        return None
+
+
 def extract_cover(file_path, track_id):
     """Кэширует встроенную обложку трека в COVERS_DIR/{track_id}.jpg.
     Возвращает путь к файлу обложки или None, если обложки нет."""
@@ -131,10 +142,10 @@ def extract_cover(file_path, track_id):
         audio = MutagenFile(file_path)
     except Exception as e:
         print(f"[metadata] cover read failed for {file_path}: {e}")
-        return None
+        return _cached_musicbrainz_cover(file_path)
 
     if audio is None or audio.tags is None:
-        return None
+        return _cached_musicbrainz_cover(file_path)
 
     data = None
 
@@ -151,7 +162,7 @@ def extract_cover(file_path, track_id):
             data = bytes(covr[0])
 
     if not data:
-        return None
+        return _cached_musicbrainz_cover(file_path)
 
     try:
         COVERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -159,7 +170,7 @@ def extract_cover(file_path, track_id):
         return str(cover_file)
     except Exception as e:
         print(f"[metadata] cover save failed for {file_path}: {e}")
-        return None
+        return _cached_musicbrainz_cover(file_path)
 
 
 def format_track(track, fallback_path=None, with_duration=True):

@@ -8,7 +8,8 @@ Most modern players either eat 500MB of RAM or force you into a streaming ecosys
 ## ✨ Features
 - **Blazing fast:** Native PyQt5 UI, zero web views.
 - **Local-first:** Advanced folder management, custom playlists, and smart sorting.
-- **YouTube Integration:** Search, download, and smartly embed metadata & covers (via `yt-dlp`).
+- **MusicBrainz Metadata:** Official metadata and covers (Cover Art Archive), with YouTube as a fallback.
+- **YouTube Integration:** Search and download tracks with `yt-dlp`.
 - **Synced Lyrics:** Beautiful full-screen karaoke mode powered by LRCLIB.
 - **Audio Engineering:** Crossfade (equal-power curve), loudness normalization.
 - **Social (Optional):** Sync your stats and share playlists with friends via a self-hosted FastAPI backend.

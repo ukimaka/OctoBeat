@@ -25,7 +25,9 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QStyle, QStyledItemDelegate
 
-from pixmap_utils import draw_centered, draw_cover, svg_file_pixmap
+from pixmap_utils import (
+    draw_centered, draw_cover, draw_source_badge, svg_file_pixmap,
+)
 
 
 ICONS_DIR = Path(__file__).parent / "icons"
@@ -72,6 +74,8 @@ class TrackDelegate(QStyledItemDelegate):
         self._icons = {}
         # id трека, который сейчас играет: акцентная полоска слева + фон строки
         self.current_playing_id = None
+        # Флаг показа бейджей источников метаданных (M/Y/F на обложках)
+        self._show_metadata_badges = False
 
     def set_dark_theme(self, is_dark_theme):
         """Задаёт тему явно (None — определять из QSettings при отрисовке)."""
@@ -87,6 +91,12 @@ class TrackDelegate(QStyledItemDelegate):
     def set_current_track_id(self, track_id):
         """Обратная совместимость: старый вход в set_current_playing."""
         self.set_current_playing(track_id)
+
+    def set_show_metadata_badges(self, enabled: bool):
+        """Включает/выключает отрисовку бейджей источников метаданных."""
+        if self._show_metadata_badges != enabled:
+            self._show_metadata_badges = enabled
+            self._repaint_owner()
 
     def _repaint_owner(self):
         """Форсирует перерисовку viewport'а виджета-владельца."""
@@ -242,7 +252,13 @@ class TrackDelegate(QStyledItemDelegate):
             self.COVER_SIZE,
             self.COVER_SIZE,
         )
-        self._draw_cover(painter, cover_rect, data.get("cover_path"), palette)
+        self._draw_cover(
+            painter,
+            cover_rect,
+            data.get("cover_path"),
+            palette,
+            data.get("metadata_source"),
+        )
 
         # Длительность (измеряем до текстов)
         duration = data.get("duration") or 0
@@ -335,7 +351,9 @@ class TrackDelegate(QStyledItemDelegate):
 
         painter.restore()
 
-    def _draw_cover(self, painter, rect, cover_path, palette):
+    def _draw_cover(
+        self, painter, rect, cover_path, palette, metadata_source=None
+    ):
         radius = self.COVER_RADIUS
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(rect), radius, radius)
@@ -351,3 +369,5 @@ class TrackDelegate(QStyledItemDelegate):
             draw_centered(painter, QRectF(rect), note)
 
         painter.restore()
+        if self._show_metadata_badges:
+            draw_source_badge(painter, rect, metadata_source, size=13)

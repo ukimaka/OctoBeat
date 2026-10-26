@@ -20,7 +20,6 @@ import base64
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import requests
@@ -53,7 +52,6 @@ from pixmap_utils import (
     draw_centered, draw_cover, new_pixmap, render_svg, svg_file_pixmap,
 )
 from translations import tr
-from youtube_worker import _find_cookies_file
 
 
 PROFILE_COVERS_DIR = Path.home() / ".cache" / "music_player" / "profile_covers"
@@ -591,32 +589,35 @@ class _DialogTitleBar(QWidget):
 
 
 class CoverLoader(QThread):
-    """Ищет трек на YouTube и качает его обложку (для треков без локальной)."""
+    """Ищет обложку: MusicBrainz/Cover Art Archive → YouTube (fallback)."""
 
     loaded = pyqtSignal(int, QPixmap)   # track_id, обложка
 
-    def __init__(self, track_id, query, parent=None):
+    def __init__(
+        self,
+        track_id,
+        query,
+        parent=None,
+        artist=None,
+        title=None,
+    ):
         super().__init__(parent)
         self.track_id = track_id
         self.query = (query or "").strip()
+        self.artist = (artist or "").strip()
+        self.title = (title or "").strip()
 
     def run(self):
         cover_file = PROFILE_COVERS_DIR / f"{self.track_id}.jpg"
         if not (cover_file.exists() and cover_file.stat().st_size > 0):
-            url = self._remote_cover_url()
-            if not url:
-                return
-            try:
-                response = requests.get(url, timeout=15)
-                response.raise_for_status()
-            except Exception:
-                return
-            if not response.content:
+            source = self._find_cover()
+            if not source:
                 return
             try:
                 PROFILE_COVERS_DIR.mkdir(parents=True, exist_ok=True)
-                cover_file.write_bytes(response.content)
-            except Exception:
+                shutil.copyfile(source, cover_file)
+            except Exception as exc:
+                print(f"[cover] cannot cache cover: {exc}")
                 return
 
         pixmap = QPixmap()
@@ -624,35 +625,25 @@ class CoverLoader(QThread):
             return
         self.loaded.emit(self.track_id, pixmap)
 
-    def _remote_cover_url(self):
-        video_id = self._search_video_id()
-        if not video_id:
-            return ""
-        return f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+    def _find_cover(self):
+        """MusicBrainz → YouTube через общий пайплайн метаданных."""
+        from musicbrainz_client import get_track_metadata_with_fallback
 
-    def _search_video_id(self):
-        if not self.query:
+        title = self.title or self.query
+        if not title:
             return ""
-        exe = shutil.which("yt-dlp")
-        if exe is None:
-            return ""
-        cmd = [exe, "--no-warnings", "--get-id", f"ytsearch1:{self.query}"]
-        cookies_path = _find_cookies_file()
-        if cookies_path is not None:
-            cmd += ["--cookies", str(cookies_path)]
         try:
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, timeout=30,
+            info = get_track_metadata_with_fallback(
+                self.artist,
+                title,
             )
-        except Exception:
+        except Exception as exc:
+            print(f"[cover] metadata lookup failed for {self.query!r}: {exc}")
             return ""
-        if result.returncode != 0:
-            return ""
-        for line in (result.stdout or "").splitlines():
-            line = line.strip()
-            if line:
-                return line
+
+        cover_path = info.get("cover_path")
+        if cover_path and Path(str(cover_path)).is_file():
+            return str(cover_path)
         return ""
 
 
@@ -1572,7 +1563,14 @@ class ProfilePage(QWidget):
 
         cover = QLabel()
         cover.setFixedSize(36, 36)
-        self._set_cover(cover, track_id, cover_path, query)
+        self._set_cover(
+            cover,
+            track_id,
+            cover_path,
+            query,
+            artist=subtitle,
+            title=title,
+        )
         row.addWidget(cover)
 
         text_col = QVBoxLayout()
@@ -1590,8 +1588,16 @@ class ProfilePage(QWidget):
         row.addLayout(text_col, 1)
         return wrapper
 
-    def _set_cover(self, cover_label, track_id, cover_path, query):
-        """Ставит локальную обложку или заглушку + подгружает её с YouTube."""
+    def _set_cover(
+        self,
+        cover_label,
+        track_id,
+        cover_path,
+        query,
+        artist=None,
+        title=None,
+    ):
+        """Ставит локальную обложку или заглушку + подгружает её из сети."""
         if cover_path:
             cover_label.setPixmap(_cover_pixmap(cover_path, 36))
             return
@@ -1603,15 +1609,26 @@ class ProfilePage(QWidget):
 
         cover_label.setPixmap(_cover_pixmap(None, 36))
         self._cover_labels.setdefault(track_id, []).append(cover_label)
-        self._start_cover_loader(track_id, query)
+        self._start_cover_loader(
+            track_id,
+            query,
+            artist=artist,
+            title=title,
+        )
 
-    def _start_cover_loader(self, track_id, query):
-        if not query:
+    def _start_cover_loader(self, track_id, query, artist=None, title=None):
+        if not query and not title:
             return
         loader = self._cover_loaders.get(track_id)
         if loader is not None and loader.isRunning():
             return
-        loader = CoverLoader(track_id, query, self)
+        loader = CoverLoader(
+            track_id,
+            query,
+            self,
+            artist=artist,
+            title=title,
+        )
         loader.loaded.connect(self._on_cover_loaded)
         self._cover_loaders[track_id] = loader
         loader.start()

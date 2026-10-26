@@ -70,6 +70,9 @@ class SettingsPage(QWidget):
     # Сигнал «кроссфейд включён/выключен» — применяется к плееру сразу.
     crossfade_changed = pyqtSignal(bool)
 
+    # Сигнал «показ бейджей источников метаданных изменён» — списки обновляются.
+    metadata_badges_changed = pyqtSignal(bool)
+
     # Сигнал «пользователь вышел из аккаунта» — главное окно чистит состояние.
     logged_out = pyqtSignal()
 
@@ -221,6 +224,19 @@ class SettingsPage(QWidget):
                 self._lang(),
             ),
             self.clear_all_cache_button,
+        ))
+
+        self.show_metadata_badges_check = QCheckBox(
+            tr("Show metadata source badges", self._lang())
+        )
+        self.show_metadata_badges_check.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(self._make_row(
+            tr("Metadata source badges", self._lang()),
+            tr(
+                "Display small M/Y/F badges on track covers indicating the metadata source.",
+                self._lang(),
+            ),
+            self.show_metadata_badges_check,
         ))
 
         layout.addStretch(1)
@@ -446,6 +462,10 @@ class SettingsPage(QWidget):
             bool(self.settings.value("enable_crossfade", True, type=bool))
         )
 
+        self.show_metadata_badges_check.setChecked(
+            bool(self.settings.value("show_metadata_source_badges", False, type=bool))
+        )
+
         zoom = self.settings.value("zoom", 100)
         try:
             zoom = int(zoom)
@@ -503,6 +523,9 @@ class SettingsPage(QWidget):
         # установка начальных значений тут же применила бы настройки.
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         self.crossfade_check.toggled.connect(self._on_crossfade_toggled)
+        self.show_metadata_badges_check.toggled.connect(
+            self._on_metadata_badges_toggled
+        )
         self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
         self.reset_zoom_button.clicked.connect(self._on_reset_zoom)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
@@ -528,6 +551,12 @@ class SettingsPage(QWidget):
         self.settings.setValue("enable_crossfade", bool(enabled))
         self.settings.sync()
         self.crossfade_changed.emit(bool(enabled))
+
+    def _on_metadata_badges_toggled(self, enabled):
+        """Сохраняет настройку показа бейджей и уведомляет списки треков."""
+        self.settings.setValue("show_metadata_source_badges", bool(enabled))
+        self.settings.sync()
+        self.metadata_badges_changed.emit(bool(enabled))
 
     def _on_zoom_changed(self):
         zoom = self.zoom_combo.currentData()

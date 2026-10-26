@@ -270,6 +270,9 @@ class MainWindow(QMainWindow):
         self.settings_page.crossfade_changed.connect(
             self.media_player.set_crossfade_enabled
         )
+        self.settings_page.metadata_badges_changed.connect(
+            self._on_metadata_badges_changed
+        )
         # CSV-импорт остаётся в настройках, но проходит через общий
         # библиотечный сигнал — единая точка входа для импорта в библиотеку.
         self.settings_page.csv_import_requested.connect(
@@ -372,6 +375,17 @@ class MainWindow(QMainWindow):
         """Применяет тему и масштаб интерфейса из настроек."""
         self.appearance.apply_ui_settings()
         self.is_dark_theme = self.appearance.is_dark_theme
+
+    def _on_metadata_badges_changed(self, enabled: bool):
+        """Обновляет отображение бейджей источников в списках треков."""
+        # Библиотека
+        if hasattr(self, "library_tab") and self.library_tab.track_delegate:
+            self.library_tab.track_delegate.set_show_metadata_badges(enabled)
+            self.library_tab.tracks_list.viewport().update()
+        # Плейлисты
+        if hasattr(self, "playlists_page") and self.playlists_page.track_delegate:
+            self.playlists_page.track_delegate.set_show_metadata_badges(enabled)
+            self.playlists_page.tracks_list.viewport().update()
 
     def _on_tab_changed(self, index):
         """Обновляет данные вкладки при её открытии."""

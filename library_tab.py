@@ -27,7 +27,9 @@ import metadata
 from delegates import TrackDelegate
 from dialogs import CustomConfirmDialog, CustomInputDialog
 from library_tree import LibraryTreeWidget
+from musicbrainz_client import get_cached_source_for_path
 from next_track_island import NextTrackIsland
+from pixmap_utils import source_display_name
 from translations import tr
 
 
@@ -66,6 +68,10 @@ class LibraryTab(QWidget):
         self.tracks_list.setHeaderHidden(True)
         self.tracks_list.setColumnCount(1)
         self.track_delegate = TrackDelegate(self.tracks_list)
+        # Применяем текущую настройку бейджей источников метаданных
+        self.track_delegate.set_show_metadata_badges(
+            bool(self.settings.value("show_metadata_source_badges", False, type=bool))
+        )
         self.tracks_list.setItemDelegate(self.track_delegate)
         # Полностью отключаем системное выделение: никаких рамок/фонов при клике.
         # Двойной клик и контекстное меню работают по координатам мыши.
@@ -281,6 +287,7 @@ class LibraryTab(QWidget):
 
     def _make_track_item(self, row, index=None):
         item = QTreeWidgetItem()
+        source = get_cached_source_for_path(row["file_path"])
         item.setData(0, Qt.UserRole, {
             "id": row["id"],
             "path": row["file_path"],
@@ -288,6 +295,7 @@ class LibraryTab(QWidget):
             "artist": row["artist"] or "Unknown Artist",
             "duration": row["duration"],
             "cover_path": metadata.extract_cover(row["file_path"], row["id"]),
+            "metadata_source": source,
             "index": index,
         })
         # Треки можно таскать, но нельзя принимать drop (не станут контейнером)
