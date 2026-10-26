@@ -88,7 +88,10 @@ class PlayerBar(QWidget):
         self.timeline.setValue(0)
 
         self.time_label = QLabel("0:00 / 0:00")
-        self.time_label.setFixedWidth(80)
+        self.time_label.setMinimumWidth(64)
+        self.time_label.setSizePolicy(
+            QSizePolicy.Minimum, QSizePolicy.Preferred
+        )
 
         timeline_row = QHBoxLayout()
         timeline_row.addWidget(self.timeline, 1)

@@ -57,6 +57,7 @@ class LibraryTab(QWidget):
         self._saved_collapsed_folders = self._load_saved_collapsed_folders()
         self._folders_initialized = False
         self.sort_ascending = False
+        self._sort_index = 0
         self._next_track_id = None
 
         lang = self.settings.value("language", "en")
@@ -144,6 +145,10 @@ class LibraryTab(QWidget):
             tr("Artist", lang),
             tr("Duration", lang),
         ])
+        # Ширина по содержимому + запас под стрелку направления, иначе
+        # длинные переводы и hover-рамка обрезают текст.
+        self.sort_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.sort_combo.setMinimumWidth(150)
 
         self.filter_icon_label = QLabel()
         self.filter_icon_label.setPixmap(self.icons.pixmap("filter.svg", 20))
@@ -178,8 +183,10 @@ class LibraryTab(QWidget):
 
         # Внутренние связи библиотеки
         self.search_edit.textChanged.connect(self.reload)
-        self.sort_combo.currentIndexChanged.connect(self.reload)
-        self.sort_combo.activated.connect(self._on_sort_toggled)
+        # activated приходит и при выборе уже активного пункта, поэтому
+        # именно он переключает asc/desc. currentIndexChanged здесь не нужен:
+        # он не срабатывает на повторный клик и давал двойной reload.
+        self.sort_combo.activated.connect(self._on_sort_activated)
         self.tracks_list.itemDoubleClicked.connect(
             self._on_item_double_clicked
         )
@@ -191,6 +198,7 @@ class LibraryTab(QWidget):
         self.tracks_list.customContextMenuRequested.connect(
             self.context_menu_requested.emit
         )
+        self._update_sort_indicator()
 
     # ------------------------------------------------------------------
     #  Данные дерева
@@ -432,18 +440,28 @@ class LibraryTab(QWidget):
         self.reload()
         self.library_changed.emit()
 
-    def _on_sort_toggled(self, index):
-        self.sort_ascending = not self.sort_ascending
-        arrow = "↑" if self.sort_ascending else "↓"
+    def _on_sort_activated(self, index):
+        """Переключает направление сортировки при каждом клике по фильтру."""
+        if index < 0:
+            return
+        if index == self._sort_index:
+            self.sort_ascending = not self.sort_ascending
+        else:
+            self._sort_index = index
+            # Для даты/длительности первым показываем убывание, для
+            # названия/артиста — возрастание.
+            self.sort_ascending = index in (1, 2)
+        self._update_sort_indicator()
+        self.reload()
 
-        # 1. Очищаем ВСЕ пункты от старых стрелок
+    def _update_sort_indicator(self):
+        """Оставляет стрелку только у выбранного пункта."""
+        arrow = "↑" if self.sort_ascending else "↓"
         for i in range(self.sort_combo.count()):
             text = self.sort_combo.itemText(i).strip(" ↑↓")
+            if i == self.sort_combo.currentIndex():
+                text = f"{text} {arrow}"
             self.sort_combo.setItemText(i, text)
-
-        # 2. Добавляем стрелку к выбранному
-        current_text = self.sort_combo.itemText(index).strip(" ↑↓")
-        self.sort_combo.setItemText(index, f"{current_text} {arrow}")
 
     def focus_search(self):
         self.search_edit.setFocus()

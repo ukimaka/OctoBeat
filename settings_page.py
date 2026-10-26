@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -85,7 +86,11 @@ class SettingsPage(QWidget):
         # --- Левая колонка: навигация ---
         self.nav = QListWidget()
         self.nav.setObjectName("settingsNav")
-        self.nav.setFixedWidth(200)
+        # Не фиксируем ширину: при системном масштабе/узком окне колонка
+        # должна сжиматься, а не выдавливать контент за край.
+        self.nav.setMinimumWidth(150)
+        self.nav.setMaximumWidth(220)
+        self.nav.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.nav.setFocusPolicy(Qt.NoFocus)
 
         # --- Правая колонка: контент ---
@@ -268,7 +273,9 @@ class SettingsPage(QWidget):
 
         self.zoom_combo = QComboBox()
         self.zoom_combo.setMinimumWidth(160)
-        for value in (75, 100, 125, 150):
+        # Qt5 не поддерживает QT_SCALE_FACTOR < 1 (UI обрезается), поэтому
+        # минимальный безопасный масштаб — 100%.
+        for value in (100, 125, 150):
             self.zoom_combo.addItem(f"{value}%", value)
         layout.addWidget(self._make_row(
             tr("Interface zoom", self._lang()),

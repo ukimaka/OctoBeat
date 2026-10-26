@@ -28,8 +28,8 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import (
     QAbstractItemView, QAction, QComboBox, QFileDialog, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem,
-    QMenu, QMessageBox, QPushButton, QStackedWidget, QTextEdit, QVBoxLayout,
-    QWidget,
+    QMenu, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 import db
@@ -183,13 +183,20 @@ class _CoverWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(self.COVER_SIZE, self.COVER_SIZE)
+        # Обложка может немного сжиматься в узком окне, но не раздувается
+        # больше своего обычного размера.
+        self.setMinimumSize(110, 110)
+        self.setMaximumSize(self.COVER_SIZE, self.COVER_SIZE)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.setCursor(Qt.PointingHandCursor)
         self._cover_path = None
         self._hover = False
         self._note_cache = {}
         # Карандаш рисуется поверх тёмного hover-оверлея — всегда белый.
         self._pencil = colored_pixmap("pencil.svg", 20, "#ffffff")
+
+    def sizeHint(self):
+        return QSize(self.COVER_SIZE, self.COVER_SIZE)
 
     def set_cover(self, path):
         self._cover_path = path
@@ -248,7 +255,7 @@ class _CoverWidget(QWidget):
             painter.setFont(font)
             painter.setPen(QColor("#ffffff"))
 
-            text = "Choose photo"
+            text = tr("Choose photo", _lang())
             tw = QFontMetrics(font).horizontalAdvance(text)
             gap = 8
             pencil_size = pixmap_size(self._pencil)
@@ -339,6 +346,11 @@ class PlaylistsPage(QWidget):
         self.current_playlist_id = None
         self.current_playlist_name = ""
         self._current_track_id = None
+        # Направление сортировки для страницы плейлиста. При первом клике
+        # по новому полю берём его "естественное" направление, повторный
+        # клик по тому же полю переключает asc/desc.
+        self._sort_index = 0
+        self._sort_ascending = False
 
         self.stack = QStackedWidget(self)
         root = QVBoxLayout(self)
@@ -362,7 +374,7 @@ class PlaylistsPage(QWidget):
         self.create_button.setIcon(colored_icon("create-playlist.svg"))
         self.create_button.setIconSize(QSize(22, 22))
         self.create_button.setFlat(True)
-        self.create_button.setToolTip("Create playlist")
+        self.create_button.setToolTip(tr("Create playlist", lang))
         self.create_button.clicked.connect(self._on_create_playlist)
 
         self.random_button = self._icon_button(
@@ -370,20 +382,16 @@ class PlaylistsPage(QWidget):
         )
         self.random_button.clicked.connect(self._on_random_playlist)
 
-        self.settings_button = self._icon_button(
-            "settings.svg", tr("Settings", lang)
+        # Шестерёнки здесь больше нет: настройки открываются основной
+        # вкладкой Settings в главном окне.
+        self.grid_count_label = QLabel(
+            tr("Your playlists ({n})", lang).format(n=0)
         )
-        self.settings_button.clicked.connect(
-            lambda _checked=False: self.settings_requested.emit()
-        )
-
-        self.grid_count_label = QLabel("Your playlists (0)")
 
         top = QHBoxLayout()
         top.addWidget(self.create_button)
         top.addStretch()
         top.addWidget(self.random_button)
-        top.addWidget(self.settings_button)
         top.addSpacing(8)
         top.addWidget(self.grid_count_label)
 
@@ -432,7 +440,11 @@ class PlaylistsPage(QWidget):
                 "is_pinned": row["is_pinned"],
             }, Qt.UserRole)
             self.grid_model.appendRow(item)
-        self.grid_count_label.setText(f"Your playlists ({self.grid_model.rowCount()})")
+        self.grid_count_label.setText(
+            tr("Your playlists ({n})", _lang()).format(
+                n=self.grid_model.rowCount()
+            )
+        )
 
     def _on_grid_play_clicked(self, index):
         data = index.data(Qt.UserRole) or {}
@@ -465,7 +477,9 @@ class PlaylistsPage(QWidget):
 
         lang = _lang()
 
-        pin_action = QAction("Открепить" if is_pinned else "Закрепить", menu)
+        pin_action = QAction(
+            tr("Unpin" if is_pinned else "Pin", lang), menu
+        )
         pin_action.setIcon(colored_icon("pin.svg", icon_color))
         pin_action.triggered.connect(
             lambda checked=False, p=pid, v=not is_pinned:
@@ -473,7 +487,7 @@ class PlaylistsPage(QWidget):
         )
         menu.addAction(pin_action)
 
-        queue_action = QAction("Добавить в очередь", menu)
+        queue_action = QAction(tr("Add to queue", lang), menu)
         queue_action.setIcon(colored_icon("queue.svg", icon_color))
         queue_action.triggered.connect(
             lambda checked=False, p=pid: self.play_playlist.emit(p)
@@ -489,7 +503,7 @@ class PlaylistsPage(QWidget):
 
         menu.addSeparator()
 
-        delete_action = QAction("Удалить", menu)
+        delete_action = QAction(tr("Delete", lang), menu)
         delete_action.setIcon(colored_icon("trash.svg", "#e05a5a"))
         delete_action.setData("danger")
         delete_action.triggered.connect(
@@ -550,9 +564,11 @@ class PlaylistsPage(QWidget):
         self._refresh_grid()
 
     def _on_grid_delete_playlist(self, playlist_id, name):
+        lang = _lang()
         if not CustomConfirmDialog.question(
-            self, "Delete playlist",
-            f"Удалить плейлист '{name}'?",
+            self,
+            tr("Delete playlist", lang),
+            tr("Delete playlist '{name}'?", lang).format(name=name),
         ):
             return
         db.delete_playlist(playlist_id)
@@ -604,14 +620,21 @@ class PlaylistsPage(QWidget):
         db.update_playlist_description(self.current_playlist_id, text)
 
     def _on_create_playlist(self):
+        lang = _lang()
         name, ok = CustomInputDialog.get_text(
-            self, "New playlist", "Playlist name:"
+            self,
+            tr("New playlist", lang),
+            tr("Playlist name:", lang),
         )
         if not ok or not name.strip():
             return
         if db.create_playlist(name.strip()) is None:
             CustomConfirmDialog.information(
-                self, "Already exists", f"Плейлист '{name.strip()}' уже существует."
+                self,
+                tr("Already exists", lang),
+                tr("Playlist '{name}' already exists.", lang).format(
+                    name=name.strip()
+                ),
             )
             return
         self._refresh_grid()
@@ -620,6 +643,7 @@ class PlaylistsPage(QWidget):
     #  Страница 2: внутри плейлиста
     # ------------------------------------------------------------------
     def _build_detail_page(self):
+        lang = _lang()
         page = _DetailPage()
         page.setObjectName("playlistDetail")
         self.detail_page = page
@@ -631,9 +655,10 @@ class PlaylistsPage(QWidget):
         self.name_label.setStyleSheet("font-size: 32px; font-weight: bold;")
 
         self.add_tracks_button = QPushButton("+")
-        self.add_tracks_button.setFixedSize(32, 32)
+        self.add_tracks_button.setMinimumSize(28, 28)
+        self.add_tracks_button.setMaximumSize(36, 36)
         self.add_tracks_button.setCursor(Qt.PointingHandCursor)
-        self.add_tracks_button.setToolTip(tr("Add Tracks", _lang()))
+        self.add_tracks_button.setToolTip(tr("Add Tracks", lang))
         self.add_tracks_button.setStyleSheet(
             "QPushButton {"
             " font-size: 22px; font-weight: 600; border: none;"
@@ -645,13 +670,23 @@ class PlaylistsPage(QWidget):
 
         self.description_edit = _DescriptionEdit()
         self.description_edit.setObjectName("playlistDescription")
-        self.description_edit.setPlaceholderText("Add a description...")
-        self.description_edit.setFixedHeight(60)
+        self.description_edit.setPlaceholderText(
+            tr("Add a description...", lang)
+        )
+        self.description_edit.setMinimumHeight(44)
+        self.description_edit.setMaximumHeight(80)
+        self.description_edit.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
         self.description_edit.setFrameStyle(0)
         self.description_edit.editing_finished.connect(self._on_description_changed)
 
-        self.back_button = self._icon_button("back.svg", "Назад")
-        self.delete_button = self._icon_button("trash.svg", "Delete")
+        self.back_button = self._icon_button(
+            "back.svg", tr("Back", lang)
+        )
+        self.delete_button = self._icon_button(
+            "trash.svg", tr("Delete", lang)
+        )
 
         self.back_button.clicked.connect(self._go_back)
         self.delete_button.clicked.connect(self._on_delete_playlist)
@@ -679,15 +714,27 @@ class PlaylistsPage(QWidget):
         header.addLayout(right, 1)
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Поиск в плейлисте...")
+        self.search_edit.setPlaceholderText(
+            tr("Search in playlist...", lang)
+        )
         self.search_icon_action = self.search_edit.addAction(
             colored_icon("search.svg", _icon_color()), QLineEdit.LeadingPosition
         )
         self.search_edit.textChanged.connect(self._refresh_tracks)
 
         self.sort_combo = QComboBox()
-        self.sort_combo.addItems(["Date added", "Title", "Artist", "Duration"])
-        self.sort_combo.currentIndexChanged.connect(self._refresh_tracks)
+        self.sort_combo.addItems([
+            tr("Date added", lang),
+            tr("Title", lang),
+            tr("Artist", lang),
+            tr("Duration", lang),
+        ])
+        # activated срабатывает и при повторном выборе текущего пункта —
+        # именно это нужно для переключения asc/desc.
+        self.sort_combo.activated.connect(self._on_sort_activated)
+        self.sort_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.sort_combo.setMinimumWidth(150)
+        self._update_sort_indicator()
 
         self.filter_icon_label = QLabel()
         self.filter_icon_label.setPixmap(
@@ -702,7 +749,9 @@ class PlaylistsPage(QWidget):
         filter_row.addWidget(self.filter_icon_label)
         filter_row.addWidget(self.sort_combo)
 
-        self.tracks_count_label = QLabel("Tracks in playlist (0)")
+        self.tracks_count_label = QLabel(
+            tr("Tracks in playlist ({n})", lang).format(n=0)
+        )
 
         self.tracks_list = PlaylistTracksWidget()
         self.track_delegate = TrackDelegate(self.tracks_list)
@@ -745,8 +794,9 @@ class PlaylistsPage(QWidget):
     def _on_choose_cover(self):
         if self.current_playlist_id is None:
             return
+        lang = _lang()
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose photo", str(Path.home()),
+            self, tr("Choose photo", lang), str(Path.home()),
             "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
         )
         if not path:
@@ -804,9 +854,13 @@ class PlaylistsPage(QWidget):
         pid = self.current_playlist_id
         if pid is None:
             return
+        lang = _lang()
         if not CustomConfirmDialog.question(
-            self, "Delete playlist",
-            f"Удалить плейлист '{self.current_playlist_name}'?",
+            self,
+            tr("Delete playlist", lang),
+            tr("Delete playlist '{name}'?", lang).format(
+                name=self.current_playlist_name
+            ),
         ):
             return
         db.delete_playlist(pid)
@@ -834,14 +888,21 @@ class PlaylistsPage(QWidget):
             rows = [row for row in rows if matches(row)]
 
         idx = self.sort_combo.currentIndex()
+        reverse = not self._sort_ascending
         if idx == 0:
-            rows = sorted(rows, key=lambda r: r["added_at"] or "", reverse=True)
+            rows = sorted(rows, key=lambda r: r["added_at"] or "", reverse=reverse)
         elif idx == 1:
-            rows = sorted(rows, key=lambda r: (r["title"] or "").lower())
+            rows = sorted(
+                rows, key=lambda r: (r["title"] or "").lower(), reverse=reverse
+            )
         elif idx == 2:
-            rows = sorted(rows, key=lambda r: (r["artist"] or "").lower())
+            rows = sorted(
+                rows, key=lambda r: (r["artist"] or "").lower(), reverse=reverse
+            )
         elif idx == 3:
-            rows = sorted(rows, key=lambda r: r["duration"] or 0, reverse=True)
+            rows = sorted(
+                rows, key=lambda r: r["duration"] or 0, reverse=reverse
+            )
 
         for i, row in enumerate(rows):
             path = row["file_path"]
@@ -858,9 +919,34 @@ class PlaylistsPage(QWidget):
             self.tracks_list.addItem(item)
         self._update_tracks_count()
 
+    def _on_sort_activated(self, index):
+        """Переключает направление сортировки при каждом клике."""
+        if index < 0:
+            return
+        if index == self._sort_index:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_index = index
+            # Дате и длительности логичнее начинать с убывания, а
+            # названию/артисту — с возрастания.
+            self._sort_ascending = index in (1, 2)
+        self._update_sort_indicator()
+        self._refresh_tracks()
+
+    def _update_sort_indicator(self):
+        """Рисует ↑/↓ у выбранного пункта, не трогая остальные."""
+        arrow = "↑" if self._sort_ascending else "↓"
+        for i in range(self.sort_combo.count()):
+            text = self.sort_combo.itemText(i).strip(" ↑↓")
+            if i == self.sort_combo.currentIndex():
+                text = f"{text} {arrow}"
+            self.sort_combo.setItemText(i, text)
+
     def _update_tracks_count(self):
         self.tracks_count_label.setText(
-            f"Tracks in playlist ({self.tracks_list.count()})"
+            tr("Tracks in playlist ({n})", _lang()).format(
+                n=self.tracks_list.count()
+            )
         )
 
     def _on_track_double_clicked(self, item):
@@ -888,7 +974,6 @@ class PlaylistsPage(QWidget):
         color = _icon_color()
         self.create_button.setIcon(colored_icon("create-playlist.svg", color))
         self.random_button.setIcon(colored_icon("random.svg", color))
-        self.settings_button.setIcon(colored_icon("settings.svg", color))
         self.back_button.setIcon(colored_icon("back.svg", color))
         self.delete_button.setIcon(colored_icon("trash.svg", color))
         if self.search_icon_action is not None:

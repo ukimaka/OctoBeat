@@ -17,7 +17,7 @@
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, Qt
+from PyQt5.QtCore import QSettings, QTimer, Qt
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication,
@@ -67,12 +67,22 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Music Player")
         self.resize(1000, 650)
+        # Не даём окну сжаться до состояния, когда панели перестают
+        # помещаться и начинают наезжать друг на друга.
+        self.setMinimumSize(800, 520)
 
         self.settings = QSettings("MusicPlayer", "MusicPlayer")
         self.event_filter = AppEventFilter(self)
         self.controller = PlayerController(settings=self.settings, parent=self)
         # алиас для UI-сигналов плеера (позиция/длительность/состояние)
         self.media_player = self.controller.media_player
+
+        # Статистика прослушивания пишется в БД только во время реального
+        # воспроизведения. Тик 1 с, запись — раз в 5 с (и при паузе/выходе).
+        self._listening_pending_seconds = 0
+        self._listening_timer = QTimer(self)
+        self._listening_timer.setInterval(1000)
+        self._listening_timer.timeout.connect(self._on_listening_tick)
 
         # --- UI-состояние ---
         self.is_dark_theme = True           # тема (влияет на выбор папки иконок)
@@ -367,6 +377,7 @@ class MainWindow(QMainWindow):
         """Обновляет данные вкладки при её открытии."""
         widget = self.tabs.widget(index)
         if widget is getattr(self, "profile_page", None):
+            self._flush_listening_time()
             self.profile_page.reload_stats()
         elif widget is getattr(self, "friends_page", None):
             self.friends_page.refresh()
@@ -385,6 +396,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         c = self.controller
+        self._flush_listening_time()
         session.save(c, self.settings, self.player_bar.volume())
 
         # Запоминаем, какие папки были свёрнуты, чтобы восстановить при старте
@@ -683,6 +695,34 @@ class MainWindow(QMainWindow):
         # приходит int из QMediaPlayer.stateChanged и bool из контроллера
         playing = state if isinstance(state, bool) else (state == QMediaPlayer.PlayingState)
         self.player_bar.set_playing(playing)
+
+        # Счётчик статистики работает только пока трек играет. На паузе,
+        # остановке и при открытом меню (музыка не идёт) он стоит.
+        if playing:
+            if not self._listening_timer.isActive():
+                self._listening_timer.start()
+        else:
+            self._flush_listening_time()
+            self._listening_timer.stop()
+
+    def _on_listening_tick(self):
+        """Секундный тик статистики: защита от рассинхрона с плеером."""
+        if not self.media_player.is_playing():
+            self._listening_timer.stop()
+            self._flush_listening_time()
+            return
+
+        self._listening_pending_seconds += 1
+        if self._listening_pending_seconds >= 5:
+            self._flush_listening_time()
+
+    def _flush_listening_time(self):
+        """Сбрасывает накопленные секунды в БД одним запросом."""
+        seconds = self._listening_pending_seconds
+        if seconds <= 0:
+            return
+        self._listening_pending_seconds = 0
+        db.add_listening_time(seconds)
 
     def _on_position_changed(self, pos):
         self.player_bar.set_position(pos, self.media_player.duration())

@@ -34,9 +34,28 @@ def main():
         zoom = int(settings.value("zoom", 100))
     except (TypeError, ValueError):
         zoom = 100
+
+    # Qt5 умеет увеличивать интерфейс через QT_SCALE_FACTOR, но значения
+    # меньше 1 (например, 0.75) официально не поддерживаются: backing store
+    # получает меньше физических пикселей, чем логических, из-за чего часть
+    # виджетов обрезается/исчезает. Поэтому 75% больше не применяем как
+    # глобальный scale factor — сбрасываем сохранённое значение на 100%.
+    if zoom < 100:
+        zoom = 100
+        settings.setValue("zoom", zoom)
+        settings.sync()
     if zoom != 100:
         os.environ["QT_SCALE_FACTOR"] = str(zoom / 100.0)
 
+    # Дробный масштаб (125%, 150%) не округляем до целого: иначе Qt может
+    # внезапно переключиться на 100% или 200% и сломать компоновку.
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+
+    # Включаем High-DPI до создания QApplication. Вместе с UseHighDpiPixmaps
+    # это заставляет Qt пересчитывать логические размеры и растр иконок
+    # согласованно при системном масштабе.
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     # Заставляет QIcon учитывать devicePixelRatio и возвращать физически
     # крупные pixmap'ы. Без этого Qt рисует иконку 22px как 22 физических
     # пикселя и растягивает её до 33 — отсюда замыливание при 150%.

@@ -43,10 +43,11 @@ class NextTrackIsland(QWidget):
         card = QWidget()
         card.setObjectName("nextTrackIsland")
         card.setAttribute(Qt.WA_StyledBackground, True)
-        card.setFixedHeight(34)
+        card.setMinimumHeight(30)
+        card.setMaximumHeight(40)
         # Гибкая ширина в пределах min/max: карточка растёт под содержимое,
         # но не раздувается на весь экран.
-        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         card.setMaximumWidth(350)
         card.setMinimumWidth(150)
 

@@ -24,7 +24,7 @@ import html
 
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
+    QHBoxLayout, QPushButton, QSizePolicy, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from translations import tr
@@ -53,7 +53,13 @@ class LyricsPanel(QWidget):
         self.view = QTextBrowser()
         self.view.setObjectName("lyricsView")
         self.view.setOpenExternalLinks(False)
-        self.view.setFixedHeight(150)
+        # Высота адаптируется к доступному месту: фиксированные 150 px
+        # вылезали за нижнюю границу окна при нестандартном масштабе.
+        self.view.setMinimumHeight(96)
+        self.view.setMaximumHeight(180)
+        self.view.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
 
         self.fullscreen_button = QPushButton()
         self.fullscreen_button.setIcon(self.icons.icon("expand.svg"))

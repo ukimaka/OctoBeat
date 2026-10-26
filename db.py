@@ -79,7 +79,8 @@ def init_db():
                 avatar_path TEXT,
                 banner_path TEXT,
                 description TEXT,
-                favorite_track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL
+                favorite_track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+                listening_seconds INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS play_history (
@@ -159,6 +160,24 @@ def init_db():
             conn.execute(
                 "ALTER TABLE profile ADD COLUMN favorite_track_id INTEGER "
                 "REFERENCES tracks(id) ON DELETE SET NULL"
+            )
+
+        # Миграция: время прослушивания раньше вычислялось как сумма
+        # длительностей всех записей play_history. Теперь оно хранится в
+        # профиле и увеличивается только пока плеер действительно играет.
+        # Старую статистику переносим один раз, чтобы она не потерялась.
+        if "listening_seconds" not in cols:
+            conn.execute(
+                "ALTER TABLE profile ADD COLUMN listening_seconds "
+                "INTEGER DEFAULT 0"
+            )
+            conn.execute(
+                """UPDATE profile SET listening_seconds = COALESCE((
+                       SELECT SUM(t.duration)
+                       FROM play_history ph
+                       JOIN tracks t ON t.id = ph.track_id
+                   ), 0)
+                   WHERE id = 1"""
             )
 
 
@@ -506,13 +525,31 @@ def log_play(track_id):
         )
 
 
+def add_listening_time(seconds):
+    """Добавляет фактически прослушанные секунды к статистике профиля."""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return
+    if seconds <= 0:
+        return
+    with get_connection() as conn:
+        _ensure_profile_row(conn)
+        conn.execute(
+            """UPDATE profile
+               SET listening_seconds = COALESCE(listening_seconds, 0) + ?
+               WHERE id = 1""",
+            (seconds,),
+        )
+
+
 def get_total_play_time():
     """Суммарное время прослушивания в секундах."""
     with get_connection() as conn:
+        _ensure_profile_row(conn)
         row = conn.execute(
-            """SELECT COALESCE(SUM(t.duration), 0) AS total
-               FROM play_history ph
-               JOIN tracks t ON t.id = ph.track_id"""
+            "SELECT COALESCE(listening_seconds, 0) AS total "
+            "FROM profile WHERE id = 1"
         ).fetchone()
         return int(row["total"] or 0)
 

@@ -16,6 +16,15 @@
 
 """Тёмная и светлая темы (QSS) для приложения."""
 
+from pathlib import Path
+
+
+_ICONS_DIR = Path(__file__).resolve().parent / "icons"
+# QSS не умеет перекрашивать SVG, поэтому для каждой темы берём свой файл.
+_DARK_ARROW = (_ICONS_DIR / "white" / "chevron-down.svg").as_posix()
+_LIGHT_ARROW = (_ICONS_DIR / "black" / "chevron-down.svg").as_posix()
+
+
 DARK_THEME = """
 * {
     color: #ffffff;
@@ -88,6 +97,11 @@ QLineEdit, QComboBox {
     color: #ffffff;
 }
 
+/* Справа нужен запас под drop-down и стрелку сортировки. */
+QComboBox {
+    padding: 4px 30px 4px 8px;
+}
+
 QLineEdit:focus, QComboBox:focus {
     background-color: #202020;
 }
@@ -114,16 +128,30 @@ QTextEdit#playlistDescription:focus {
 }
 
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
     border: none;
-    width: 18px;
+    width: 24px;
+}
+
+QComboBox::down-arrow {
+    image: url("@DARK_ARROW@");
+    width: 12px;
+    height: 12px;
 }
 
 QComboBox QAbstractItemView {
     background-color: #181818;
     border: none;
     outline: none;
+    padding: 4px;
     selection-background-color: #282828;
     selection-color: #ffffff;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 2px 8px;
 }
 
 QPushButton {
@@ -276,7 +304,7 @@ QScrollBar#profileScrollBar::add-page:vertical,
 QScrollBar#profileScrollBar::sub-page:vertical {
     background: transparent;
 }
-"""
+""".replace("@DARK_ARROW@", _DARK_ARROW)
 
 
 LIGHT_THEME = """
@@ -351,6 +379,11 @@ QLineEdit, QComboBox {
     color: #000000;
 }
 
+/* Справа нужен запас под drop-down и стрелку сортировки. */
+QComboBox {
+    padding: 4px 30px 4px 8px;
+}
+
 QLineEdit:focus, QComboBox:focus {
     border: 1px solid #999999;
 }
@@ -377,16 +410,30 @@ QTextEdit#playlistDescription:focus {
 }
 
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
     border: none;
-    width: 18px;
+    width: 24px;
+}
+
+QComboBox::down-arrow {
+    image: url("@LIGHT_ARROW@");
+    width: 12px;
+    height: 12px;
 }
 
 QComboBox QAbstractItemView {
     background-color: #ffffff;
     border: 1px solid #cccccc;
     outline: none;
+    padding: 4px;
     selection-background-color: #e0e0e0;
     selection-color: #000000;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 2px 8px;
 }
 
 QPushButton {
@@ -547,4 +594,4 @@ QScrollBar#profileScrollBar::add-page:vertical,
 QScrollBar#profileScrollBar::sub-page:vertical {
     background: transparent;
 }
-"""
+""".replace("@LIGHT_ARROW@", _LIGHT_ARROW)
