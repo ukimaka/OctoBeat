@@ -6,3 +6,4 @@ music.db
 build/
 dist/
 .cache/
+agent-reach-venv

@@ -20,7 +20,7 @@
 Никаких изменений в БД или плеере здесь нет.
 """
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QAction, QMenu
 
 from translations import tr
@@ -34,6 +34,8 @@ class TrackContextMenu(QMenu):
     favorite_requested = pyqtSignal(int)              # track_id
     edit_metadata_requested = pyqtSignal(int)         # track_id
     remove_requested = pyqtSignal(int, str)           # track_id, scope
+    remove_selected_requested = pyqtSignal(str, object)  # scope, [track_id, ...]
+    select_all_requested = pyqtSignal(str)              # scope: "library" | "playlist"
 
     def __init__(
         self,
@@ -53,7 +55,72 @@ class TrackContextMenu(QMenu):
         self.track_id = track_id
         self.scope = scope
         self.source_list = source_list
+        self._selected_ids = self._collect_selected_ids()
         self._build(playlists or [])
+
+    def _collect_selected_ids(self):
+        """id всех выбранных треков в source_list (мультивыбор)."""
+        ids = []
+        if self.source_list is None:
+            return ids
+        for item in self.source_list.selectedItems():
+            if hasattr(item, "data") and hasattr(item, "text"):
+                try:
+                    # QTreeWidgetItem требует (column, role), QListWidgetItem — только role.
+                    data = item.data(0, Qt.UserRole)
+                except TypeError:
+                    # Fallback для QListWidgetItem
+                    data = item.data(Qt.UserRole)
+                if isinstance(data, dict):
+                    track_id = data.get("id")
+                    if track_id is not None and track_id not in ids:
+                        ids.append(track_id)
+        return ids
+
+    def _valid_items_count(self):
+        """CHANGED: число валидных элементов в source_list (треки/папки/строки)."""
+        if self.source_list is None:
+            return 0
+
+        def has_track_data(item):
+            try:
+                data = item.data(0, Qt.UserRole)
+            except TypeError:
+                data = item.data(Qt.UserRole)
+            return isinstance(data, dict) and data.get("id") is not None
+
+        if hasattr(self.source_list, "topLevelItemCount"):
+            total = 0
+            for i in range(self.source_list.topLevelItemCount()):
+                top = self.source_list.topLevelItem(i)
+                if has_track_data(top):
+                    total += 1
+                total += sum(
+                    1
+                    for j in range(top.childCount())
+                    if has_track_data(top.child(j))
+                )
+            return total
+
+        if hasattr(self.source_list, "count"):
+            return sum(
+                1
+                for i in range(self.source_list.count())
+                if has_track_data(self.source_list.item(i))
+            )
+
+        model = self.source_list.model()
+        return model.rowCount() if model is not None else 0
+
+    def _toggle_select_all(self, checked=False):
+        """CHANGED: прямой selectAll/clearSelection вместо сигнала."""
+        if self.source_list is None:
+            return
+        total_items = self._valid_items_count()
+        if total_items > 0 and len(self._selected_ids) >= total_items:
+            self.source_list.clearSelection()
+        else:
+            self.source_list.selectAll()
 
     def _build(self, playlists):
         lang = self.settings.value("language", "en")
@@ -102,20 +169,45 @@ class TrackContextMenu(QMenu):
         if self.scope == "library":
             # QAction не умеет красить текст (HTML не рендерится), поэтому
             # пункт делаем узнаваемым красной иконкой мусорки.
-            remove_action = QAction(tr("Remove from library", lang), self)
-            remove_action.setIcon(
-                self.icons.icon("trash.svg", color="#e05a4a")
+            text = (
+                tr("Remove selected tracks", lang)
+                if len(self._selected_ids) > 1
+                else tr("Remove from library", lang)
             )
+            remove_action = QAction(text, self)
+            remove_action.setIcon(self.icons.icon("trash.svg", color="#e05a4a"))
         else:
-            remove_action = QAction(
-                tr("Remove from this playlist", lang), self
+            text = (
+                tr("Remove selected tracks", lang)
+                if len(self._selected_ids) > 1
+                else tr("Remove from this playlist", lang)
             )
+            remove_action = QAction(text, self)
             remove_action.setIcon(self.icons.icon("trash.svg"))
         remove_action.triggered.connect(
-            lambda checked=False, tid=self.track_id:
-            self.remove_requested.emit(tid, self.scope)
+            lambda checked=False: (
+                self.remove_selected_requested.emit(
+                    self.scope, list(self._selected_ids)
+                )
+                if len(self._selected_ids) > 1
+                else self.remove_requested.emit(self.track_id, self.scope)
+            )
         )
         self.addAction(remove_action)
+
+        # CHANGED: "Select all" / "Deselect all" — текст зависит от текущего
+        # выделения, клик напрямую управляет source_list.
+        total_items = self._valid_items_count()
+        all_selected = (
+            total_items > 0 and len(self._selected_ids) >= total_items
+        )
+        select_all_text = (
+            tr("Deselect all", lang) if all_selected else tr("Select all", lang)
+        )
+        select_all_action = QAction(select_all_text, self)
+        select_all_action.setShortcut("Ctrl+A")
+        select_all_action.triggered.connect(self._toggle_select_all)
+        self.addAction(select_all_action)
 
     def exec_at(self, pos):
         """Показывает меню в глобальной позиции, рассчитанной по source_list."""

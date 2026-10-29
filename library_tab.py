@@ -46,6 +46,7 @@ class LibraryTab(QWidget):
     csv_import_requested = pyqtSignal()
     rescan_requested = pyqtSignal()
     youtube_requested = pyqtSignal()
+    delete_track_requested = pyqtSignal(int)
     library_changed = pyqtSignal()
     # Контекстное меню обрабатывает MainWindow (там же меню плейлистов).
     context_menu_requested = pyqtSignal(object)  # QPoint
@@ -67,7 +68,8 @@ class LibraryTab(QWidget):
         self.tracks_list = LibraryTreeWidget()
         self.tracks_list.setHeaderHidden(True)
         self.tracks_list.setColumnCount(1)
-        self.track_delegate = TrackDelegate(self.tracks_list)
+        self.track_delegate = TrackDelegate(self.tracks_list, controller=self)
+        self.track_delegate.delete_requested.connect(self.delete_track_requested.emit)
         # Применяем текущую настройку бейджей источников метаданных
         self.track_delegate.set_show_metadata_badges(
             bool(self.settings.value("show_metadata_source_badges", False, type=bool))
@@ -75,7 +77,7 @@ class LibraryTab(QWidget):
         self.tracks_list.setItemDelegate(self.track_delegate)
         # Полностью отключаем системное выделение: никаких рамок/фонов при клике.
         # Двойной клик и контекстное меню работают по координатам мыши.
-        self.tracks_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.tracks_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         # Программное выделение (нужно для Drag & Drop) заставляет оформление
         # рисовать синюю рамку фокуса вокруг элемента. Фокус дереву не нужен:
         # навигация стрелками не критична, а перетаскивание работает и без него.
@@ -213,6 +215,13 @@ class LibraryTab(QWidget):
         """Перечитывает БД, применяет поиск/сортировку и перестраивает дерево."""
         folders = db.get_all_folders()
         rows = db.get_all_tracks()
+
+        # CHANGED: Filter tracks to only show those in the configured download_dir
+        from PyQt5.QtCore import QSettings
+        from pathlib import Path
+        settings = QSettings("MusicPlayer", "MusicPlayer")
+        download_dir = settings.value("download_dir", str(Path.home() / "Music"))
+        rows = [r for r in rows if r["file_path"].startswith(download_dir)]
 
         text = self.search_edit.text().strip().lower()
         if text:

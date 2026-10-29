@@ -19,7 +19,7 @@
 import os
 from pathlib import Path
 
-from PyQt5.QtCore import QRect, QRectF, QSize, Qt, QSettings
+from PyQt5.QtCore import QRect, QRectF, QSize, Qt, QSettings, pyqtSignal, QEvent
 from PyQt5.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap,
 )
@@ -67,15 +67,20 @@ class TrackDelegate(QStyledItemDelegate):
     # Зона слева, где рисуется порядковый номер / иконка Play при наведении.
     PLAY_BTN_X = 4
     PLAY_BTN_WIDTH = 26
+    delete_requested = pyqtSignal(int)
 
-    def __init__(self, parent=None, is_dark_theme=None):
+    def __init__(self, parent=None, is_dark_theme=None, controller=None):
         super().__init__(parent)
         self._is_dark_theme = is_dark_theme
+        self._controller = controller
         self._icons = {}
         # id трека, который сейчас играет: акцентная полоска слева + фон строки
         self.current_playing_id = None
         # Флаг показа бейджей источников метаданных (M/Y/F на обложках)
         self._show_metadata_badges = False
+        # CHANGED: индекс и rect иконки мусорки под курсором (задаёт view).
+        self.hovered_trash_index = None
+        self.hovered_trash_rect = None
 
     def set_dark_theme(self, is_dark_theme):
         """Задаёт тему явно (None — определять из QSettings при отрисовке)."""
@@ -119,6 +124,7 @@ class TrackDelegate(QStyledItemDelegate):
                 "artist": QColor("#8a8a8a"),
                 "missing": QColor("#888888"),
                 "selection": QColor("#282828"),
+                "selected": QColor(255, 255, 255, 8),  # dim highlight for multi-selection
                 "hover": QColor(255, 255, 255, 15),
                 "cover_bg": QColor("#282828"),
                 "note": "#888888",
@@ -130,6 +136,7 @@ class TrackDelegate(QStyledItemDelegate):
             "artist": QColor("#666666"),
             "missing": QColor("#999999"),
             "selection": QColor("#e0e0e0"),
+            "selected": QColor(0, 0, 0, 8),  # dim highlight for multi-selection
             "hover": QColor(0, 0, 0, 15),
             "cover_bg": QColor("#f0f0f0"),
             "note": "#000000",
@@ -146,10 +153,34 @@ class TrackDelegate(QStyledItemDelegate):
                 pixmap = _music_note_pixmap(size, color)
             elif kind == "play":
                 pixmap = _svg_pixmap("play-mini.svg", size, color)
+            elif kind == "trash":
+                pixmap = _svg_pixmap("trash.svg", size, color)
             else:
                 pixmap = _folder_pixmap(size, color)
             self._icons[key] = pixmap
         return pixmap
+
+    def get_trash_rect_for_index(self, view, index):
+        """CHANGED: rect иконки мусорки для индекса в координатах viewport."""
+        option = view.viewOptions()
+        option.rect = view.visualRect(index)
+        data = index.data(Qt.UserRole) or {}
+        if data.get("is_folder"):
+            return None
+        duration = data.get("duration") or 0
+        dur_text = f"{duration // 60}:{duration % 60:02d}"
+        font = QFont(option.font)
+        font.setPixelSize(11)
+        dur_w = QFontMetrics(font).horizontalAdvance(dur_text) + 24
+        rect = option.rect
+        text_right = rect.right() - dur_w
+        trash_size = 16
+        return QRect(
+            text_right - trash_size - 10,
+            rect.y() + (self.ROW_HEIGHT - trash_size) // 2,
+            trash_size,
+            trash_size,
+        )
 
     def sizeHint(self, option, index):
         data = index.data(Qt.UserRole) or {}
@@ -170,7 +201,7 @@ class TrackDelegate(QStyledItemDelegate):
         if isinstance(data, dict) and data.get("is_folder"):
             self._paint_folder(painter, option, data)
         else:
-            self._paint_track(painter, option, data)
+            self._paint_track(painter, option, data, index)
 
     @staticmethod
     def _row_rect(option):
@@ -184,7 +215,7 @@ class TrackDelegate(QStyledItemDelegate):
             return QRect(0, rect.y(), view.viewport().width(), rect.height())
         return rect
 
-    def _paint_track(self, painter, option, data):
+    def _paint_track(self, painter, option, data, index=None):
         rect = option.rect
         palette = self._palette()
 
@@ -210,6 +241,8 @@ class TrackDelegate(QStyledItemDelegate):
                 QRect(row_rect.x(), row_rect.y(), self.ACCENT_WIDTH, row_rect.height()),
                 self.ACCENT_COLOR,
             )
+        elif option.state & QStyle.State_Selected:
+            painter.fillRect(row_rect, palette["selected"])  # <-- NEW
         elif option.state & QStyle.State_MouseOver:
             # Лёгкий фон наведения для не-играющего трека
             # (тёмная тема rgba(255,255,255,15), светлая rgba(0,0,0,15)).
@@ -309,7 +342,63 @@ class TrackDelegate(QStyledItemDelegate):
             Qt.AlignRight | Qt.AlignVCenter, dur_text,
         )
 
+        # CHANGED: Отрисовка иконки мусорки при наведении.
+        if option.state & QStyle.State_MouseOver:
+            trash_size = 16
+            # Иконка слева от текста длительности (10px слева от текста)
+            trash_x = text_right - trash_size - 10
+            trash_y = rect.y() + (self.ROW_HEIGHT - trash_size) // 2
+            trash_rect = QRect(trash_x, trash_y, trash_size, trash_size)
+
+            # CHANGED: кружок рисуем, только если view сообщил, что мышь
+            # находится на этой конкретной иконке.
+            if (
+                self.hovered_trash_index == index
+                and self.hovered_trash_rect == trash_rect
+            ):
+                painter.save()
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(255, 255, 255, 30))
+                painter.drawEllipse(
+                    QRectF(
+                        trash_x - 4,
+                        trash_y - 4,
+                        trash_size + 8,
+                        trash_size + 8,
+                    )
+                )
+                painter.restore()
+
+            # Саму иконку рисуем всегда, когда мышь над строкой
+            trash_icon = self._cached_icon("trash", "#e05a4a", trash_size)
+            draw_centered(painter, QRectF(trash_rect), trash_icon)
+
         painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        from PyQt5.QtCore import QEvent
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            data = index.data(Qt.UserRole) or {}
+            if not data.get("is_folder") and data.get("id") is not None:
+                duration = data.get("duration") or 0
+                dur_text = f"{duration // 60}:{duration % 60:02d}"
+                font = QFont(option.font)
+                font.setPixelSize(11)
+                dur_w = QFontMetrics(font).horizontalAdvance(dur_text) + 24
+
+                # Координаты иконки мусорки (совпадают с тем, что в _paint_track)
+                rect = option.rect
+                text_right = rect.right() - dur_w
+                trash_size = 16
+                trash_x = text_right - trash_size - 10
+                trash_y = rect.y() + (self.ROW_HEIGHT - trash_size) // 2
+                trash_rect = QRect(trash_x, trash_y, trash_size, trash_size)
+
+                if trash_rect.contains(event.pos()):
+                    self.delete_requested.emit(data.get("id"))
+                    return True # Поглощаем клик
+        return super().editorEvent(event, model, option, index)
 
     def _paint_folder(self, painter, option, data):
         rect = option.rect

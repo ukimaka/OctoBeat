@@ -41,6 +41,7 @@ class AppEventFilter(QObject):
     next_requested = pyqtSignal()
     prev_requested = pyqtSignal()
     volume_delta_requested = pyqtSignal(int)
+    select_all_requested = pyqtSignal()
 
     def __init__(self, window, parent=None):
         super().__init__(parent if parent is not None else window)

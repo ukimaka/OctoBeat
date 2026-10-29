@@ -243,6 +243,7 @@ class SettingsDialog(QDialog):
             tr("Select cookies.txt", self._lang()),
             start_dir,
             "Cookies files (*.txt);;All files (*)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if path:
             self.cookies_edit.setText(path)

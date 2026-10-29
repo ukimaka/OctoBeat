@@ -32,6 +32,7 @@ from PyQt5.QtCore import QSettings
 from metadata import clean_youtube_title
 from musicbrainz_client import get_track_metadata_with_fallback
 
+# MUSIC_FOLDER is now read from settings.
 MUSIC_FOLDER = Path.home() / "Music"
 
 # Пример строки: "[download]  45.3% of 3.42MiB at 1.20MiB/s ETA 00:02"
@@ -39,6 +40,7 @@ PROGRESS_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
 
 # Группы в скобках: ( ... ) или [ ... ]
 _BRACKET_RE = re.compile(r"[\\(\[]([^\\)\]]*)[\\)\]]")
+
 # Мусорные ключевые слова внутри скобок (без учёта регистра)
 _NOISE_KEYWORDS_RE = re.compile(
     r"official\s+(?:music\s+)?video|official\s+audio"
@@ -96,7 +98,9 @@ class YoutubeWorker(QObject):
     def __init__(self, query, target_folder=None):
         super().__init__()
         self.query = (query or "").strip()
-        self.target_folder = Path(target_folder) if target_folder else MUSIC_FOLDER
+        settings = QSettings("MusicPlayer", "MusicPlayer")
+        default_dir = Path.home() / "Music"
+        self.target_folder = Path(settings.value("download_dir", str(default_dir)))
         self._proc = None
         self._stopped = False
 

@@ -126,6 +126,7 @@ class ImportFlow(QObject):
             ),
             str(Path.home()),
             "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a);;All files (*)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if not files:
             return
@@ -145,6 +146,7 @@ class ImportFlow(QObject):
             tr("Select CSV file", lang),
             str(Path.home()),
             "CSV files (*.csv);;All files (*)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return

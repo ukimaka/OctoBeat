@@ -51,6 +51,27 @@ class LibraryTreeWidget(QTreeWidget):
                 ):
                     self.play_requested.emit(item)
         super().mouseReleaseEvent(event)
+        # CHANGED: обычный клик (без Ctrl/Shift) не оставляет выделение.
+        if event.button() == Qt.LeftButton and not (
+            event.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
+        ):
+            self.clearSelection()
+        # CHANGED: сбрасываем устаревший hover после клика.
+        self.viewport().update()
+
+    def keyPressEvent(self, event):
+        # CHANGED: Ctrl+A переключает «выбрать всё / снять выделение».
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            total = self.topLevelItemCount() + sum(
+                self.topLevelItem(i).childCount()
+                for i in range(self.topLevelItemCount())
+            )
+            if total > 0 and len(self.selectedItems()) >= total:
+                self.clearSelection()
+            else:
+                self.selectAll()
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
         """Позволяет перетаскивать треки.
@@ -61,16 +82,69 @@ class LibraryTreeWidget(QTreeWidget):
         выделенным программно: делегат подсветку выделения у треков не
         рисует, так что визуально ничего не меняется.
         """
+        # CHANGED: ПКМ не должен визуально выделять трек.
+        if event.button() == Qt.RightButton:
+            item = self.itemAt(event.pos())
+            # Если кликнули по невыделенному треку, сбрасываем старое выделение
+            if item is not None and not item.isSelected():
+                self.clearSelection()
+            # Не вызываем super(), чтобы Qt не рисовал фокус/выделение
+            return
         if event.button() == Qt.LeftButton:
             item = self.itemAt(event.pos())
             data = item.data(0, Qt.UserRole) if item is not None else None
             if isinstance(data, dict) and not data.get("is_folder"):
+                if event.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier):
+                    # CHANGED: let Qt handle native multi-selection (Ctrl/Shift+click)
+                    super().mousePressEvent(event)
+                    self.viewport().update()
+                    return
                 self.selectionModel().select(
                     self.indexFromItem(item),
                     QItemSelectionModel.ClearAndSelect
                     | QItemSelectionModel.Rows,
                 )
         super().mousePressEvent(event)
+        # CHANGED: force repaint to clear stale hover state
+        self.viewport().update()
+
+    def leaveEvent(self, event):
+        # CHANGED: clear stale hover state when the mouse leaves the view
+        self.viewport().update()
+        super().leaveEvent(event)
+
+    def mouseMoveEvent(self, event):
+        # CHANGED: view сам отслеживает наведение на иконку мусорки.
+        super().mouseMoveEvent(event)
+        index = self.indexAt(event.pos())
+        delegate = self.itemDelegate()
+
+        if index.isValid() and hasattr(delegate, "get_trash_rect_for_index"):
+            trash_rect = delegate.get_trash_rect_for_index(self, index)
+
+            old_index = delegate.hovered_trash_index
+            old_rect = delegate.hovered_trash_rect
+
+            if trash_rect and trash_rect.contains(event.pos()):
+                delegate.hovered_trash_index = index
+                delegate.hovered_trash_rect = trash_rect
+            else:
+                delegate.hovered_trash_index = None
+                delegate.hovered_trash_rect = None
+
+            if (
+                old_index != delegate.hovered_trash_index
+                or old_rect != delegate.hovered_trash_rect
+            ):
+                self.viewport().update()
+        else:
+            if (
+                hasattr(delegate, "hovered_trash_index")
+                and delegate.hovered_trash_index is not None
+            ):
+                delegate.hovered_trash_index = None
+                delegate.hovered_trash_rect = None
+                self.viewport().update()
 
     def _sync_tree_to_db(self):
         """Приводит folder_id треков в БД в соответствие с деревом."""

@@ -173,6 +173,39 @@ class PlaylistTracksWidget(QListWidget):
                 self.play_requested.emit(item)
         super().mouseReleaseEvent(event)
 
+    def mouseMoveEvent(self, event):
+        # CHANGED: view сам отслеживает наведение на иконку мусорки.
+        super().mouseMoveEvent(event)
+        index = self.indexAt(event.pos())
+        delegate = self.itemDelegate()
+
+        if index.isValid() and hasattr(delegate, "get_trash_rect_for_index"):
+            trash_rect = delegate.get_trash_rect_for_index(self, index)
+
+            old_index = delegate.hovered_trash_index
+            old_rect = delegate.hovered_trash_rect
+
+            if trash_rect and trash_rect.contains(event.pos()):
+                delegate.hovered_trash_index = index
+                delegate.hovered_trash_rect = trash_rect
+            else:
+                delegate.hovered_trash_index = None
+                delegate.hovered_trash_rect = None
+
+            if (
+                old_index != delegate.hovered_trash_index
+                or old_rect != delegate.hovered_trash_rect
+            ):
+                self.viewport().update()
+        else:
+            if (
+                hasattr(delegate, "hovered_trash_index")
+                and delegate.hovered_trash_index is not None
+            ):
+                delegate.hovered_trash_index = None
+                delegate.hovered_trash_rect = None
+                self.viewport().update()
+
 
 class _CoverWidget(QWidget):
     """Большая обложка плейлиста с hover-оверлеем «Choose photo»."""
@@ -341,6 +374,7 @@ class PlaylistsPage(QWidget):
     play_track = pyqtSignal(int, int, list)     # playlist_id, track_id, ordered ids
     playlist_deleted = pyqtSignal(int)          # playlist_id
     settings_requested = pyqtSignal()           # открыть настройки приложения
+    delete_track_requested = pyqtSignal(int)     # delete track from DB
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -755,16 +789,18 @@ class PlaylistsPage(QWidget):
         )
 
         self.tracks_list = PlaylistTracksWidget()
-        self.track_delegate = TrackDelegate(self.tracks_list)
+        self.track_delegate = TrackDelegate(self.tracks_list, controller=self)
+        self.track_delegate.delete_requested.connect(self.delete_track_requested.emit)
         # Применяем текущую настройку бейджей источников метаданных
         settings = QSettings("MusicPlayer", "MusicPlayer")
         self.track_delegate.set_show_metadata_badges(
             bool(settings.value("show_metadata_source_badges", False, type=bool))
         )
         self.tracks_list.setItemDelegate(self.track_delegate)
-        # Полностью отключаем системное выделение: никаких рамок/фонов при клике.
-        # Двойной клик и контекстное меню работают по координатам мыши.
-        self.tracks_list.setSelectionMode(QAbstractItemView.NoSelection)
+        # Мультиселект: Ctrl+A / shift-клик / «Select all» из контекстного меню.
+        # Двойной клик и контекстное меню работают по координатам мыши,
+        # так что клик по строке для плеера не ломает логику выбора.
+        self.tracks_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         # Отслеживание мыши — иначе делегат не получает State_MouseOver (ховер).
         self.tracks_list.setMouseTracking(True)
         self.tracks_list.viewport().setMouseTracking(True)
@@ -804,6 +840,7 @@ class PlaylistsPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, tr("Choose photo", lang), str(Path.home()),
             "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return

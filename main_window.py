@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
         self.import_flow = ImportFlow(
             self,
             self.settings,
-            MUSIC_FOLDER,
+            self.settings.value("download_dir", str(MUSIC_FOLDER)),
             self._sync_library_on_startup,
         )
         self.player_bar = PlayerBar(
@@ -229,6 +229,9 @@ class MainWindow(QMainWindow):
         self.event_filter.volume_delta_requested.connect(
             self.player_bar.nudge_volume
         )
+        self.event_filter.select_all_requested.connect(
+            self._on_select_all_shortcut
+        )
 
         self.track_actions.changed.connect(self.library_tab.reload)
         self.track_actions.changed.connect(
@@ -264,6 +267,10 @@ class MainWindow(QMainWindow):
             lambda pos: self._on_track_context_menu(
                 pos, self.library_tab.tracks_list, "library"
             )
+        )
+        self.library_tab.delete_track_requested.connect(self.track_actions.remove_track)
+        self.playlists_page.delete_track_requested.connect(
+            self._on_playlist_track_delete_requested
         )
 
         self.settings_page.ui_settings_changed.connect(self._apply_ui_settings)
@@ -487,13 +494,75 @@ class MainWindow(QMainWindow):
     def _on_context_changed(self, name):
         self.player_bar.set_context(name)
 
+    def _on_select_all_from_context(self, source_list, scope):
+        """Выбирает все треки из списка, в котором открыто контекстное меню.
+
+        «Select all from {} (Ctrl+A)» из TrackContextMenu: source_list —
+        виджет, где меню было открыто (библиотека или плейлист).
+        """
+        if source_list is None:
+            return
+        if scope == "library":
+            view = self.library_tab.tracks_list
+        else:
+            view = self.playlists_page.tracks_list
+        view.selectAll()
+
+    def _on_select_all_shortcut(self):
+        """Ctrl+A из AppEventFilter: «выделить все» в списке треков.
+
+        Срабатывает, когда фокус находится в списке библиотеки или плейлиста
+        (текстовые поля уже отфильтрованы в AppEventFilter).
+        """
+        focus = QApplication.focusWidget()
+        view = None
+        if focus is not None:
+            candidates = (
+                getattr(self.library_tab, "tracks_list", None),
+                getattr(self.playlists_page, "tracks_list", None),
+            )
+            for candidate in candidates:
+                if candidate is not None and focus in (
+                    candidate, candidate.viewport()
+                ):
+                    view = candidate
+                    break
+        if view is None:
+            return
+        scope = (
+            "library" if view is self.library_tab.tracks_list else "playlist"
+        )
+        self._on_select_all_from_context(view, scope)
+
+    def _on_remove_selected_from_context(self, scope, ids):
+        """Удаляет несколько выбранных треков (мультивыбор).
+
+        «Remove selected tracks» из TrackContextMenu: ids — список id из
+        выбранных строк. Маркер играющего сбрасывается через changed-сигнал.
+        """
+        for track_id in ids or []:
+            self.track_actions.remove(track_id, scope)
+
+    def _on_playlist_track_delete_requested(self, track_id):
+        """Трек удалён из плейлиста (список плейлистов не трогаем).
+
+        Сигнал приходит из делегата списка треков плейлиста (кнопка-корзка),
+        поэтому «удаление» здесь означает убирание трека из плейлиста,
+        а не из библиотеки. Маркер играющего сбрасывается через changed-сигнал.
+        """
+        self.track_actions.remove(track_id, "playlist")
+
     # ------------------------------------------------------------------
     #  Library: автосинхронизация и reload
     # ------------------------------------------------------------------
     def _sync_library_on_startup(self):
-        if not MUSIC_FOLDER.exists():
+        # Сканируем папку из настроек, а не захардкоженный ~/Music.
+        download_dir = Path(
+            self.settings.value("download_dir", str(MUSIC_FOLDER))
+        )
+        if not download_dir.exists():
             return
-        files = workers.find_audio_files(MUSIC_FOLDER)
+        files = workers.find_audio_files(download_dir)
         added = 0
         for path in files:
             if db.add_track(path) is not None:
@@ -641,6 +710,12 @@ class MainWindow(QMainWindow):
             self.track_actions.edit_metadata
         )
         menu.remove_requested.connect(self.track_actions.remove)
+        menu.remove_selected_requested.connect(
+            lambda scope, ids: self._on_remove_selected_from_context(scope, ids)
+        )
+        menu.select_all_requested.connect(
+            lambda scope: self._on_select_all_from_context(source_list, scope)
+        )
         menu.exec_at(pos)
 
     def _on_settings_clicked(self):

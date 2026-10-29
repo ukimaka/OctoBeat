@@ -353,22 +353,47 @@ class SettingsPage(QWidget):
             control,
         ))
 
+
+
         layout.addStretch(1)
         return page
 
     def _build_data_page(self):
         page, layout = self._new_page(tr("Data", self._lang()))
 
+        # --- CHANGED: Кнопка импорта из CSV (возвращаем на место) ---
         self.csv_import_button = QPushButton(tr("Import from CSV", self._lang()))
         self.csv_import_button.setAutoDefault(False)
         self.csv_import_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self._make_row(
             tr("Import from CSV", self._lang()),
-            tr(
-                "Import a CSV file with tracks (Spotify/Exportify export).",
-                self._lang(),
-            ),
+            tr("Import a CSV file with tracks (Spotify/Exportify export).", self._lang()),
             self.csv_import_button,
+        ))
+
+        # --- Твой код с выбором папки (который LFM написала) ---
+        control_widget = QWidget()
+        control_row = QHBoxLayout(control_widget)
+        control_row.setContentsMargins(0, 0, 0, 0)
+        control_row.setSpacing(8)
+
+        self.music_folder_edit = QLineEdit()
+        self.music_folder_edit.setReadOnly(True)
+        self.music_folder_edit.setPlaceholderText(tr("Folder where downloaded music is stored.", self._lang()))
+        self.music_folder_edit.setMinimumWidth(200)
+        self.music_folder_edit.setMaximumWidth(400)
+        self.music_folder_edit.setToolTip(tr("Select the folder for downloaded music.", self._lang()))
+
+        # --- Кнопка "Выбрать папку" (если LFM её не добавила, добавь сюда) ---
+        # Сигнал подключаем ТОЛЬКО в _connect_signals() — здесь не делать.
+        self.browse_music_button = QPushButton(tr("Выбрать папку", self._lang()))
+        control_row.addWidget(self.music_folder_edit)
+        control_row.addWidget(self.browse_music_button)
+
+        layout.addWidget(self._make_row(
+            tr("Папка для музыки", self._lang()),
+            tr("Путь, куда будут скачиваться треки.", self._lang()),
+            control_widget,
         ))
 
         layout.addStretch(1)
@@ -384,6 +409,7 @@ class SettingsPage(QWidget):
 
         self.report_bug_button = QPushButton(tr("Report a Bug", self._lang()))
         self.report_bug_button.setAutoDefault(False)
+        self.report_bug_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self._make_row(
             tr("Report a Bug", self._lang()),
             tr("Open the project page to report a problem.", self._lang()),
@@ -480,6 +506,8 @@ class SettingsPage(QWidget):
 
         self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
 
+        self.music_folder_edit.setText(self.settings.value("download_dir", str(Path.home() / "Music")))
+
     # ------------------------------------------------------------------
     #  Аккаунт
     # ------------------------------------------------------------------
@@ -532,6 +560,7 @@ class SettingsPage(QWidget):
         self.clear_covers_button.clicked.connect(self._on_clear_covers)
         self.clear_all_cache_button.clicked.connect(self._on_clear_all_cache)
         self.browse_button.clicked.connect(self._on_browse_cookies)
+        self.browse_music_button.clicked.connect(self._on_browse_music_folder)
         self.csv_import_button.clicked.connect(self.csv_import_requested.emit)
         self.report_bug_button.clicked.connect(self._on_report_bug)
         self.account_login_button.clicked.connect(self._open_auth_dialog)
@@ -668,10 +697,25 @@ class SettingsPage(QWidget):
             tr("Select cookies.txt", self._lang()),
             start_dir,
             "Cookies files (*.txt);;All files (*)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if path:
             self.cookies_edit.setText(path)
             self.settings.setValue("youtube_cookies", path)
+            self.settings.sync()
+
+    def _on_browse_music_folder(self):
+        start_dir = self.music_folder_edit.text() or str(Path.home())
+        path = QFileDialog.getExistingDirectory(
+            self,
+            tr("Выберите папку", self._lang()),
+            start_dir,
+            options=QFileDialog.DontUseNativeDialog,
+        )
+        if path:
+            self.music_folder_edit.setText(path)
+            self.settings.setValue("download_dir", path)
+            self.settings.sync()
 
     def _on_report_bug(self):
         QDesktopServices.openUrl(QUrl("https://github.com/ukimaka/OctoBeat/issues"))

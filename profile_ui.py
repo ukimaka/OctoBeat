@@ -1977,6 +1977,7 @@ class ProfilePage(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, tr("Select Banner", _lang()), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
@@ -1994,6 +1995,7 @@ class ProfilePage(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, tr("Select Avatar", _lang()), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
