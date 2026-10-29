@@ -35,6 +35,8 @@ Unless otherwise stated, these icons are distributed under open licenses (such a
 *   **Add Folder:** [add-folder](https://www.svgrepo.com/svg/502928/add-folder) (`add-folder.svg`)
 *   **Add to List:** [add-to-list](https://www.svgrepo.com/svg/348548/add-to-list) (`queue.svg`)
 *   **Playlist Audio:** [playlist-audio](https://www.svgrepo.com/svg/447457/playlist-audio) (`create-playlist.svg`)
-
+*   **Change cover** [image](https://www.svgrepo.com/svg/532570/image-pen) ('image.svg')
+*    **Select all** [select-all](https://www.svgrepo.com/svg/449216/select) ('select-all.svg')
+*    **Trim audio** [cut](https://www.svgrepo.com/svg/532999/scissors) ('cut.svg')
 ## Fonts
 *   System default sans-serif (no external fonts are bundled).

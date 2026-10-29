@@ -709,6 +709,14 @@ class MainWindow(QMainWindow):
         menu.edit_metadata_requested.connect(
             self.track_actions.edit_metadata
         )
+        # CHANGED: смена обложки трека
+        menu.change_cover_requested.connect(
+            self.track_actions.change_cover
+        )
+        # CHANGED: интерактивный редактор обрезки аудио
+        menu.trim_audio_requested.connect(
+            self.track_actions.trim_audio
+        )
         menu.remove_requested.connect(self.track_actions.remove)
         menu.remove_selected_requested.connect(
             lambda scope, ids: self._on_remove_selected_from_context(scope, ids)

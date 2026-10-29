@@ -33,6 +33,10 @@ class TrackContextMenu(QMenu):
     add_to_queue_requested = pyqtSignal(int)          # track_id
     favorite_requested = pyqtSignal(int)              # track_id
     edit_metadata_requested = pyqtSignal(int)         # track_id
+    # CHANGED: запрос на смену обложки трека
+    change_cover_requested = pyqtSignal(int)          # track_id
+    # CHANGED: запрос на интерактивную обрезку аудио
+    trim_audio_requested = pyqtSignal(int)            # track_id
     remove_requested = pyqtSignal(int, str)           # track_id, scope
     remove_selected_requested = pyqtSignal(str, object)  # scope, [track_id, ...]
     select_all_requested = pyqtSignal(str)              # scope: "library" | "playlist"
@@ -123,6 +127,7 @@ class TrackContextMenu(QMenu):
             self.source_list.selectAll()
 
     def _build(self, playlists):
+        # CHANGED: setIconSize убран — выравнивание select-all правим в SVG.
         lang = self.settings.value("language", "en")
 
         add_menu = QMenu(tr("Add to playlist", lang), self)
@@ -166,6 +171,39 @@ class TrackContextMenu(QMenu):
         )
         self.addAction(fix_action)
 
+        # CHANGED: пункт "Change cover" сразу после редактирования названия
+        cover_action = QAction(tr("Change cover", lang), self)
+        cover_action.setIcon(self.icons.icon("image.svg"))
+        cover_action.triggered.connect(
+            lambda checked=False, tid=self.track_id:
+            self.change_cover_requested.emit(tid)
+        )
+        self.addAction(cover_action)
+
+        # CHANGED: пункт "Trim audio" — интерактивный редактор обрезки
+        trim_audio_action = QAction(tr("Trim audio", lang), self)
+        trim_audio_action.setIcon(self.icons.icon("cut.svg"))
+        trim_audio_action.triggered.connect(
+            lambda checked=False, tid=self.track_id:
+            self.trim_audio_requested.emit(tid)
+        )
+        self.addAction(trim_audio_action)
+
+        # CHANGED: "Select all" / "Deselect all" перенесён выше корзины,
+        # текст зависит от текущего выделения, клик управляет source_list.
+        total_items = self._valid_items_count()
+        all_selected = (
+            total_items > 0 and len(self._selected_ids) >= total_items
+        )
+        select_all_text = (
+            tr("Deselect all", lang) if all_selected else tr("Select all", lang)
+        )
+        select_all_action = QAction(select_all_text, self)
+        select_all_action.setIcon(self.icons.icon("select-all.svg"))
+        select_all_action.setShortcut("Ctrl+A")
+        select_all_action.triggered.connect(self._toggle_select_all)
+        self.addAction(select_all_action)
+
         if self.scope == "library":
             # QAction не умеет красить текст (HTML не рендерится), поэтому
             # пункт делаем узнаваемым красной иконкой мусорки.
@@ -194,20 +232,6 @@ class TrackContextMenu(QMenu):
             )
         )
         self.addAction(remove_action)
-
-        # CHANGED: "Select all" / "Deselect all" — текст зависит от текущего
-        # выделения, клик напрямую управляет source_list.
-        total_items = self._valid_items_count()
-        all_selected = (
-            total_items > 0 and len(self._selected_ids) >= total_items
-        )
-        select_all_text = (
-            tr("Deselect all", lang) if all_selected else tr("Select all", lang)
-        )
-        select_all_action = QAction(select_all_text, self)
-        select_all_action.setShortcut("Ctrl+A")
-        select_all_action.triggered.connect(self._toggle_select_all)
-        self.addAction(select_all_action)
 
     def exec_at(self, pos):
         """Показывает меню в глобальной позиции, рассчитанной по source_list."""

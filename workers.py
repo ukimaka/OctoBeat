@@ -20,7 +20,9 @@ import csv
 import os
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
@@ -638,3 +640,211 @@ class CsvImportWorker(QObject):
         """Прерывает текущее скачивание (при отмене прогресс-диалога)."""
         self._stopped = True
         self._terminate_proc()
+
+
+# ---------------------------------------------------------------------------
+#  TrimWorker — интерактивная обрезка выбранного фрагмента
+# ---------------------------------------------------------------------------
+
+class TrimWorker(QObject):
+    """CHANGED: обрезает файл по маркерам и атомарно заменяет оригинал.
+
+    pydub.export пересоздаёт контейнер и теряет ID3/APIC и теги других
+    форматов, поэтому перед ``os.replace`` они переносятся через mutagen.
+    """
+
+    progress = pyqtSignal(int)        # 0..100
+    finished = pyqtSignal(float)      # новая длительность, сек
+    error = pyqtSignal(str)
+    cancelled = pyqtSignal()
+    warning = pyqtSignal(str)
+
+    _FORMATS = {
+        ".mp3": "mp3",
+        ".flac": "flac",
+        ".ogg": "ogg",
+        ".m4a": "mp4",
+        ".wav": "wav",
+    }
+
+    def __init__(self, file_path, start_ms, end_ms):
+        super().__init__()
+        self.file_path = file_path
+        self.start_ms = int(start_ms)
+        self.end_ms = int(end_ms)
+
+    def _interrupted(self):
+        thread = QThread.currentThread()
+        return thread is not None and thread.isInterruptionRequested()
+
+    @staticmethod
+    def _remove_temp(path):
+        if not path:
+            return
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _copy_tags(src, dst):
+        """Переносит теги и обложку. True — успех, False — ошибка, None — тегов нет."""
+        ext = Path(src).suffix.lower()
+
+        try:
+            if ext == ".mp3":
+                try:
+                    tags = ID3(src)
+                except ID3NoHeaderError:
+                    return None
+                tags.save(dst, v2_version=3)
+                return True
+
+            from mutagen import File as MutagenFile
+            from mutagen.flac import FLAC
+
+            old = MutagenFile(src)
+            if old is None:
+                return None
+
+            old_pictures = (
+                list(old.pictures)
+                if isinstance(old, FLAC) and getattr(old, "pictures", None)
+                else []
+            )
+            if not old.tags and not old_pictures:
+                return None
+
+            new = MutagenFile(dst)
+            if new is None:
+                return False
+
+            if old.tags:
+                if new.tags is None:
+                    try:
+                        new.add_tags()
+                    except Exception:
+                        pass
+                if new.tags is None:
+                    return False
+                new.tags.update(old.tags)
+
+            if isinstance(old, FLAC) and isinstance(new, FLAC):
+                new.clear_pictures()
+                for picture in old_pictures:
+                    new.add_picture(picture)
+
+            new.save()
+            return True
+        except Exception as e:
+            print(f"[trim] tag copy failed: {e}")
+            return False
+
+    def run(self):
+        # Ленивый импорт: pydub — необязательная зависимость.
+        try:
+            from pydub import AudioSegment
+        except ImportError:
+            self.error.emit(
+                "pydub is not installed. Install it with: pip install pydub"
+            )
+            return
+
+        if not os.path.isfile(self.file_path):
+            self.error.emit(f"File not found: {self.file_path}")
+            return
+
+        ext = os.path.splitext(self.file_path)[1].lower()
+        export_format = self._FORMATS.get(ext)
+        if export_format is None:
+            self.error.emit(f"Unsupported audio format: {ext}")
+            return
+
+        # WAV pydub умеет читать/писать без ffmpeg, остальные форматы — нет.
+        if ext != ".wav" and shutil.which("ffmpeg") is None:
+            self.error.emit(
+                "FFmpeg is not installed. Install it with your package "
+                "manager (e.g. sudo apt install ffmpeg)."
+            )
+            return
+
+        temp_path = None
+        try:
+            self.progress.emit(5)
+            audio = AudioSegment.from_file(self.file_path)
+            if self._interrupted():
+                self.cancelled.emit()
+                return
+
+            total = len(audio)
+            if total <= 0:
+                self.error.emit("Audio file is empty.")
+                return
+
+            start = max(0, min(self.start_ms, total))
+            end = max(0, min(self.end_ms, total))
+            if end <= start:
+                self.error.emit("The selection is empty.")
+                return
+
+            # Файл не менялся — не перекодируем его зря.
+            if start == 0 and end >= total:
+                self.finished.emit(total / 1000.0)
+                return
+
+            self.progress.emit(35)
+            trimmed = audio[start:end]
+            self.progress.emit(60)
+
+            if self._interrupted():
+                self.cancelled.emit()
+                return
+
+            # Временный файл создаём рядом с оригиналом: os.replace должен
+            # работать в пределах одной файловой системы.
+            fd, temp_path = tempfile.mkstemp(
+                prefix=".trim-",
+                suffix=ext,
+                dir=os.path.dirname(os.path.abspath(self.file_path)),
+            )
+            os.close(fd)
+
+            trimmed.export(temp_path, format=export_format)
+            self.progress.emit(80)
+
+            if self._interrupted():
+                self._remove_temp(temp_path)
+                self.cancelled.emit()
+                return
+
+            tags_result = self._copy_tags(self.file_path, temp_path)
+            if tags_result is False:
+                self.warning.emit("Tags and cover could not be preserved.")
+
+            self.progress.emit(95)
+
+            if self._interrupted():
+                self._remove_temp(temp_path)
+                self.cancelled.emit()
+                return
+
+            # Сохраняем права доступа оригинала (mkstemp создаёт 0600).
+            try:
+                os.chmod(
+                    temp_path,
+                    stat.S_IMODE(os.stat(self.file_path).st_mode),
+                )
+            except OSError:
+                pass
+
+            os.replace(temp_path, self.file_path)
+            temp_path = None
+            self.progress.emit(100)
+            self.finished.emit(len(trimmed) / 1000.0)
+
+        except Exception as e:
+            self._remove_temp(temp_path)
+            if self._interrupted():
+                self.cancelled.emit()
+            else:
+                self.error.emit(str(e))

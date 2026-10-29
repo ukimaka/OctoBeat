@@ -85,6 +85,34 @@ def render_svg(renderer, size, color=None, dpr=None):
         painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
         painter.fillRect(QRectF(0, 0, size, size), QColor(color))
     painter.end()
+
+    # CHANGED: видимый контент некоторых SVG (например, select-all.svg)
+    # смещён внутри viewBox, из-за чего иконка «съезжает» влево в меню.
+    # Центрируем фактический bounding box рисунка, а не пустой viewBox.
+    image = pixmap.toImage()
+    min_x, min_y = image.width(), image.height()
+    max_x = max_y = -1
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).alpha() > 10:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+    if max_x >= min_x and max_y >= min_y:
+        dpr_value = pixmap.devicePixelRatio() or 1.0
+        dx = ((image.width() - 1) - min_x - max_x) / 2.0 / dpr_value
+        dy = ((image.height() - 1) - min_y - max_y) / 2.0 / dpr_value
+        if abs(dx) >= 0.5 / dpr_value or abs(dy) >= 0.5 / dpr_value:
+            centered = new_pixmap(size, size, dpr=dpr)
+            centered_painter = QPainter(centered)
+            centered_painter.setRenderHint(
+                QPainter.SmoothPixmapTransform, True
+            )
+            centered_painter.translate(dx, dy)
+            centered_painter.drawPixmap(0, 0, pixmap)
+            centered_painter.end()
+            pixmap = centered
     return pixmap
 
 

@@ -20,14 +20,20 @@
 мутации они эмитят ``changed``, а MainWindow обновляет списки.
 """
 
+import importlib.util
 import os
 import re
+import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QSettings, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
+from PyQt5.QtWidgets import (
+    QDialog, QFileDialog, QMessageBox, QProgressDialog,
+)
 from mutagen.easyid3 import EasyID3
+from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 
+import workers
 from dialogs import CustomConfirmDialog, CustomInputDialog
 from translations import tr
 
@@ -227,3 +233,163 @@ class TrackActions(QObject):
                 media_player.set_media(new_path, loudness=loudness)
 
         self.changed.emit()
+
+    # CHANGED: замена обложки трека (вшиваем APIC в ID3 и сбрасываем кэш)
+    def change_cover(self, track_id):
+        lang = self._lang()
+        row = self.db.get_track_by_id(track_id)
+        if not row:
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self.parent_widget,
+            tr("Select new cover", lang),
+            "",
+            "Images (*.jpg *.jpeg *.png *.webp)",
+            options=QFileDialog.DontUseNativeDialog,
+        )
+        if not path:
+            return
+
+        file_path = row["file_path"]
+        try:
+            # Читаем картинку
+            with open(path, "rb") as f:
+                img_data = f.read()
+
+            # Вшиваем в MP3 (ID3)
+            if file_path.lower().endswith(".mp3"):
+                try:
+                    audio = ID3(file_path)
+                except ID3NoHeaderError:
+                    audio = ID3()
+
+                # Удаляем старые обложки
+                audio.delall("APIC")
+
+                # Определяем MIME
+                ext = os.path.splitext(path)[1].lower()
+                mime = "image/png" if ext == ".png" else "image/jpeg"
+
+                audio.add(APIC(
+                    encoding=3, mime=mime, type=3, desc="Cover", data=img_data
+                ))
+                audio.save(file_path, v2_version=3)
+
+            # Сбрасываем кэш обложки, чтобы UI перечитал её из файла
+            cover_cache = os.path.expanduser(
+                f"~/.cache/music_player/covers/{track_id}.jpg"
+            )
+            if os.path.exists(cover_cache):
+                os.remove(cover_cache)
+
+            # Сообщаем UI, что трек изменился
+            self.changed.emit()
+            CustomConfirmDialog.information(
+                self.parent_widget, tr("Success", lang),
+                tr("Cover updated successfully.", lang),
+            )
+
+        except Exception as e:
+            print(f"[cover-edit] failed: {e}")
+            QMessageBox.warning(
+                self.parent_widget, tr("Error", lang),
+                f"Failed to change cover: {e}",
+            )
+
+    # CHANGED: интерактивный визуальный редактор обрезки аудио
+    def trim_audio(self, track_id):
+        """Открывает диалог обрезки и обновляет длительность в БД."""
+        lang = self._lang()
+        row = self.db.get_track_by_id(track_id)
+        if row is None:
+            return
+
+        file_path = row["file_path"]
+        if not os.path.isfile(file_path):
+            QMessageBox.warning(
+                self.parent_widget,
+                tr("Trim audio", lang),
+                tr("File not found:\n{path}", lang).format(path=file_path),
+            )
+            return
+
+        # pydub/numpy/ffmpeg — внешние зависимости; без них редактор
+        # не сможет ни построить волну, ни перекодировать файл.
+        if importlib.util.find_spec("pydub") is None:
+            QMessageBox.warning(
+                self.parent_widget,
+                tr("Trim audio", lang),
+                tr(
+                    "pydub is not installed. Install it with: pip install pydub",
+                    lang,
+                ),
+            )
+            return
+        if importlib.util.find_spec("numpy") is None:
+            QMessageBox.warning(
+                self.parent_widget,
+                tr("Trim audio", lang),
+                tr(
+                    "numpy is not installed. Install it with: pip install numpy",
+                    lang,
+                ),
+            )
+            return
+        if shutil.which("ffmpeg") is None:
+            QMessageBox.warning(
+                self.parent_widget,
+                tr("Trim audio", lang),
+                tr(
+                    "FFmpeg is not installed. Install it with your package "
+                    "manager (e.g. sudo apt install ffmpeg).",
+                    lang,
+                ),
+            )
+            return
+
+        # Импорт ленивый: trim_editor тянет QtMultimedia и pydub/numpy.
+        from trim_editor import AudioTrimDialog
+
+        media_player = self.controller.media_player
+        is_current = (track_id == self.controller.current_track_id)
+        was_playing = is_current and media_player.is_playing()
+        if is_current:
+            # Освобождаем файл перед возможной атомарной заменой.
+            media_player.stop()
+
+        dialog = AudioTrimDialog(
+            self.parent_widget,
+            file_path,
+            track_title=row["title"] or Path(file_path).stem,
+        )
+
+        duration = None
+        try:
+            if dialog.exec_() == QDialog.Accepted:
+                duration = dialog.trimmed_duration
+                if duration is not None:
+                    self.db.update_track_metadata(
+                        track_id,
+                        title=row["title"],
+                        artist=row["artist"],
+                        album=row["album"],
+                        duration=int(round(duration)),
+                    )
+                    self.changed.emit()
+        finally:
+            # Даже если диалог отменили или обрезка упала, возвращаем
+            # текущий трек в плеер.
+            if is_current:
+                loudness = row["loudness"]
+                if was_playing:
+                    media_player.play(file_path, loudness=loudness)
+                else:
+                    media_player.set_media(file_path, loudness=loudness)
+
+        if duration is not None:
+            CustomConfirmDialog.information(
+                self.parent_widget,
+                tr("Success", lang),
+                tr("Audio trimmed successfully", lang),
+            )
