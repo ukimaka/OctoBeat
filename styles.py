@@ -18,7 +18,6 @@
 
 from pathlib import Path
 
-
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
 # QSS не умеет перекрашивать SVG, поэтому для каждой темы берём свой файл.
 _DARK_ARROW = (_ICONS_DIR / "white" / "chevron-down.svg").as_posix()
@@ -46,11 +45,12 @@ QTabBar::tab {
     background: transparent;
     color: #b3b3b3;
     padding: 6px 14px;
-    border: none;
+    border: none; /* Убирает белые полосы */
 }
 
 QTabBar::tab:selected {
     color: #ffffff;
+    border-top: 2px solid #5151ab; /* Наш фирменный цвет */
 }
 
 QTabBar::tab:hover {
@@ -328,11 +328,12 @@ QTabBar::tab {
     background: transparent;
     color: #555555;
     padding: 6px 14px;
-    border: none;
+    border: none; /* Убирает белые полосы */
 }
 
 QTabBar::tab:selected {
     color: #000000;
+    border-top: 2px solid #5151ab; /* Наш фирменный цвет */
 }
 
 QTabBar::tab:hover {

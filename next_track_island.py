@@ -18,7 +18,10 @@
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QLabel, QSizePolicy, QWidget,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QWidget,
 )
 
 from translations import tr

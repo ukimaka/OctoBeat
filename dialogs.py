@@ -18,9 +18,15 @@
 
 from pathlib import Path
 
-from PyQt5.QtCore import QRect, QRectF, QSize, Qt, QSettings
+from PyQt5.QtCore import QRect, QRectF, QSettings, QSize, Qt
 from PyQt5.QtGui import (
-    QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
     QPixmap,
 )
 from PyQt5.QtWidgets import (
@@ -45,10 +51,12 @@ import db
 import metadata
 from musicbrainz_client import get_cached_source_for_path
 from pixmap_utils import (
-    draw_centered, draw_cover, draw_source_badge, svg_file_pixmap,
+    draw_centered,
+    draw_cover,
+    draw_source_badge,
+    svg_file_pixmap,
 )
 from translations import tr
-
 
 ICONS_DIR = Path(__file__).parent / "icons"
 
@@ -757,4 +765,3 @@ class BulkAddDialog(_FramelessDialog):
 
     def _update_confirm_state(self, _item=None):
         self.confirm_button.setEnabled(bool(self.selected_track_ids()))
-

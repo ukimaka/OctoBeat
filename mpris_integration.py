@@ -24,9 +24,6 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtMultimedia import QMediaPlayer
-
 from mpris_server import (
     EventAdapter,
     MetadataObj,
@@ -34,6 +31,8 @@ from mpris_server import (
     PlayState,
     Server,
 )
+from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtMultimedia import QMediaPlayer
 
 # В библиотеке mpris_server состояние плеера называется PlayState.
 # Псевдоним оставлен для читаемости и совместимости с формулировкой задачи.
@@ -268,7 +267,7 @@ def start_mpris(controller, name="MusicPlayer"):
         server.loop(background=True)
         print(f"[mpris] started: org.mpris.MediaPlayer2.{name}")
         return server
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[mpris] not available: {exc}")
         return None
 
@@ -277,4 +276,3 @@ def stop_mpris(controller):
     """Заглушка: MPRIS-сервер запущен фоновым потоком (loop(background=True))
     и умирает вместе с процессом. server.quit() здесь вызывать нельзя — в
     mpris_server он делает join() самому себе и роняет RuntimeError."""
-    pass

@@ -25,9 +25,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, APIC, ID3NoHeaderError
+from mutagen.id3 import APIC, ID3, ID3NoHeaderError
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 import db
 import metadata
@@ -35,7 +35,6 @@ from musicbrainz_client import (
     get_track_metadata_with_fallback,
     metadata_needs_refresh,
 )
-
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav"}
 
@@ -73,7 +72,7 @@ def get_mean_volume(path):
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-i", path,
              "-af", "volumedetect", "-f", "null", "-"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, check=False
         )
     except FileNotFoundError:
         print("[loudness] ffmpeg not found")
@@ -190,8 +189,8 @@ class RescanWorker(QObject):
             try:
                 path = row["file_path"]
                 current = metadata.read_metadata(path)
-                lookup_title = current["title"] or Path(path).stem
-                lookup_artist = current["artist"] or "Unknown Artist"
+                lookup_title = str(current["title"] or Path(path).stem)
+                lookup_artist = str(current["artist"] or "Unknown Artist")
 
                 # Пустые теги или YouTube-мусор в них — повод сходить в
                 # MusicBrainz (функция сама сделает YouTube-fallback).
@@ -494,23 +493,27 @@ class CsvImportWorker(QObject):
                 text=True,
                 bufsize=1,
             )
-            for line in self._proc.stdout:
-                line = line.rstrip()
-                if not line:
-                    continue
-                if "Sign in to confirm you're not a bot" in line:
-                    raise RuntimeError(
-                        "YouTube требует авторизации (нужен cookies.txt)"
-                    )
-                if not line.startswith("[") and line.lower().endswith(".mp3"):
-                    final_path = line.strip()
-                    continue
-                last_lines.append(line)
-                if len(last_lines) > 10:
-                    last_lines.pop(0)
-            self._proc.wait()
+            if self._proc.stdout:
+                for line in self._proc.stdout:
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    if "Sign in to confirm you're not a bot" in line:
+                        raise RuntimeError(
+                            "YouTube требует авторизации (нужен cookies.txt)"
+                        )
+                    if not line.startswith("[") and line.lower().endswith(".mp3"):
+                        final_path = line.strip()
+                        continue
+                    last_lines.append(line)
+                    if len(last_lines) > 10:
+                        last_lines.pop(0)
+
+            self._proc.wait() # <--- Важно: эта строка должна быть на уровне с 'if', но внутри 'try'
+
         except Exception:
-            self._terminate_proc()
+            self._terminate_proc() # type: ignore
+            raise
             raise
 
         if self._stopped:

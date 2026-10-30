@@ -25,18 +25,25 @@ from pathlib import Path
 
 from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
-    QColor, QFontMetrics, QIcon, QPainter, QPainterPath, QPixmap,
+    QColor,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPixmap,
 )
 from PyQt5.QtWidgets import QLabel, QPushButton, QSlider, QStyle
 
 from pixmap_utils import (
-    draw_centered, draw_cover, new_pixmap, svg_file_pixmap,
+    draw_centered,
+    draw_cover,
+    new_pixmap,
+    svg_file_pixmap,
 )
 
 
 def fmt_time(ms):
-    if ms < 0:
-        ms = 0
+    ms = max(ms, 0)
     total_sec = ms // 1000
     m, s = divmod(total_sec, 60)
     return f"{m}:{s:02d}"

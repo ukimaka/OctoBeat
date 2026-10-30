@@ -41,7 +41,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -170,7 +170,7 @@ def _cache_key(artist: str, title: str) -> str:
     return f"{(artist or '').strip().casefold()}|{(title or '').strip().casefold()}"
 
 
-def _cache_get(key: str) -> Optional[dict[str, Any]]:
+def _cache_get(key: str) -> dict[str, Any] | None:
     with _cache_lock:
         _load_cache_locked()
         entry = _cache.get(key)
@@ -505,7 +505,7 @@ def _artist_credit(recording: dict[str, Any]) -> str:
     return "".join(parts).strip()
 
 
-def _pick_release(releases: list[Any]) -> Optional[dict[str, Any]]:
+def _pick_release(releases: list[Any]) -> dict[str, Any] | None:
     """Выбирает наиболее информативный релиз (альбом, official, с датой)."""
     valid = [release for release in releases if isinstance(release, dict)]
     if not valid:
@@ -591,8 +591,8 @@ def _choose_recording(
     artist: str,
     title: str,
     require_artist: bool = True,
-) -> Optional[dict[str, Any]]:
-    best: Optional[dict[str, Any]] = None
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
     best_score = -1
 
     for recording in recordings:
@@ -631,7 +631,7 @@ def _musicbrainz_search(
     artist: str,
     title: str,
     require_artist: bool,
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     if not _MUSICBRAINZ_READY or musicbrainzngs is None:
         return None
 
@@ -659,7 +659,7 @@ def _musicbrainz_search(
     return _recording_to_metadata(recording, artist, title)
 
 
-def search_musicbrainz(artist: str, title: str) -> Optional[dict[str, Any]]:
+def search_musicbrainz(artist: str, title: str) -> dict[str, Any] | None:
     """Ищет трек в MusicBrainz и возвращает нормализованные метаданные.
 
     ``strict=True`` заставляет MusicBrainz искать точные совпадения, что
@@ -751,7 +751,7 @@ def _detect_image_ext(data: bytes) -> str:
     return ""
 
 
-def _download_image(url: str) -> Optional[bytes]:
+def _download_image(url: str) -> bytes | None:
     if not url:
         return None
 
@@ -775,9 +775,9 @@ def _download_image(url: str) -> Optional[bytes]:
 
 
 def get_cover_art(
-    release_id: Optional[str],
-    release_group_id: Optional[str] = None,
-) -> Optional[bytes]:
+    release_id: str | None,
+    release_group_id: str | None = None,
+) -> bytes | None:
     """Возвращает байты передней обложки из Cover Art Archive.
 
     Приоритет:
@@ -856,7 +856,7 @@ def _save_cover_bytes(
     data: bytes,
     cache_key: str,
     source: str = "musicbrainz",
-) -> Optional[str]:
+) -> str | None:
     ext = _detect_image_ext(data)
     if not ext:
         return None
@@ -889,7 +889,7 @@ def _save_cover_bytes(
 def _copy_cover_file_to_cache(
     source_path: str,
     cache_key: str,
-) -> Optional[str]:
+) -> str | None:
     try:
         path = Path(source_path)
         if not path.is_file() or path.stat().st_size > MAX_IMAGE_BYTES:
@@ -922,7 +922,7 @@ def _pick_thumbnail(entry: dict[str, Any]) -> str:
     return str(entry.get("thumbnail") or "")
 
 
-def _youtube_first_result(query: str) -> Optional[dict[str, Any]]:
+def _youtube_first_result(query: str) -> dict[str, Any] | None:
     """Один результат поиска YouTube через yt-dlp (без скачивания файла)."""
     if not query:
         return None
@@ -956,6 +956,7 @@ def _youtube_first_result(query: str) -> Optional[dict[str, Any]]:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=30,
+            check=False
         )
     except Exception as exc:
         print(f"[youtube] search failed: {exc}")
@@ -977,10 +978,10 @@ def _youtube_first_result(query: str) -> Optional[dict[str, Any]]:
 def _youtube_cover(
     artist: str,
     title: str,
-    thumbnail_path: Optional[str],
+    thumbnail_path: str | None,
     cache_key: str,
-    video: Optional[dict[str, Any]] = None,
-) -> Optional[str]:
+    video: dict[str, Any] | None = None,
+) -> str | None:
     # 1. Уже скачанное yt-dlp превью рядом с mp3.
     if thumbnail_path:
         saved = _copy_cover_file_to_cache(thumbnail_path, cache_key)
@@ -1011,8 +1012,8 @@ def _youtube_cover(
 def _youtube_fallback(
     artist: str,
     title: str,
-    file_path: Optional[str] = None,
-    youtube_thumbnail_path: Optional[str] = None,
+    file_path: str | None = None,
+    youtube_thumbnail_path: str | None = None,
     cover_only: bool = False,
 ) -> dict[str, Any]:
     """Запасной источник: YouTube-поиск + превью. Никогда не бросает."""
@@ -1119,7 +1120,7 @@ def _youtube_fallback(
 def _default_result(
     artist: str,
     title: str,
-    file_path: Optional[str] = None,
+    file_path: str | None = None,
 ) -> dict[str, Any]:
     """Заглушка: имя файла/трек, «Unknown Artist» и стандартная обложка UI."""
     stem = Path(file_path).stem if file_path else ""
@@ -1167,8 +1168,8 @@ def _validate_cached_result(data: dict[str, Any]) -> dict[str, Any]:
 def get_track_metadata_with_fallback(
     artist: str,
     title: str,
-    file_path: Optional[str] = None,
-    youtube_thumbnail_path: Optional[str] = None,
+    file_path: str | None = None,
+    youtube_thumbnail_path: str | None = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
     """Главная точка входа: MusicBrainz → YouTube → имя файла.
@@ -1205,14 +1206,14 @@ def get_track_metadata_with_fallback(
             return _validate_cached_result(cached)
 
     # --- 1. MusicBrainz -----------------------------------------------------
-    mb_result: Optional[dict[str, Any]] = None
+    mb_result: dict[str, Any] | None = None
     try:
         mb_result = search_musicbrainz(clean_artist, clean_title)
     except Exception as exc:  # страховка на случай неожиданных ошибок
         print(f"[musicbrainz] unexpected search error: {exc}")
 
     if mb_result is not None:
-        cover_data: Optional[bytes] = None
+        cover_data: bytes | None = None
         try:
             cover_data = get_cover_art(
                 mb_result.get("release_id"),
@@ -1292,7 +1293,7 @@ def get_track_metadata_with_fallback(
     return default
 
 
-def _cached_entry_for_path(file_path: str) -> Optional[dict[str, Any]]:
+def _cached_entry_for_path(file_path: str) -> dict[str, Any] | None:
     """Ищет запись кэша по имени аудиофайла (без сетевых запросов)."""
     try:
         from metadata import clean_youtube_title
@@ -1313,7 +1314,7 @@ def _cached_entry_for_path(file_path: str) -> Optional[dict[str, Any]]:
         return None
 
 
-def get_cached_cover_for_path(file_path: str) -> Optional[str]:
+def get_cached_cover_for_path(file_path: str) -> str | None:
     """Возвращает обложку из локального кэша по имени аудиофайла.
 
     Используется UI при отрисовке библиотеки: сеть здесь не трогаем,
@@ -1329,7 +1330,7 @@ def get_cached_cover_for_path(file_path: str) -> Optional[str]:
     return None
 
 
-def get_cached_source_for_path(file_path: str) -> Optional[str]:
+def get_cached_source_for_path(file_path: str) -> str | None:
     """Источник метаданных для UI: musicbrainz / youtube / fallback."""
     cached = _cached_entry_for_path(file_path)
     if not cached:

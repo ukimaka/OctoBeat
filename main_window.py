@@ -17,14 +17,20 @@
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, QTimer, Qt
-from title_bar import CustomTitleBar
+from PyQt5.QtCore import QSettings, Qt, QTimer
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QTabWidget, QApplication,
-    QVBoxLayout, QSizeGrip,
-    QMessageBox, QMenu, QAction,
+    QAction,
+    QApplication,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QSizeGrip,
+    QTabBar,
+    QTabWidget,
     QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 import db
@@ -32,8 +38,8 @@ import session
 import workers
 from account_menu import AccountMenu
 from appearance import AppearanceManager
-from dialogs import CustomConfirmDialog
 from controller import PlayerController
+from dialogs import CustomConfirmDialog
 from friends_ui import FriendsPage
 from hotkeys import AppEventFilter
 from import_flow import ImportFlow
@@ -44,16 +50,25 @@ from player_bar import PlayerBar
 from playlists_ui import PlaylistsPage
 from profile_ui import ProfilePage
 from settings_page import SettingsPage
+from title_bar import CustomTitleBar
 from track_actions import TrackActions
 from track_menu import TrackContextMenu
 from translations import tr
 from ui_common import IconProvider
 
+
+class CustomTabBar(QTabBar):
+    def sizeHint(self):
+        size = super().sizeHint()
+        # Принудительно делаем панель вкладок высотой 42 пикселя
+        size.setHeight(max(size.height(), 42))
+        return size
+
 # MPRIS (Linux): медиа-клавиши и управление из системного трея/панели.
 # Импорт может быть недоступен вне Linux / без D-Bus — приложение не ломаем.
 try:
     from mpris_integration import start_mpris, stop_mpris
-except Exception as exc:  # noqa: BLE001
+except Exception as exc:
     print(f"[mpris] integration unavailable: {exc}")
     start_mpris = None
     stop_mpris = None
@@ -96,7 +111,14 @@ class MainWindow(QMainWindow):
         )
 
         lang = self.settings.value("language", "en")
+
         self.tabs = QTabWidget()
+        self.tabs.setTabBar(CustomTabBar(self.tabs))
+
+        tab_bar = self.tabs.tabBar()
+        if tab_bar is not None:
+            tab_bar.setMinimumHeight(38)
+
         self.library_tab = LibraryTab(
             self.settings, self.icons, event_filter=self.event_filter
         )
@@ -255,6 +277,14 @@ class MainWindow(QMainWindow):
         self.playlists_page.play_track.connect(self._on_playlist_track_play_requested)
         self.playlists_page.playlist_deleted.connect(self._on_playlist_deleted)
         self.playlists_page.settings_requested.connect(self._on_settings_clicked)
+        # CHANGED: Back в плейлистах умеет возвращать в профиль.
+        try:
+            self.playlists_page.back_button.clicked.disconnect(
+                self.playlists_page._go_back
+            )
+        except TypeError:
+            pass
+        self.playlists_page.back_button.clicked.connect(self._on_playlist_back)
         self.profile_page.playlist_clicked.connect(self._on_profile_playlist_clicked)
         self.friends_page.profile_requested.connect(self._on_friend_profile_requested)
         self.profile_page.back_requested.connect(self._on_profile_back)
@@ -574,6 +604,17 @@ class MainWindow(QMainWindow):
     def _on_profile_playlist_clicked(self, playlist_id):
         self.tabs.setCurrentWidget(self.playlists_page)
         self.playlists_page.open_playlist(playlist_id)
+        # CHANGED: запоминаем, что вернуться нужно в профиль.
+        self._return_to_profile = True
+
+    def _on_playlist_back(self):
+        # CHANGED: Возврат в профиль, если пришли оттуда
+        if getattr(self, "_return_to_profile", False):
+            self._return_to_profile = False
+            self.playlists_page._go_back()
+            self.tabs.setCurrentWidget(self.profile_page)
+        else:
+            self.playlists_page._go_back()
 
     def _on_friend_profile_requested(self, user_id: int) -> None:
         self._show_user_page(self.profile_page)

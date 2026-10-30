@@ -18,8 +18,15 @@
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit,
-    QTreeWidgetItem, QTreeWidgetItemIterator, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QTreeWidgetItem,
+    QTreeWidgetItemIterator,
+    QVBoxLayout,
+    QWidget,
 )
 
 import db
@@ -29,7 +36,6 @@ from dialogs import CustomConfirmDialog, CustomInputDialog
 from library_tree import LibraryTreeWidget
 from musicbrainz_client import get_cached_source_for_path
 from next_track_island import NextTrackIsland
-from pixmap_utils import source_display_name
 from translations import tr
 
 
@@ -217,8 +223,9 @@ class LibraryTab(QWidget):
         rows = db.get_all_tracks()
 
         # CHANGED: Filter tracks to only show those in the configured download_dir
-        from PyQt5.QtCore import QSettings
         from pathlib import Path
+
+        from PyQt5.QtCore import QSettings
         settings = QSettings("MusicPlayer", "MusicPlayer")
         download_dir = settings.value("download_dir", str(Path.home() / "Music"))
         rows = [r for r in rows if r["file_path"].startswith(download_dir)]

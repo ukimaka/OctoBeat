@@ -16,10 +16,11 @@
 
 """Ручной тест db.py. Запускается из терминала: python test_db.py"""
 
-import db
-
 # Чистим старую базу, если есть (полезно для повторных запусков)
 import os
+
+import db
+
 if os.path.exists(db.DB_FILE):
     os.remove(db.DB_FILE)
 

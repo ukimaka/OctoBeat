@@ -24,7 +24,7 @@ Data / About), справа — содержимое выбранного раз
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QSettings, QSize, QUrl, pyqtSignal
+from PyQt5.QtCore import QSettings, QSize, Qt, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -43,11 +43,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from dialogs import colored_icon
 from api_client import ApiClient
 from auth_ui import AuthDialog
+from dialogs import colored_icon
 from translations import tr
-
 
 CACHE_DIR = Path.home() / ".cache" / "music_player"
 COVERS_DIR = CACHE_DIR / "covers"
@@ -482,7 +481,7 @@ class SettingsPage(QWidget):
     def _load_settings(self):
         language = self.settings.value("language", "en")
         index = self.language_combo.findData(language)
-        self.language_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.language_combo.setCurrentIndex(max(index, 0))
 
         self.crossfade_check.setChecked(
             bool(self.settings.value("enable_crossfade", True, type=bool))
@@ -498,11 +497,11 @@ class SettingsPage(QWidget):
         except (TypeError, ValueError):
             zoom = 100
         index = self.zoom_combo.findData(zoom)
-        self.zoom_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.zoom_combo.setCurrentIndex(max(index, 0))
 
         theme = self.settings.value("theme", "dark")
         index = self.theme_combo.findData(theme)
-        self.theme_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.theme_combo.setCurrentIndex(max(index, 0))
 
         self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
 
@@ -531,7 +530,7 @@ class SettingsPage(QWidget):
         try:
             user = ApiClient(token=token, timeout=5).get_me()
             username = str(user.get("username") or "")
-        except Exception:  # noqa: BLE001 - имя не критично для входа
+        except Exception:
             username = str(self.settings.value("api_username") or "")
         if username:
             self.settings.setValue("api_username", username)
@@ -609,7 +608,7 @@ class SettingsPage(QWidget):
 
         index = self.zoom_combo.findData(100)
         self.zoom_combo.blockSignals(True)
-        self.zoom_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.zoom_combo.setCurrentIndex(max(index, 0))
         self.zoom_combo.blockSignals(False)
 
         lang = self._lang()

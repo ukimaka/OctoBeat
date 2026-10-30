@@ -24,12 +24,16 @@
 
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from translations import tr
 from ui_common import ClickSlider, ElidedLabel, LyricsButton, fmt_time
-
 
 # Ширина блока громкости (иконка + слайдер). Нужна, чтобы симметричным
 # отступом слева удерживать кнопки управления строго по центру панели.

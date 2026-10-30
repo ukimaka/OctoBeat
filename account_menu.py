@@ -16,9 +16,9 @@
 
 """Аватарка в углу вкладок, меню аккаунта и фоновые проверки."""
 
-from PyQt5.QtCore import QObject, QRectF, QSize, QThread, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QObject, QRectF, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter
-from PyQt5.QtWidgets import QMenu, QPushButton
+from PyQt5.QtWidgets import QMenu, QPushButton, QSizePolicy
 
 import db
 from api_client import ApiClient, ApiError
@@ -156,10 +156,16 @@ class AccountMenu(QObject):
         self.avatar_button.setFlat(True)
         self.avatar_button.setFixedSize(32, 32)
         self.avatar_button.setIconSize(QSize(32, 32))
+        # CHANGED: фиксированный размер не должен растягиваться/сжиматься layout'ом.
+        self.avatar_button.setSizePolicy(
+            QSizePolicy.Fixed, QSizePolicy.Fixed
+        )
         self.avatar_button.setCursor(Qt.PointingHandCursor)
         self.avatar_button.setStyleSheet(
             "QPushButton#globalAvatarButton {"
-            " border: none; background: transparent; border-radius: 16px; }"
+            " border: none; background: transparent; border-radius: 16px;"
+            " padding: 0px;"
+            "}"
             "QPushButton#globalAvatarButton:hover {"
             " background: rgba(128, 128, 128, 0.2); }"
         )

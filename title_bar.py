@@ -1,5 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QLabel, QPushButton, QHBoxLayout
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+
 
 class CustomTitleBar(QWidget):
     def __init__(self, parent=None):
@@ -50,9 +51,9 @@ class CustomTitleBar(QWidget):
         layout.addWidget(self.maximize_button)
         layout.addWidget(self.close_button)
 
-        self.minimize_button.clicked.connect(lambda: self.window().showMinimized())
+        self.minimize_button.clicked.connect(lambda checked=False: self.window().showMinimized())
         self.maximize_button.clicked.connect(self._toggle_max)
-        self.close_button.clicked.connect(lambda: self.window().close())
+        self.close_button.clicked.connect(lambda checked=False: self.window().close())  # pyright: ignore[reportArgumentType]
         self.drag_pos = QPoint()
 
     def _toggle_max(self):

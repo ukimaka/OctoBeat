@@ -22,9 +22,14 @@
 
 import html
 
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QPushButton, QSizePolicy, QTextBrowser, QVBoxLayout, QWidget,
+    QHBoxLayout,
+    QPushButton,
+    QSizePolicy,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
 )
 
 from translations import tr

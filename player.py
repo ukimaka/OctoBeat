@@ -19,7 +19,7 @@
 import math
 
 from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtSignal
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
 
 
 class CrossfadePlayer(QObject):

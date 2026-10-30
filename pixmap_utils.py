@@ -26,7 +26,7 @@
 """
 
 from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import QApplication
 
@@ -47,7 +47,7 @@ def device_pixel_ratio():
 def physical(value, dpr=None):
     """Логические пиксели → физические (минимум 1)."""
     dpr = device_pixel_ratio() if dpr is None else dpr
-    return max(1, int(round(value * dpr)))
+    return max(1, (round(value * dpr)))
 
 
 def new_pixmap(width, height=None, dpr=None):
@@ -66,8 +66,8 @@ def pixmap_size(pixmap):
         return QSize(0, 0)
     dpr = pixmap.devicePixelRatio() or 1.0
     return QSize(
-        max(0, int(round(pixmap.width() / dpr))),
-        max(0, int(round(pixmap.height() / dpr))),
+        max(0, (round(pixmap.width() / dpr))),
+        max(0, (round(pixmap.height() / dpr))),
     )
 
 
@@ -240,7 +240,7 @@ def draw_source_badge(painter, rect, source, size=14):
     painter.drawRoundedRect(badge_rect, radius, radius)
 
     font = painter.font()
-    font.setPixelSize(max(7, int(round(badge_size * 0.62))))
+    font.setPixelSize(max(7, (round(badge_size * 0.62))))
     font.setBold(True)
     painter.setFont(font)
     painter.setPen(QColor("#ffffff"))

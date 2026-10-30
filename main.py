@@ -20,10 +20,10 @@ import sys
 from PyQt5.QtCore import QSettings, Qt
 from PyQt5.QtWidgets import QApplication
 
-from main_window import MainWindow
-from styles import DARK_THEME
-from musicbrainz_client import init_musicbrainz
 import db
+from main_window import MainWindow
+from musicbrainz_client import init_musicbrainz
+from styles import DARK_THEME
 
 
 def main():

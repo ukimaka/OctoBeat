@@ -18,10 +18,8 @@
 
 import re
 from pathlib import Path
-from typing import Optional
 
 from mutagen import File as MutagenFile
-
 
 COVERS_DIR = Path.home() / ".cache" / "music_player" / "covers"
 
@@ -87,7 +85,7 @@ def _parse_filename(path):
 def read_metadata(path):
     """Возвращает dict {title, artist, album, duration}.
     Всё, что не удалось достать — None. duration — целые секунды."""
-    result: dict[str, Optional[str | int]] = {
+    result: dict[str, str | int | None] = {
         "title": None, "artist": None, "album": None, "duration": None,
     }
     # 1. Пробуем теги

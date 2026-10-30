@@ -163,31 +163,38 @@ class TrackContextMenu(QMenu):
         )
         self.addAction(favorite_action)
 
-        fix_action = QAction(tr("Change title && author", lang), self)
+        # CHANGED: объединяем редактирование трека в одно подменю "Edit Track"
+        edit_menu = QMenu(tr("Edit Track", lang), self)
+        edit_menu.setIcon(self.icons.icon("pencil.svg"))
+
+        fix_action = QAction(tr("Change title && author", lang), edit_menu)
         fix_action.setIcon(self.icons.icon("pencil.svg"))
         fix_action.triggered.connect(
             lambda checked=False, tid=self.track_id:
             self.edit_metadata_requested.emit(tid)
         )
-        self.addAction(fix_action)
+        edit_menu.addAction(fix_action)
 
         # CHANGED: пункт "Change cover" сразу после редактирования названия
-        cover_action = QAction(tr("Change cover", lang), self)
+        cover_action = QAction(tr("Change cover", lang), edit_menu)
         cover_action.setIcon(self.icons.icon("image.svg"))
         cover_action.triggered.connect(
             lambda checked=False, tid=self.track_id:
             self.change_cover_requested.emit(tid)
         )
-        self.addAction(cover_action)
+        edit_menu.addAction(cover_action)
 
         # CHANGED: пункт "Trim audio" — интерактивный редактор обрезки
-        trim_audio_action = QAction(tr("Trim audio", lang), self)
+        trim_audio_action = QAction(tr("Trim audio", lang), edit_menu)
         trim_audio_action.setIcon(self.icons.icon("cut.svg"))
         trim_audio_action.triggered.connect(
             lambda checked=False, tid=self.track_id:
             self.trim_audio_requested.emit(tid)
         )
-        self.addAction(trim_audio_action)
+        edit_menu.addAction(trim_audio_action)
+
+        # Подменю занимает место бывшего пункта "Change title & author".
+        self.addMenu(edit_menu)
 
         # CHANGED: "Select all" / "Deselect all" перенесён выше корзины,
         # текст зависит от текущего выделения, клик управляет source_list.

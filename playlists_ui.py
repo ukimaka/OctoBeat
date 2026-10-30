@@ -22,14 +22,36 @@ from pathlib import Path
 
 from PyQt5.QtCore import QRectF, QSettings, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
-    QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath,
-    QPixmap, QStandardItem, QStandardItemModel,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+    QStandardItem,
+    QStandardItemModel,
 )
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QAction, QComboBox, QFileDialog, QHBoxLayout,
-    QInputDialog, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem,
-    QMenu, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QTextEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QAction,
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 import db
@@ -46,7 +68,6 @@ from dialogs import (
 from musicbrainz_client import get_cached_source_for_path
 from pixmap_utils import draw_centered, draw_cover, pixmap_size
 from translations import tr
-
 
 PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
 

@@ -29,17 +29,45 @@ import urllib3
 # Wallhaven, падает с SSL-ошибкой на Windows); глушим шум warnings.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from PyQt5.QtCore import (
-    QByteArray, QRectF, QSettings, QSize, Qt, QThread, QVariant, pyqtSignal,
+    QByteArray,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QVariant,
+    pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QColor, QIcon, QImage, QLinearGradient, QPainter, QPainterPath, QPalette,
-    QPixmap, QTextDocument,
+    QColor,
+    QIcon,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPixmap,
+    QTextDocument,
 )
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
-    QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect, QGridLayout,
-    QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton, QScrollArea,
-    QSizeGrip, QSizePolicy, QSplitter, QTextBrowser, QTextEdit, QVBoxLayout,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizeGrip,
+    QSizePolicy,
+    QSplitter,
+    QTextBrowser,
+    QTextEdit,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -49,10 +77,13 @@ from api_client import ApiClient, ApiError
 from auth_ui import AuthDialog
 from dialogs import colored_icon, colored_pixmap
 from pixmap_utils import (
-    draw_centered, draw_cover, new_pixmap, render_svg, svg_file_pixmap,
+    draw_centered,
+    draw_cover,
+    new_pixmap,
+    render_svg,
+    svg_file_pixmap,
 )
 from translations import tr
-
 
 PROFILE_COVERS_DIR = Path.home() / ".cache" / "music_player" / "profile_covers"
 PROFILE_DIR = Path.home() / ".local" / "share" / "music_player" / "profile"
@@ -234,7 +265,7 @@ def parse_bbcode(text):
 
     html = re.sub(
         r"\[youtube\](.*?)\[/youtube\]",
-        lambda m: '<a href="https://youtu.be/%s">YouTube Video</a>'
+        lambda m: '<a href="https://youtu.be/%s">YouTube Video</a>'  # noqa: UP031
         % m.group(1).strip(),
         html,
         flags=flags,
@@ -274,7 +305,7 @@ def parse_bbcode(text):
     )
     for tag, open_tag, close_tag in simple_tags:
         html = re.sub(
-            r"\[%s\](.*?)\[/%s\]" % (tag, tag),
+            r"\[%s\](.*?)\[/%s\]" % (tag, tag),  # noqa: UP031
             open_tag + r"\1" + close_tag,
             html,
             flags=flags,
@@ -957,7 +988,7 @@ class _FriendProfileWorker(QThread):
             playlists = client.get_user_playlists(self.user_id)
         except ApiError as exc:
             self.failed.emit(str(exc), exc.status_code or 0)
-        except Exception as exc:  # noqa: BLE001 - не роняем UI из-за потока
+        except Exception as exc:
             self.failed.emit(f"Unexpected error: {exc}", 0)
         else:
             self.loaded.emit(profile, playlists)
@@ -1003,7 +1034,7 @@ class _ProfileSyncWorker(QThread):
             result = ApiClient(token=self.token).update_my_profile(data)
         except ApiError as exc:
             self.failed.emit(str(exc))
-        except Exception as exc:  # noqa: BLE001 - не роняем UI из-за потока
+        except Exception as exc:
             self.failed.emit(f"Unexpected error: {exc}")
         else:
             self.synced.emit(result)

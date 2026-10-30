@@ -26,14 +26,15 @@ import re
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
-    QDialog, QFileDialog, QMessageBox, QProgressDialog,
-)
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import APIC, ID3, ID3NoHeaderError
+from PyQt5.QtCore import QObject, QSettings, pyqtSignal
+from PyQt5.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QMessageBox,
+)
 
-import workers
 from dialogs import CustomConfirmDialog, CustomInputDialog
 from translations import tr
 
@@ -374,7 +375,7 @@ class TrackActions(QObject):
                         title=row["title"],
                         artist=row["artist"],
                         album=row["album"],
-                        duration=int(round(duration)),
+                        duration=(round(duration)),
                     )
                     self.changed.emit()
         finally:

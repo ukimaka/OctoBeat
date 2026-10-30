@@ -21,13 +21,11 @@ import os
 import re
 import shutil
 import subprocess
-import requests
 from pathlib import Path
 
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, APIC, ID3NoHeaderError
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtCore import QSettings
+from mutagen.id3 import APIC, ID3, ID3NoHeaderError
+from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 
 from metadata import clean_youtube_title
 from musicbrainz_client import get_track_metadata_with_fallback
@@ -153,24 +151,10 @@ class YoutubeWorker(QObject):
                 text=True,
                 bufsize=1,
             )
-            for line in self._proc.stdout:
-                line = line.rstrip()
-                m = PROGRESS_RE.search(line)
-                if m:
-                    self.progress.emit(min(100, int(float(m.group(1)))))
-                    continue
-                if "Sign in to confirm you're not a bot" in line:
-                    self.error.emit(
-                        "YouTube требует авторизации. Пожалуйста, "
-                        "скачайте файл cookies.txt (инструкция в README) "
-                        "и положите его в папку с музыкой"
-                    )
-                    return
-                if line and not line.startswith("[") and ".mp3" in line:
-                    final_path = line.strip()
-                last_lines.append(line)
-                if len(last_lines) > 10:
-                    last_lines.pop(0)
+            if self._proc.stdout:
+                for line in self._proc.stdout:
+                    line = line.rstrip()
+
             self._proc.wait()
         except Exception as e:
             self.error.emit(str(e))
@@ -432,20 +416,23 @@ class YoutubeSearchWorker(QObject):
                 text=True,
                 bufsize=1,
             )
-            for line in self._proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                if not line.startswith("{"):
-                    last_lines.append(line)
-                    if len(last_lines) > 10:
-                        last_lines.pop(0)
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                results.append(_entry_to_result(entry))
+
+            if self._proc.stdout:
+                for line in self._proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if not line.startswith("{"):
+                        last_lines.append(line)
+                        if len(last_lines) > 10:
+                            last_lines.pop(0)
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    results.append(_entry_to_result(entry))
+
             self._proc.wait()
         except Exception as e:
             self.error.emit(str(e))

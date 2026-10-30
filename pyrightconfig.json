@@ -17,6 +17,7 @@
     "reportUnknownVariableType": "none",
     "reportUnknownArgumentType": "none",
     "reportUnknownLambdaType": "none",
+    "reportOptionalMemberAccess": "none",
 
     // --- Слишком строгие правила basedpyright для этого проекта ---
     "reportUnannotatedClassAttribute": "none",

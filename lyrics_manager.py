@@ -29,7 +29,6 @@ from PyQt5.QtCore import QObject, pyqtSignal
 import db
 from lyrics_api import LyricsWorker
 
-
 # Таймкод LRC: [mm:ss.xx], [mm:ss.xxx] или [mm:ss:xx]
 _LRC_TIME_RE = re.compile(r"\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]")
 # Пословный таймкод (enhanced LRC): <mm:ss.xx>

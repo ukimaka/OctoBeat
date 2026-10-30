@@ -21,23 +21,36 @@
 работать. Тяжёлое чтение волны выполняется в отдельном QThread.
 """
 
-import os
 from pathlib import Path
 
 from PyQt5.QtCore import (
-    QLineF, QObject, QPointF, QRectF, QThread, QTimer, Qt, QUrl, pyqtSignal,
+    QLineF,
+    QObject,
+    QRectF,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    pyqtSignal,
 )
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
 from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QPushButton,
-    QSizeGrip, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
 )
 
 import workers
-from dialogs import _FramelessDialog, _dialog_lang, colored_icon
+from dialogs import _dialog_lang, _FramelessDialog, colored_icon
 from translations import tr
-
 
 SNAP_MS = 500                 # шаг снапа маркеров
 MIN_SELECTION_MS = 500        # минимальная длина выделения
@@ -249,7 +262,7 @@ class WaveformWidget(QWidget):
         if plot.width() <= 0 or self._duration_ms <= 0:
             return 0
         ratio = (x - plot.left()) / plot.width()
-        return int(round(max(0.0, min(1.0, ratio)) * self._duration_ms))
+        return (round(max(0.0, min(1.0, ratio)) * self._duration_ms))
 
     def _snap(self, ms):
         return int(round(ms / SNAP_MS) * SNAP_MS)

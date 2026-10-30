@@ -26,15 +26,39 @@ from pathlib import Path
 
 import requests
 from PyQt5.QtCore import (
-    QObject, QRect, QRectF, QRunnable, QSettings, QSize, Qt,
-    QThread, QThreadPool, pyqtSignal,
+    QObject,
+    QRect,
+    QRectF,
+    QRunnable,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QThreadPool,
+    pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QColor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPixmap,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPixmap,
 )
 from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QProgressBar, QPushButton, QStyle, QStyledItemDelegate,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QVBoxLayout,
 )
 
@@ -42,7 +66,6 @@ from dialogs import colored_icon, colored_pixmap
 from pixmap_utils import draw_centered, draw_cover, icon_pixmap_rect
 from translations import tr
 from youtube_worker import YoutubeSearchWorker, YoutubeWorker
-
 
 ACCENT = "#5151ab"
 ACCENT_HOVER = "#6161c1"

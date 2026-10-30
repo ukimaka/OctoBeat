@@ -19,16 +19,23 @@
 import os
 from pathlib import Path
 
-from PyQt5.QtCore import QRect, QRectF, QSize, Qt, QSettings, pyqtSignal, QEvent
+from PyQt5.QtCore import QEvent, QRect, QRectF, QSettings, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
-    QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPixmap,
 )
 from PyQt5.QtWidgets import QStyle, QStyledItemDelegate
 
 from pixmap_utils import (
-    draw_centered, draw_cover, draw_source_badge, svg_file_pixmap,
+    draw_centered,
+    draw_cover,
+    draw_source_badge,
+    svg_file_pixmap,
 )
-
 
 ICONS_DIR = Path(__file__).parent / "icons"
 
@@ -376,30 +383,6 @@ class TrackDelegate(QStyledItemDelegate):
 
         painter.restore()
 
-    def editorEvent(self, event, model, option, index):
-        from PyQt5.QtCore import QEvent
-        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-            data = index.data(Qt.UserRole) or {}
-            if not data.get("is_folder") and data.get("id") is not None:
-                duration = data.get("duration") or 0
-                dur_text = f"{duration // 60}:{duration % 60:02d}"
-                font = QFont(option.font)
-                font.setPixelSize(11)
-                dur_w = QFontMetrics(font).horizontalAdvance(dur_text) + 24
-
-                # Координаты иконки мусорки (совпадают с тем, что в _paint_track)
-                rect = option.rect
-                text_right = rect.right() - dur_w
-                trash_size = 16
-                trash_x = text_right - trash_size - 10
-                trash_y = rect.y() + (self.ROW_HEIGHT - trash_size) // 2
-                trash_rect = QRect(trash_x, trash_y, trash_size, trash_size)
-
-                if trash_rect.contains(event.pos()):
-                    self.delete_requested.emit(data.get("id"))
-                    return True # Поглощаем клик
-        return super().editorEvent(event, model, option, index)
-
     def _paint_folder(self, painter, option, data):
         rect = option.rect
         palette = self._palette()
@@ -458,5 +441,35 @@ class TrackDelegate(QStyledItemDelegate):
             draw_centered(painter, QRectF(rect), note)
 
         painter.restore()
+
         if self._show_metadata_badges:
             draw_source_badge(painter, rect, metadata_source, size=13)
+
+    # ВНИМАНИЕ: editorEvent теперь на том же уровне, что и _draw_cover!
+    def editorEvent(self, event, model, option, index):
+        if event is None:
+            return False
+
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            data = index.data(Qt.UserRole) or {}
+            if not data.get("is_folder") and data.get("id") is not None:
+                duration = data.get("duration") or 0
+                dur_text = f"{duration // 60}:{duration % 60:02d}"
+                font = QFont(option.font)
+                font.setPixelSize(11)
+                dur_w = QFontMetrics(font).horizontalAdvance(dur_text) + 24
+
+                # Координаты иконки мусорки (совпадают с тем, что в _paint_track)
+                rect = option.rect
+                text_right = rect.right() - dur_w
+                trash_size = 16
+                trash_x = text_right - trash_size - 10
+                trash_y = rect.y() + (self.ROW_HEIGHT - trash_size) // 2
+                trash_rect = QRect(trash_x, trash_y, trash_size, trash_size)
+
+                if trash_rect.contains(event.pos()):
+                    self.delete_requested.emit(data.get("id"))
+                    return True # Поглощаем клик
+
+        # Вызов super() теперь на нужном уровне!
+        return super().editorEvent(event, model, option, index)

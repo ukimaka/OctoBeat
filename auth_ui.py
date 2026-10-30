@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QSettings, QThread, Qt, pyqtSignal
+from PyQt5.QtCore import QSettings, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog,
     QLabel,

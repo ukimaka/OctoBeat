@@ -22,7 +22,6 @@ from typing import Any
 
 import requests
 
-
 DEFAULT_BASE_URL = "https://octopus-music-server.onrender.com"
 DEFAULT_TIMEOUT = 10.0
 

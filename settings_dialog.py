@@ -19,8 +19,8 @@
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QSettings, QSize, QUrl
-from PyQt5.QtGui import QDesktopServices, QIcon
+from PyQt5.QtCore import QSettings, QSize, QUrl
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -39,7 +39,6 @@ from PyQt5.QtWidgets import (
 
 from dialogs import colored_icon
 from translations import tr
-
 
 COVERS_DIR = Path.home() / ".cache" / "music_player" / "covers"
 PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
@@ -185,7 +184,7 @@ class SettingsDialog(QDialog):
     def _load_settings(self):
         language = self.settings.value("language", "en")
         index = self.language_combo.findData(language)
-        self.language_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.language_combo.setCurrentIndex(max(index, 0))
 
         zoom = self.settings.value("zoom", 100)
         try:
@@ -193,11 +192,11 @@ class SettingsDialog(QDialog):
         except (TypeError, ValueError):
             zoom = 100
         index = self.zoom_combo.findData(zoom)
-        self.zoom_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.zoom_combo.setCurrentIndex(max(index, 0))
 
         theme = self.settings.value("theme", "dark")
         index = self.theme_combo.findData(theme)
-        self.theme_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.theme_combo.setCurrentIndex(max(index, 0))
 
         self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
 

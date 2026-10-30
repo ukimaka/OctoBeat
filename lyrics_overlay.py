@@ -125,7 +125,7 @@ class LyricsOverlay(QWidget):
         self._word_index = word_index
         self._render()
 
-    def showFullScreen(self):  # noqa: N802 - имя из Qt API
+    def showFullScreen(self):
         super().showFullScreen()
         self.raise_()
         self.activateWindow()
@@ -202,7 +202,7 @@ class LyricsOverlay(QWidget):
         if 0 <= self._index < len(self._lines):
             self.view.scrollToAnchor(f"ovl{self._index}")
 
-    def keyPressEvent(self, event):  # noqa: N802 - имя из Qt API
+    def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.close()
             return

@@ -18,7 +18,7 @@
 
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QThread, Qt, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog,
     QFileDialog,
