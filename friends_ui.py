@@ -21,7 +21,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PyQt5.QtCore import QSettings, QSize, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import (
+    QPoint,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    pyqtSignal,
+)
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -112,17 +121,20 @@ class FriendListItemWidget(QWidget):
             if color == "#ffffff"
             else "rgba(0, 0, 0, 0.08)"
         )
-        self.profile_button = QPushButton()
-        self.profile_button.setFixedSize(24, 24)
+        # CHANGED: кнопка «Профиль» с текстом и иконкой user.svg.
+        self.profile_button = QPushButton(tr("Profile", _lang()))
         self.profile_button.setCursor(Qt.PointingHandCursor)
         self.profile_button.setToolTip(tr("View Profile", _lang()))
-        self.profile_button.setIconSize(QSize(12, 12))
+        self.profile_button.setIconSize(QSize(14, 14))
         self.profile_button.setIcon(colored_icon("user.svg", color))
+        self.profile_button.setFixedHeight(28)
         self.profile_button.setStyleSheet(
             "QPushButton {"
             " background: transparent;"
+            f" color: {color};"
             f" border: 1px solid {color};"
-            " border-radius: 12px;"
+            " border-radius: 14px;"
+            " padding: 4px 12px;"
             " }"
             f"QPushButton:hover {{ background: {hover}; }}"
         )
@@ -151,6 +163,7 @@ class FriendsPage(QWidget):
         self._search_worker: _RequestWorker | None = None
         self._action_worker: _RequestWorker | None = None
         self._status_after_refresh: str | None = None
+        self._pending_search_query: str | None = None  # CHANGED
 
         self._me: dict[str, Any] | None = None
         self._friends: list[dict[str, Any]] = []
@@ -212,23 +225,20 @@ class FriendsPage(QWidget):
         top.addWidget(self.requests_button)
         body_layout.addLayout(top)
 
-        # --- Центральная часть: три страницы ---
+        # CHANGED: отдельной страницы результатов поиска больше нет —
+        # остались только друзья и входящие заявки.
         self.pages = QStackedWidget()
         self.pages.setObjectName("friendsPages")
 
-        self.search_list = self._make_list("friendsSearchResults")
         self.friends_list = self._make_list("friendsList")
         self.requests_list = self._make_list("friendsRequestsList")
 
-        self.search_page = self._make_page(self.search_list)
         self.friends_page = self._make_page(self.friends_list)
         self.requests_page = self._make_page(self.requests_list)
 
-        # Порядок страниц: результаты поиска, друзья, входящие заявки.
-        self.pages.addWidget(self.search_page)
         self.pages.addWidget(self.friends_page)
         self.pages.addWidget(self.requests_page)
-        self.pages.setCurrentIndex(1)
+        self.pages.setCurrentIndex(0)
         body_layout.addWidget(self.pages, 1)
 
         self.status_label = QLabel("")
@@ -237,6 +247,21 @@ class FriendsPage(QWidget):
         body_layout.addWidget(self.status_label)
 
         root.addWidget(self.body, 1)
+
+        # CHANGED: всплывающий список результатов поиска (как в Google).
+        self.search_popup = QListWidget(self)
+        self.search_popup.setObjectName("friendsSearchPopup")
+        self.search_popup.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.search_popup.setFocusPolicy(Qt.NoFocus)
+        self.search_popup.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.search_popup.setIconSize(QSize(32, 32))
+        self.search_popup.setSpacing(2)
+        self.search_popup.setUniformItemSizes(True)
+        self.search_popup.hide()
+        self._apply_search_popup_style()
+        self.search_popup.itemClicked.connect(
+            self._on_search_result_clicked
+        )
 
     def _make_list(self, object_name: str) -> QListWidget:
         widget = QListWidget()
@@ -259,8 +284,33 @@ class FriendsPage(QWidget):
             self.search_icon_action.setIcon(
                 colored_icon("search.svg", _icon_color())
             )
+        # CHANGED: выпадашка тоже должна следовать теме.
+        if getattr(self, "search_popup", None) is not None:
+            self._apply_search_popup_style()
         if self._friends:
             self._populate_friends()
+
+    def _apply_search_popup_style(self) -> None:
+        # CHANGED: оформление всплывающего поиска под текущую тему.
+        dark = _icon_color() == "#ffffff"
+        popup_bg = "#1f1f1f" if dark else "#ffffff"
+        popup_border = "#333333" if dark else "#d0d0d0"
+        popup_hover = (
+            "rgba(255, 255, 255, 0.10)"
+            if dark
+            else "rgba(0, 0, 0, 0.06)"
+        )
+        self.search_popup.setStyleSheet(
+            "QListWidget {"
+            f" background-color: {popup_bg};"
+            f" border: 1px solid {popup_border};"
+            " border-radius: 8px;"
+            " padding: 4px;"
+            " }"
+            "QListWidget::item { padding: 6px 8px; border-radius: 6px; }"
+            f"QListWidget::item:hover, QListWidget::item:selected"
+            f" {{ background: {popup_hover}; }}"
+        )
 
     # ------------------------------------------------------------------
     #  Авторизация
@@ -282,7 +332,10 @@ class FriendsPage(QWidget):
             self._friends = []
             self._incoming = []
             self._search_results = []
-            self.search_list.clear()
+            # CHANGED: чистим и прячем выпадающий поиск вместо страницы.
+            self._search_timer.stop()
+            self.search_popup.clear()
+            self._hide_search_popup()
             self.friends_list.clear()
             self.requests_list.clear()
             self._set_status("")
@@ -389,15 +442,51 @@ class FriendsPage(QWidget):
                 ],
             )
 
-    def _populate_search(self) -> None:
-        lang = _lang()
-        self.search_list.clear()
+    # CHANGED: результаты поиска теперь живут во всплывающем списке.
+    def _populate_search_popup(self) -> None:
+        self.search_popup.clear()
         for user in self._search_results:
-            self._add_user_row(
-                self.search_list,
-                user,
-                [(tr("Send Request", lang), self._send_request, True)],
+            user_id = user.get("id")
+            if user_id is None:
+                continue
+            username = str(user.get("username") or "")
+            nickname = str(user.get("nickname") or username)
+            item = QListWidgetItem(
+                QIcon(_round_avatar_pixmap(user.get("avatar_path"), 32)),
+                f"{nickname}   @{username}",
             )
+            item.setData(Qt.UserRole, int(user_id))
+            item.setSizeHint(QSize(0, 44))
+            self.search_popup.addItem(item)
+
+        if self.search_popup.count() == 0:
+            self._hide_search_popup()
+        else:
+            self._show_search_popup()
+
+    def _show_search_popup(self) -> None:
+        if self.search_popup.count() == 0:
+            return
+        rows = min(self.search_popup.count(), 6)
+        height = rows * 44 + 10
+        pos = self.search_edit.mapToGlobal(
+            QPoint(0, self.search_edit.height() + 2)
+        )
+        self.search_popup.setGeometry(
+            pos.x(), pos.y(), self.search_edit.width(), height
+        )
+        self.search_popup.show()
+        self.search_popup.raise_()
+
+    def _hide_search_popup(self) -> None:
+        if self.search_popup.isVisible():
+            self.search_popup.hide()
+
+    def _on_search_result_clicked(self, item: QListWidgetItem) -> None:
+        self._hide_search_popup()
+        user_id = item.data(Qt.UserRole)
+        if user_id is not None:
+            self._send_request(int(user_id))
 
     def _add_placeholder(self, list_widget: QListWidget, text: str) -> None:
         item = QListWidgetItem(text)
@@ -477,18 +566,29 @@ class FriendsPage(QWidget):
         if not self._ensure_auth():
             return
         self._search_timer.stop()
-        self.pages.setCurrentIndex(1)
+        # CHANGED: друзья теперь первая страница.
+        self._hide_search_popup()
+        self.pages.setCurrentIndex(0)
         self.refresh()
 
     def _show_requests(self) -> None:
         if not self._ensure_auth():
             return
         self._search_timer.stop()
-        self.pages.setCurrentIndex(2)
+        # CHANGED: заявки теперь вторая страница.
+        self._hide_search_popup()
+        self.pages.setCurrentIndex(1)
         self.refresh()
 
-    def _on_search_text_changed(self, _text: str) -> None:
+    # CHANGED: дебаунс 500 мс + выпадающий список вместо страницы.
+    def _on_search_text_changed(self, text: str) -> None:
         """Поиск с задержкой: не шлём запрос на каждое нажатие клавиши."""
+        if not text.strip():
+            self._search_timer.stop()
+            self._pending_search_query = None
+            self._hide_search_popup()
+            self._set_status("")
+            return
         self._search_timer.start()
 
     def _on_search_now(self) -> None:
@@ -499,47 +599,60 @@ class FriendsPage(QWidget):
     def _on_search(self) -> None:
         if not self._ensure_auth():
             return
-        if self._search_worker is not None:
-            return
 
         lang = _lang()
         query = self.search_edit.text().strip()
-        self.pages.setCurrentIndex(0)
 
         if not query:
-            self._set_status(tr("Enter a username to search.", lang), error=True)
+            self._hide_search_popup()
+            return
+
+        # Если запрос уже в полёте — выполним последний введённый позже.
+        if self._search_worker is not None:
+            self._pending_search_query = query
             return
 
         self._set_status(tr("Searching...", lang))
         token = self._token()
         worker = self._prepare_worker(
             lambda: ApiClient(token=token).search_users(query),
-            self._on_search_success,
+            lambda users, q=query: self._on_search_success(users, q),
         )
         self._search_worker = worker
         worker.start()
 
-    def _on_search_success(self, users: list[dict[str, Any]]) -> None:
+    def _on_search_success(
+        self, users: list[dict[str, Any]], query: str
+    ) -> None:
+        # Пока запрос летел, пользователь мог изменить строку поиска.
+        if query != self.search_edit.text().strip():
+            return
         self._search_results = users
-        self._populate_search()
         if users:
             self._set_status("")
+            self._populate_search_popup()
         else:
+            self.search_popup.clear()
+            self._hide_search_popup()
             self._set_status(tr("No users found", _lang()), error=True)
 
-    def _send_request(self, user_id: int, button: QPushButton) -> None:
+    def _send_request(
+        self, user_id: int, button: QPushButton | None = None
+    ) -> None:
         if not self._ensure_auth() or self._action_worker is not None:
             return
 
         lang = _lang()
         self._set_status(tr("Sending request...", lang))
-        button.setEnabled(False)
+        if button is not None:
+            button.setEnabled(False)
         token = self._token()
         worker = self._prepare_worker(
             lambda: ApiClient(token=token).send_friend_request(user_id),
             self._on_request_sent,
         )
-        worker.finished.connect(lambda: button.setEnabled(True))
+        if button is not None:
+            worker.finished.connect(lambda: button.setEnabled(True))
         self._action_worker = worker
         worker.start()
 
@@ -616,6 +729,10 @@ class FriendsPage(QWidget):
                 self.refresh(silent=pending_silent)
         if self._search_worker is worker:
             self._search_worker = None
+            # CHANGED: выполняем поиск, отложенный во время запроса.
+            if self._pending_search_query is not None:
+                self._pending_search_query = None
+                QTimer.singleShot(0, self._on_search)
         if self._action_worker is worker:
             self._action_worker = None
         worker.deleteLater()
