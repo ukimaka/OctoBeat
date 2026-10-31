@@ -21,8 +21,6 @@ from pathlib import Path
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog,
-    QFileDialog,
-    QMessageBox,
     QProgressDialog,
 )
 
@@ -30,6 +28,7 @@ import workers
 from api_client import ApiClient, ApiError
 from dialogs import CustomConfirmDialog
 from translations import tr
+from ui_common import get_open_file_name, get_open_file_names
 
 
 class _RemotePlaylistDownloadWorker(QObject):
@@ -118,7 +117,7 @@ class ImportFlow(QObject):
     #  Публичные сценарии
     # ------------------------------------------------------------------
     def import_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
+        files, _ = get_open_file_names(
             self.parent_window,
             tr(
                 "Select music files to import",
@@ -126,7 +125,6 @@ class ImportFlow(QObject):
             ),
             str(Path.home()),
             "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a);;All files (*)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if not files:
             return
@@ -141,12 +139,11 @@ class ImportFlow(QObject):
     def import_csv(self) -> None:
         """Импорт плейлиста Spotify из CSV-файла Exportify."""
         lang = self.settings.value("language", "en")
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self.parent_window,
             tr("Select CSV file", lang),
             str(Path.home()),
             "CSV files (*.csv);;All files (*)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
@@ -324,7 +321,7 @@ class ImportFlow(QObject):
                 "Error", self.settings.value("language", "en")
             )
             worker.error.connect(
-                lambda msg: QMessageBox.warning(
+                lambda msg: CustomConfirmDialog.information(
                     self.parent_window, err_title, msg
                 )
             )

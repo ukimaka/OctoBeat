@@ -47,6 +47,7 @@ from PyQt5.QtWidgets import (
 from api_client import ApiClient, ApiError
 from dialogs import colored_icon
 from profile_ui import _round_avatar_pixmap
+from styles import is_dark_theme
 from translations import tr
 
 
@@ -57,7 +58,7 @@ def _lang() -> str:
 
 def _icon_color() -> str:
     settings = QSettings("MusicPlayer", "MusicPlayer")
-    return "#ffffff" if settings.value("theme", "dark") != "light" else "#000000"
+    return "#ffffff" if is_dark_theme(settings.value("theme", "dark")) else "#000000"
 
 
 class _RequestWorker(QThread):
@@ -545,9 +546,10 @@ class FriendsPage(QWidget):
         button.setCursor(Qt.PointingHandCursor)
         if primary:
             button.setStyleSheet(
-                "QPushButton { background-color: #5151ab; color: #ffffff;"
+                "QPushButton { background-color: palette(highlight);"
+                " color: palette(highlighted-text);"
                 " border: none; border-radius: 12px; padding: 5px 14px; }"
-                "QPushButton:hover { background-color: #6363c6; }"
+                "QPushButton:hover { background-color: palette(highlight); }"
                 "QPushButton:disabled { background-color: #333333; color: #888888; }"
             )
         else:

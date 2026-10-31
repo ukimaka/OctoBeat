@@ -26,11 +26,13 @@ from PyQt5.QtGui import (
     QIcon,
     QPainter,
     QPainterPath,
+    QPalette,
     QPen,
     QPixmap,
 )
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -56,6 +58,7 @@ from pixmap_utils import (
     draw_source_badge,
     svg_file_pixmap,
 )
+from styles import is_dark_theme
 from translations import tr
 
 ICONS_DIR = Path(__file__).parent / "icons"
@@ -84,7 +87,7 @@ def colored_icon(filename, color="#ffffff"):
 def _theme_is_dark():
     """Текущая тема из QSettings (делегат не всегда знает её заранее)."""
     settings = QSettings("MusicPlayer", "MusicPlayer")
-    return settings.value("theme", "dark") != "light"
+    return is_dark_theme(settings.value("theme", "dark"))
 
 
 class PlaylistCoverDelegate(QStyledItemDelegate):
@@ -232,27 +235,27 @@ def _dialog_lang():
     return QSettings("MusicPlayer", "MusicPlayer").value("language", "en")
 
 
-_CUSTOM_DIALOG_QSS = """
+_CUSTOM_DIALOG_QSS_TEMPLATE = """
 QDialog {
     background: transparent;
 }
 #cdRoot {
-    background-color: #121212;
+    background-color: @BG@;
     border: none;
     outline: none;
     border-radius: 12px;
 }
 #cdTitle {
-    color: #ffffff;
+    color: @TEXT@;
     font-size: 14px;
     font-weight: bold;
 }
 #cdMessage {
-    color: #dddddd;
+    color: @TEXT_DIM@;
     font-size: 13px;
 }
 #cdHint {
-    color: #8a8a8a;
+    color: @MUTED@;
     font-size: 11px;
 }
 QPushButton#cdClose {
@@ -262,23 +265,40 @@ QPushButton#cdClose {
     padding: 4px;
 }
 QPushButton#cdClose:hover {
-    background: rgba(255, 255, 255, 0.14);
+    background: @HOVER@;
 }
 QLineEdit#cdInput {
-    background: #181818;
-    border: 1px solid #2e2e2e;
+    background: @FIELD@;
+    border: 1px solid @BORDER@;
     border-radius: 8px;
-    color: #ffffff;
+    color: @TEXT@;
     font-size: 13px;
     padding: 8px;
-    selection-background-color: #5151ab;
+    selection-background-color: @ACCENT@;
+}
+QComboBox#cdInput {
+    background: @FIELD@;
+    border: 1px solid @BORDER@;
+    border-radius: 8px;
+    color: @TEXT@;
+    font-size: 13px;
+    padding: 8px;
+}
+QComboBox#cdInput::drop-down {
+    border: none;
+}
+QComboBox#cdInput QAbstractItemView {
+    background: @FIELD@;
+    border: 1px solid @BORDER@;
+    color: @TEXT@;
+    selection-background-color: @ACCENT@;
 }
 QListWidget#cdBulkList {
-    background: #181818;
-    border: 1px solid #2e2e2e;
+    background: @FIELD@;
+    border: 1px solid @BORDER@;
     border-radius: 8px;
     outline: none;
-    color: #ffffff;
+    color: @TEXT@;
 }
 QListWidget#cdBulkList::item {
     border: none;
@@ -292,27 +312,83 @@ QFocusFrame {
     background: transparent;
 }
 QPushButton#cdConfirm {
-    background: #5151ab;
-    color: #ffffff;
+    background: @ACCENT@;
+    color: @ACCENT_TEXT@;
     border: none;
     border-radius: 8px;
     padding: 8px 22px;
     font-weight: bold;
 }
 QPushButton#cdConfirm:hover {
-    background: #6161c4;
+    background: @ACCENT_HOVER@;
 }
 QPushButton#cdCancel {
-    background: #2a2a2a;
-    color: #dddddd;
+    background: @CANCEL_BG@;
+    color: @CANCEL_TEXT@;
     border: none;
     border-radius: 8px;
     padding: 8px 22px;
 }
 QPushButton#cdCancel:hover {
-    background: #3a3a3a;
+    background: @CANCEL_HOVER@;
 }
 """
+
+
+def _rgba(color, alpha=1.0):
+    """QColor → строка ``rgba(r, g, b, a)`` для QSS."""
+    return "rgba({}, {}, {}, {:.2f})".format(
+        color.red(), color.green(), color.blue(), alpha
+    )
+
+
+def _mix_color(first, second, ratio):
+    """Смешивает два QColor: ``ratio`` — доля ``second`` (0..1)."""
+    ratio = max(0.0, min(1.0, ratio))
+    return QColor(
+        round(first.red() * (1 - ratio) + second.red() * ratio),
+        round(first.green() * (1 - ratio) + second.green() * ratio),
+        round(first.blue() * (1 - ratio) + second.blue() * ratio),
+    )
+
+
+def _custom_dialog_qss(palette):
+    """Собирает QSS безрамочного диалога из палитры активной темы.
+
+    Фон, текст, поля и акцент берутся из ``QPalette`` (в неё тема кладёт
+    свой highlight), поэтому диалог одинаково выглядит в тёмных и светлых
+    темах и следует акцентному цвету.
+    """
+    window = palette.color(QPalette.Window)
+    text = palette.color(QPalette.WindowText)
+    accent = palette.color(QPalette.Highlight)
+    accent_text = palette.color(QPalette.HighlightedText)
+    if not accent_text.isValid() or accent_text.alpha() == 0:
+        accent_text = QColor("#ffffff")
+
+    # Поля делаем чуть отличными от фона окна, иначе они «сливаются».
+    field = _mix_color(window, text, 0.07)
+
+    tokens = {
+        "@BG@": window.name(),
+        "@TEXT@": text.name(),
+        "@TEXT_DIM@": _rgba(text, 0.85),
+        "@MUTED@": _rgba(text, 0.55),
+        "@HOVER@": _rgba(text, 0.12),
+        "@FIELD@": field.name(),
+        "@BORDER@": _mix_color(window, text, 0.18).name(),
+        "@ACCENT@": accent.name(),
+        "@ACCENT_HOVER@": accent.lighter(115).name(),
+        "@ACCENT_TEXT@": accent_text.name(),
+        "@CANCEL_BG@": _mix_color(window, text, 0.10).name(),
+        "@CANCEL_HOVER@": _mix_color(window, text, 0.18).name(),
+        "@CANCEL_TEXT@": _rgba(text, 0.85),
+    }
+    qss = _CUSTOM_DIALOG_QSS_TEMPLATE
+    for token, value in tokens.items():
+        qss = qss.replace(token, value)
+    return qss
+
 
 
 class _CustomTitleBar(QWidget):
@@ -337,7 +413,12 @@ class _CustomTitleBar(QWidget):
         close_button.setObjectName("cdClose")
         close_button.setFlat(True)
         close_button.setCursor(Qt.PointingHandCursor)
-        close_button.setIcon(colored_icon("cancel.svg", "#ffffff"))
+        close_button.setIcon(
+            colored_icon(
+                "cancel.svg",
+                dialog.palette().color(QPalette.WindowText).name(),
+            )
+        )
         close_button.setIconSize(QSize(16, 16))
         close_button.setToolTip(tr("Cancel", _dialog_lang()))
         close_button.clicked.connect(dialog.reject)
@@ -397,7 +478,10 @@ class _FramelessDialog(QDialog):
         self._size_grip.setFixedSize(16, 16)
         self._size_grip.raise_()
 
-        self.setStyleSheet(_CUSTOM_DIALOG_QSS)
+        # Палитру темы виджет получает только после полировки (QSS
+        # приложения), поэтому собираем стиль после ensurePolished().
+        self.ensurePolished()
+        self.setStyleSheet(_custom_dialog_qss(self.palette()))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -414,7 +498,13 @@ class _FramelessDialog(QDialog):
         button.setFlat(True)
         button.setCursor(Qt.PointingHandCursor)
         if icon_name:
-            button.setIcon(colored_icon(icon_name, "#ffffff"))
+            palette = self.palette()
+            if object_name == "cdConfirm":
+                # Иконка на акцентной кнопке — цвет текста выделения.
+                icon_color = palette.color(QPalette.HighlightedText).name()
+            else:
+                icon_color = palette.color(QPalette.WindowText).name()
+            button.setIcon(colored_icon(icon_name, icon_color))
             button.setIconSize(QSize(16, 16))
         return button
 
@@ -433,7 +523,8 @@ class _FramelessDialog(QDialog):
 class CustomInputDialog(_FramelessDialog):
     """Безрамочный диалог ввода одной строки (замена QInputDialog.getText)."""
 
-    def __init__(self, parent=None, title="", label="", text="", placeholder=""):
+    def __init__(self, parent=None, title="", label="", text="",
+                 placeholder="", items=None, current=0):
         super().__init__(parent, title)
         lang = _dialog_lang()
 
@@ -448,13 +539,26 @@ class CustomInputDialog(_FramelessDialog):
             label_widget.setWordWrap(True)
             col.addWidget(label_widget)
 
-        self.input = QLineEdit()
-        self.input.setObjectName("cdInput")
-        self.input.setText(text or "")
-        if placeholder:
-            self.input.setPlaceholderText(placeholder)
-        self.input.selectAll()
-        col.addWidget(self.input)
+        # CHANGED: items включает режим выпадающего списка.
+        self.input = None
+        self.combo = None
+        if items is not None:
+            self.combo = QComboBox()
+            self.combo.setObjectName("cdInput")
+            self.combo.addItems(list(items))
+            if items:
+                self.combo.setCurrentIndex(
+                    max(0, min(int(current), len(items) - 1))
+                )
+            col.addWidget(self.combo)
+        else:
+            self.input = QLineEdit()
+            self.input.setObjectName("cdInput")
+            self.input.setText(text or "")
+            if placeholder:
+                self.input.setPlaceholderText(placeholder)
+            self.input.selectAll()
+            col.addWidget(self.input)
         self.body.addWidget(content)
 
         self.cancel_button = self._make_button(
@@ -469,17 +573,32 @@ class CustomInputDialog(_FramelessDialog):
         self.confirm_button.clicked.connect(self.accept)
 
         self._add_footer([self.cancel_button, self.confirm_button])
-        self.input.returnPressed.connect(self.accept)
+        if self.input is not None:
+            self.input.returnPressed.connect(self.accept)
+            self.input.setFocus()
+        elif self.combo is not None:
+            self.combo.setFocus()
         self.setMinimumWidth(380)
-        self.input.setFocus()
 
     def text_value(self):
-        return self.input.text()
+        if self.input is not None:
+            return self.input.text()
+        return self.combo.currentText() if self.combo is not None else ""
 
     @staticmethod
     def get_text(parent, title, label, text="", placeholder=""):
         """Аналог QInputDialog.getText: возвращает (строка, ok)."""
         dialog = CustomInputDialog(parent, title, label, text, placeholder)
+        if dialog.exec_() == QDialog.Accepted:
+            return dialog.text_value(), True
+        return "", False
+
+    @staticmethod
+    def get_item(parent, title, label, items, current=0):
+        """Аналог QInputDialog.getItem: возвращает (строка, ok)."""
+        dialog = CustomInputDialog(
+            parent, title, label, items=list(items), current=current
+        )
         if dialog.exec_() == QDialog.Accepted:
             return dialog.text_value(), True
         return "", False
@@ -550,20 +669,48 @@ class _BulkTrackDelegate(QStyledItemDelegate):
     ROW_HEIGHT = 58
     COVER_SIZE = 40
     CHECK_SIZE = 18
-    ACCENT = QColor("#5151ab")
-    TEXT = QColor("#ffffff")
-    SUBTEXT = QColor("#9a9a9a")
-    COVER_BG = QColor("#282828")
-    NOTE = "#888888"
-    HOVER = QColor(255, 255, 255, 15)
-    CHECKED_BG = QColor(81, 81, 171, 28)
-    CHECK_BORDER = QColor("#6a6a6a")
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._check_mark = colored_pixmap("confirm.svg", 12, "#ffffff")
-        self._note = colored_pixmap("music-note.svg", 20, self.NOTE)
+        self._note_cache = {}
         self._show_metadata_badges = False
+
+    def _palette(self, option):
+        """Цвета строки из палитры активной темы (акцент, текст, фон)."""
+        pal = option.palette
+        text = pal.color(QPalette.Text)
+        window_text = pal.color(QPalette.WindowText)
+        highlight = pal.color(QPalette.Highlight)
+
+        subtext = QColor(window_text)
+        subtext.setAlpha(150)
+        checked_bg = QColor(highlight)
+        checked_bg.setAlpha(28)
+        hover = QColor(window_text)
+        hover.setAlpha(15)
+        check_border = QColor(window_text)
+        check_border.setAlpha(90)
+        # Иконку-заглушку приглушаем, чтобы не светилась ярче текста.
+        note = _mix_color(text, pal.color(QPalette.Base), 0.45).name()
+        return {
+            "accent": highlight,
+            "text": text,
+            "subtext": subtext,
+            "cover_bg": pal.color(QPalette.Base),
+            "note": note,
+            "hover": hover,
+            "checked_bg": checked_bg,
+            "check_border": check_border,
+        }
+
+    def _note_pixmap(self, color):
+        """Иконка-нота, перекрашенная под тему (с кэшем по цвету)."""
+        pixmap = self._note_cache.get(color)
+        if pixmap is None:
+            pixmap = colored_pixmap("music-note.svg", 20, color)
+            self._note_cache[color] = pixmap
+        return pixmap
 
     def set_show_metadata_badges(self, enabled: bool):
         """Включает/выключает отрисовку бейджей источников метаданных."""
@@ -583,6 +730,7 @@ class _BulkTrackDelegate(QStyledItemDelegate):
         data = index.data(Qt.UserRole) or {}
         checked = index.data(Qt.CheckStateRole) == Qt.Checked
         rect = option.rect
+        palette = self._palette(option)
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -590,9 +738,9 @@ class _BulkTrackDelegate(QStyledItemDelegate):
         painter.fillRect(rect, Qt.transparent)
 
         if checked:
-            painter.fillRect(rect, self.CHECKED_BG)
+            painter.fillRect(rect, palette["checked_bg"])
         elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(rect, self.HOVER)
+            painter.fillRect(rect, palette["hover"])
 
         # Кастомный чекбокс: Qt.ItemIsUserCheckable хранит состояние,
         # а рисуем его сами, чтобы строка выглядела единым целым.
@@ -604,12 +752,12 @@ class _BulkTrackDelegate(QStyledItemDelegate):
         )
         if checked:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(self.ACCENT)
+            painter.setBrush(palette["accent"])
             painter.drawRoundedRect(check_rect, 4, 4)
             draw_centered(painter, check_rect, self._check_mark)
         else:
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(self.CHECK_BORDER, 1.2))
+            painter.setPen(QPen(palette["check_border"], 1.2))
             painter.drawRoundedRect(check_rect, 4, 4)
 
         # Обложка трека.
@@ -626,8 +774,8 @@ class _BulkTrackDelegate(QStyledItemDelegate):
         cover_path = data.get("cover_path")
         pixmap = QPixmap(cover_path) if cover_path else QPixmap()
         if not draw_cover(painter, cover_rect, pixmap):
-            painter.fillRect(cover_rect, self.COVER_BG)
-            draw_centered(painter, cover_rect, self._note)
+            painter.fillRect(cover_rect, palette["cover_bg"])
+            draw_centered(painter, cover_rect, self._note_pixmap(palette["note"]))
         painter.restore()
         if self._show_metadata_badges:
             draw_source_badge(painter, cover_rect, data.get("metadata_source"), size=11)
@@ -644,7 +792,7 @@ class _BulkTrackDelegate(QStyledItemDelegate):
             text_width,
         )
         painter.setFont(title_font)
-        painter.setPen(self.TEXT)
+        painter.setPen(palette["text"])
         painter.drawText(
             QRectF(text_x, rect.y() + 8, text_width, 19),
             Qt.AlignLeft | Qt.AlignVCenter,
@@ -660,7 +808,7 @@ class _BulkTrackDelegate(QStyledItemDelegate):
             text_width,
         )
         painter.setFont(artist_font)
-        painter.setPen(self.SUBTEXT)
+        painter.setPen(palette["subtext"])
         painter.drawText(
             QRectF(text_x, rect.y() + 28, text_width, 18),
             Qt.AlignLeft | Qt.AlignVCenter,

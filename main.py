@@ -17,13 +17,13 @@
 import os
 import sys
 
-from PyQt5.QtCore import QSettings, Qt
+from PyQt5.QtCore import QLibraryInfo, QLocale, QSettings, Qt, QTranslator
 from PyQt5.QtWidgets import QApplication
 
 import db
 from main_window import MainWindow
 from musicbrainz_client import init_musicbrainz
-from styles import DARK_THEME
+from styles import ensure_preset_themes, load_theme
 
 
 def main():
@@ -69,7 +69,19 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(DARK_THEME)
+    ensure_preset_themes()
+    load_theme(settings.value("theme", "dark"), app)
+
+    # Локализуем встроенные элементы Qt (Undo/Redo/Copy/Paste и т.п.).
+    lang = settings.value("language", "en")
+    if lang == "ru":
+        translator = QTranslator(app)
+        translations_path = QLibraryInfo.location(
+            QLibraryInfo.TranslationsPath
+        )
+        if translator.load("qtbase_ru", translations_path):
+            app.installTranslator(translator)
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

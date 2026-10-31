@@ -6,37 +6,16 @@ class CustomTitleBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
+        self.setObjectName("customTitleBar")
         self.setFixedHeight(36)
-        self.setStyleSheet("background-color: #2b2b2b; color: white; border-bottom: 1px solid #1a1a1a;")
 
         self.title_label = QLabel("OctoBeat")
-        self.title_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px; background: transparent; border: none; margin-left: 10px;")
+        self.title_label.setObjectName("titleBarLabel")
 
         self.minimize_button = QPushButton("–")
         self.maximize_button = QPushButton("□")
         self.close_button = QPushButton("✕")
-
-        # Базовый стиль для кнопок с нормальным шрифтом
-        button_style = """
-            QPushButton {
-                background-color: transparent; border: none;
-                color: #ffffff; font-family: Arial, sans-serif;
-                font-size: 16px; font-weight: bold;
-            }
-            QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }
-        """
-        self.minimize_button.setStyleSheet(button_style)
-        self.maximize_button.setStyleSheet(button_style)
-
-        # Отдельный стиль для кнопки закрытия (красный при наведении)
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent; border: none;
-                color: #ffffff; font-family: Arial, sans-serif;
-                font-size: 14px; font-weight: bold;
-            }
-            QPushButton:hover { background-color: #e81123; }
-        """)
+        self.close_button.setObjectName("titleBarClose")
 
         self.minimize_button.setFixedSize(46, 36)
         self.maximize_button.setFixedSize(46, 36)
@@ -51,10 +30,60 @@ class CustomTitleBar(QWidget):
         layout.addWidget(self.maximize_button)
         layout.addWidget(self.close_button)
 
-        self.minimize_button.clicked.connect(lambda checked=False: self.window().showMinimized())
+        self.minimize_button.clicked.connect(
+            lambda checked=False: self.window().showMinimized()
+        )
         self.maximize_button.clicked.connect(self._toggle_max)
-        self.close_button.clicked.connect(lambda checked=False: self.window().close())  # pyright: ignore[reportArgumentType]
+        self.close_button.clicked.connect(
+            lambda checked=False: self.window().close()
+        )  # pyright: ignore[reportArgumentType]
         self.drag_pos = QPoint()
+
+        self.apply_theme(True)
+
+    def apply_theme(self, is_dark):
+        """Перекрашивает заголовок под текущую тему.
+        Фон и рамки задаются в QSS-теме (styles.BASE_QSS + theme.qss).
+        Здесь только цвет текста и hover-эффекты кнопок.
+        """
+        if is_dark:
+            foreground = "#ffffff"
+            hover = "rgba(255, 255, 255, 0.10)"
+        else:
+            foreground = "#2E3440"
+            hover = "rgba(0, 0, 0, 0.08)"
+
+        self.setStyleSheet(f"""
+            QWidget#customTitleBar {{
+                /* background и border заданы в QSS-теме */
+            }}
+            QLabel#titleBarLabel {{
+                color: {foreground};
+                font-weight: bold;
+                font-size: 13px;
+                background: transparent;
+                border: none;
+                margin-left: 10px;
+            }}
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                color: {foreground};
+                font-family: Arial, sans-serif;
+                font-size: 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {hover};
+            }}
+            QPushButton#titleBarClose {{
+                font-size: 14px;
+            }}
+            QPushButton#titleBarClose:hover {{
+                background-color: #e81123;
+                color: #ffffff;
+            }}
+        """)
 
     def _toggle_max(self):
         if self.window().isMaximized():

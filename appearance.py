@@ -19,7 +19,7 @@
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
-from styles import DARK_THEME, LIGHT_THEME
+from styles import is_dark_theme, load_theme
 
 
 class AppearanceManager(QObject):
@@ -74,13 +74,13 @@ class AppearanceManager(QObject):
         if app is None:
             return
 
-        theme = self.settings.value("theme", "dark")
-        self.is_dark_theme = (theme != "light")
+        theme = str(self.settings.value("theme", "dark"))
+        self.is_dark_theme = is_dark_theme(theme)
         self.icons.set_dark(self.is_dark_theme)
         if self.parent_window is not None:
             self.parent_window.is_dark_theme = self.is_dark_theme
 
-        app.setStyleSheet(LIGHT_THEME if theme == "light" else DARK_THEME)
+        load_theme(theme, app)
 
         # Тема сменилась — перерисовываем списки и перекрашиваем иконки,
         # иначе делегаты/иконки остаются в цветах прежней темы.
@@ -103,6 +103,11 @@ class AppearanceManager(QObject):
 
         # Панель библиотеки (тулбар, поиск, фильтр, Next in queue)
         self.library_tab.apply_theme()
+
+        # Заголовок окна: цвета зависят от светлой/тёмной темы.
+        title_bar = getattr(self.parent_window, "title_bar", None)
+        if title_bar is not None:
+            title_bar.apply_theme(self.is_dark_theme)
 
         # Нижняя панель плеера и панель текста.
         self.player_bar.apply_theme()

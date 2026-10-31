@@ -24,6 +24,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QAction, QMenu
 
 from translations import tr
+from ui_common import apply_menu_depth
 
 
 class TrackContextMenu(QMenu):
@@ -52,6 +53,7 @@ class TrackContextMenu(QMenu):
         source_list,
     ):
         super().__init__(parent)
+        apply_menu_depth(self)
         if scope not in ("library", "playlist"):
             raise ValueError("scope must be 'library' or 'playlist'")
         self.settings = settings
@@ -131,6 +133,7 @@ class TrackContextMenu(QMenu):
         lang = self.settings.value("language", "en")
 
         add_menu = QMenu(tr("Add to playlist", lang), self)
+        apply_menu_depth(add_menu)
         add_menu.setIcon(self.icons.icon("add-to-playlist.svg"))
         self.addMenu(add_menu)
         if not playlists:
@@ -165,6 +168,7 @@ class TrackContextMenu(QMenu):
 
         # CHANGED: объединяем редактирование трека в одно подменю "Edit Track"
         edit_menu = QMenu(tr("Edit Track", lang), self)
+        apply_menu_depth(edit_menu)
         edit_menu.setIcon(self.icons.icon("pencil.svg"))
 
         fix_action = QAction(tr("Change title && author", lang), edit_menu)

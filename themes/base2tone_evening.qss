@@ -1,0 +1,450 @@
+/* @accent: #fab387 */
+* {
+    color: #cdd6f4;
+    font-family: sans-serif;
+    font-size: 13px;
+}
+
+QMainWindow, QWidget, QDialog {
+    background-color: #1e1e2e;
+}
+
+QTabWidget::pane {
+    border: none;
+    background-color: #1e1e2e;
+    margin-top: 0px;
+}
+
+/* Панели: лёгкий вертикальный градиент вместо плоского цвета. */
+#customTitleBar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #26263a, stop:1 #1e1e2e);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#playerBar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #26263a, stop:1 #1e1e2e);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+QTabBar::tab {
+    background: transparent;
+    color: #7f849c;
+    padding: 0px 14px;
+    min-height: 38px;
+    border: none; /* Убирает белые полосы */
+}
+
+QTabBar::tab:selected {
+    color: #cdd6f4;
+    border-top: 2px solid #fab387; /* Наш фирменный цвет */
+}
+
+QTabBar::tab:hover {
+    background: #313244;
+}
+
+QListWidget {
+    background-color: #1e1e2e;
+    border: none;
+    outline: none;
+}
+
+QListWidget::item {
+    padding: 6px 8px;
+    border: none;
+    outline: none;
+}
+
+QListWidget::item:hover {
+    background-color: #313244;
+}
+
+QListWidget::item:selected {
+    background-color: rgba(250, 179, 135, 0.4);
+    color: #cdd6f4;
+    border: none;
+}
+
+QTreeView, QTreeWidget {
+    outline: none;
+    border: none;
+    show-decoration-selected: 0;
+}
+
+QTreeView::item:focus, QTreeView::item:selected, QTreeView::item:hover {
+    outline: none;
+    border: none;
+}
+
+QTreeView::item:selected, QTreeView::item:focus,
+QTreeWidget::item:selected, QListView::item:selected {
+    background: transparent;
+    outline: none;
+    border: none;
+    selection-background-color: transparent;
+    selection-color: inherit;
+}
+
+QLineEdit, QComboBox {
+    background-color: #1e1e2e;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: #cdd6f4;
+}
+
+/* Справа нужен запас под drop-down и стрелку сортировки. */
+QComboBox {
+    padding: 4px 30px 4px 8px;
+}
+
+QLineEdit:focus, QComboBox:focus {
+    background-color: #28293a;
+}
+
+QLineEdit:hover, QComboBox:hover {
+    border: 1px solid #fab387;
+}
+
+QWidget#playlistDetail {
+    background: transparent;
+}
+
+QTextEdit#playlistDescription {
+    background: transparent;
+    border: none;
+    color: #cdd6f4;
+    font-size: 13px;
+    padding: 0;
+}
+
+QTextEdit#playlistDescription:focus {
+    background: transparent;
+    border: none;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border: none;
+    width: 24px;
+}
+
+QComboBox::down-arrow {
+    image: url("@ICONS_DIR@/white/chevron-down.svg");
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1e1e2e;
+    border: none;
+    outline: none;
+    padding: 4px;
+    selection-background-color: #313244;
+    selection-color: #cdd6f4;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 2px 8px;
+}
+
+QPushButton {
+    background: transparent;
+    border: none;
+    padding: 4px;
+}
+
+QPushButton:hover {
+    background: #313244;
+    border-radius: 6px;
+}
+
+QLabel {
+    background: transparent;
+}
+
+QMenu {
+    background-color: #26263a;
+    color: #cdd6f4;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 24px;
+    background: transparent;
+    border-radius: 6px;
+}
+
+QMenu::item:selected {
+    background-color: #313244;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 4px 8px;
+}
+
+QSlider::groove:horizontal {
+    height: 4px;
+    background: transparent;
+    border-radius: 2px;
+}
+
+QSlider::sub-page:horizontal {
+    background: #fab387;
+    border-radius: 2px;
+    height: 4px;
+}
+
+QSlider::add-page:horizontal {
+    background: #313244;
+    border-radius: 2px;
+    height: 4px;
+}
+
+QSlider::handle:horizontal {
+    background: #cdd6f4;
+    width: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+
+QSlider::handle:horizontal:hover {
+    background: #fab387;
+    width: 14px;
+    margin: -6px 0;
+}
+
+QProgressDialog {
+    background-color: #1e1e2e;
+}
+
+QScrollBar:vertical {
+    background: #1e1e2e;
+    width: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #313244;
+    border-radius: 5px;
+    min-height: 24px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QToolTip {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #fab387;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+QLabel#currentTrack {
+    color: #cdd6f4;
+}
+
+QLabel#contextLabel {
+    color: #7f849c;
+}
+
+QWidget#nextTrackIsland {
+    background-color: #313244;
+    border-radius: 8px;
+}
+
+QLabel#nextTrackCaption {
+    color: #7f849c;
+    font-size: 11px;
+}
+
+QLabel#nextTrackTitle {
+    color: #cdd6f4;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#nextTrackArtist {
+    color: #7f849c;
+    font-size: 11px;
+}
+
+QTextBrowser#lyricsView {
+    background: transparent;
+    border: none;
+    color: #7f849c;
+    padding: 6px 14px;
+}
+
+QScrollBar#profileScrollBar:vertical {
+    background: #1e1e2e;
+    width: 6px;
+    margin: 2px 0;
+}
+
+QScrollBar#profileScrollBar::handle:vertical {
+    background: #313244;
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QScrollBar#profileScrollBar::handle:vertical:hover {
+    background: #fab387;
+}
+
+QScrollBar#profileScrollBar::add-line:vertical,
+QScrollBar#profileScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar#profileScrollBar::add-page:vertical,
+QScrollBar#profileScrollBar::sub-page:vertical {
+    background: transparent;
+}
+
+QFileDialog {
+    background-color: #1e1e2e;
+    border: none;
+}
+
+QFileDialog QPushButton {
+    background-color: #28293a;
+    color: #cdd6f4;
+    border: 1px solid #3a3b4e;
+    border-radius: 6px;
+    padding: 6px 16px;
+}
+
+QFileDialog QPushButton:hover {
+    background-color: #3a3b4e;
+    border-color: #fab387;
+}
+
+QFileDialog QPushButton:pressed {
+    background-color: #fab387;
+}
+
+QFileDialog QPushButton:disabled {
+    background-color: #1e1e2e;
+    color: #7f849c;
+    border-color: #3a3b4e;
+}
+
+QFileDialog QLineEdit,
+QFileDialog QComboBox {
+    background-color: #1e1e2e;
+    border: 1px solid #3a3b4e;
+    border-radius: 6px;
+    padding: 6px 8px;
+    color: #cdd6f4;
+}
+
+QFileDialog QLineEdit:focus,
+QFileDialog QComboBox:focus {
+    border: 1px solid #fab387;
+}
+
+QFileDialog QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+
+QFileDialog QComboBox QAbstractItemView {
+    background-color: #1e1e2e;
+    border: 1px solid #3a3b4e;
+    color: #cdd6f4;
+    outline: none;
+    selection-background-color: #fab387;
+    selection-color: #cdd6f4;
+}
+
+QFileDialog QTreeView,
+QFileDialog QListView {
+    background-color: #1e1e2e;
+    border: 1px solid #3a3b4e;
+    border-radius: 6px;
+    color: #cdd6f4;
+    outline: none;
+}
+
+QFileDialog QTreeView::item,
+QFileDialog QListView::item {
+    padding: 4px 6px;
+    border: none;
+}
+
+QFileDialog QTreeView::item:selected,
+QFileDialog QListView::item:selected {
+    background-color: #fab387;
+    color: #cdd6f4;
+}
+
+QFileDialog QTreeView::item:hover,
+QFileDialog QListView::item:hover {
+    background-color: #313244;
+}
+
+QFileDialog QHeaderView::section {
+    background-color: #28293a;
+    color: #cdd6f4;
+    border: none;
+    border-bottom: 1px solid #3a3b4e;
+    padding: 4px 6px;
+}
+
+QFileDialog QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QFileDialog QToolButton:hover {
+    background: #313244;
+}
+
+QFileDialog QSplitter::handle {
+    background-color: #3a3b4e;
+}
+
+QFileDialog QLabel {
+    background: transparent;
+    color: #cdd6f4;
+}
+
+QDialog, QWidget, QMenu {
+    outline: none;
+}
+
+QFocusFrame {
+    border: none;
+    background: transparent;
+}
+
+/* ===== SETTINGS NAVIGATION (base2tone_evening) ===== */
+QListWidget#settingsNav {
+    background-color: #1e1e2e;
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+}
+QListWidget#settingsNav::item {
+    color: #cdd6f4;
+    padding: 9px 14px;
+    border-radius: 6px;
+}
+QListWidget#settingsNav::item:hover {
+    color: #cdd6f4;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+QListWidget#settingsNav::item:selected {
+    background-color: #fab387;
+    color: #ffffff;
+}

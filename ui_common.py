@@ -30,10 +30,20 @@ from PyQt5.QtGui import (
     QIcon,
     QPainter,
     QPainterPath,
+    QPalette,
     QPixmap,
 )
-from PyQt5.QtWidgets import QLabel, QPushButton, QSlider, QStyle
+from PyQt5.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGraphicsDropShadowEffect,
+    QLabel,
+    QPushButton,
+    QSlider,
+    QStyle,
+)
 
+from styles import DARK_THEME
 from pixmap_utils import (
     draw_centered,
     draw_cover,
@@ -47,6 +57,27 @@ def fmt_time(ms):
     total_sec = ms // 1000
     m, s = divmod(total_sec, 60)
     return f"{m}:{s:02d}"
+
+
+def apply_menu_depth(menu):
+    """Придаёт QMenu объём: скруглённые углы, тень и прозрачный фон.
+
+    Скругление и отступы задаются в QSS темы (``QMenu { border-radius }``),
+    а тень рисует ``QGraphicsDropShadowEffect``. ``NoDropShadowWindowHint``
+    отключает системную тень, чтобы не было «двойной» обводки.
+    """
+    if menu is None:
+        return menu
+    menu.setWindowFlags(
+        Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+    )
+    menu.setAttribute(Qt.WA_TranslucentBackground, True)
+    shadow = QGraphicsDropShadowEffect(menu)
+    shadow.setBlurRadius(10)
+    shadow.setOffset(0, 2)
+    shadow.setColor(QColor(0, 0, 0, 160))
+    menu.setGraphicsEffect(shadow)
+    return menu
 
 
 class ClickSlider(QSlider):
@@ -142,6 +173,10 @@ class IconProvider:
             if color == "white":
                 return "#ffffff"
             if color == "blue":
+                # Активный элемент плеера — акцент активной темы.
+                app = QApplication.instance()
+                if app is not None:
+                    return app.palette().color(QPalette.Highlight).name()
                 return "#5151ab"
             return color
         return "white" if self._is_dark else "black"
@@ -207,3 +242,64 @@ class IconProvider:
 
         painter.end()
         return result
+
+
+def _file_dialog_stylesheet():
+    """Текущая QSS приложения (или тёмная тема по умолчанию)."""
+    app = QApplication.instance()
+    if app is not None:
+        stylesheet = app.styleSheet()
+        if stylesheet:
+            return stylesheet
+    return DARK_THEME
+
+
+def _make_file_dialog(parent, caption, directory, file_filter, options=None):
+    dialog = QFileDialog(parent, caption, directory, file_filter)
+    if options is not None:
+        dialog.setOptions(options)
+    dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    dialog.setStyleSheet(_file_dialog_stylesheet())
+    return dialog
+
+
+def get_open_file_name(parent=None, caption="", directory="", file_filter="",
+                       options=None):
+    """Немодальный QFileDialog.getOpenFileName в стиле приложения."""
+    dialog = _make_file_dialog(
+        parent, caption, directory, file_filter, options
+    )
+    dialog.setAcceptMode(QFileDialog.AcceptOpen)
+    dialog.setFileMode(QFileDialog.ExistingFile)
+    if dialog.exec_() == QFileDialog.Accepted:
+        selected = dialog.selectedFiles()
+        if selected:
+            return selected[0], dialog.selectedNameFilter()
+    return "", ""
+
+
+def get_open_file_names(parent=None, caption="", directory="", file_filter="",
+                        options=None):
+    """Немодальный QFileDialog.getOpenFileNames в стиле приложения."""
+    dialog = _make_file_dialog(
+        parent, caption, directory, file_filter, options
+    )
+    dialog.setAcceptMode(QFileDialog.AcceptOpen)
+    dialog.setFileMode(QFileDialog.ExistingFiles)
+    if dialog.exec_() == QFileDialog.Accepted:
+        return dialog.selectedFiles(), dialog.selectedNameFilter()
+    return [], ""
+
+
+def get_existing_directory(parent=None, caption="", directory="",
+                           options=None):
+    """Немодальный QFileDialog.getExistingDirectory в стиле приложения."""
+    dialog = _make_file_dialog(parent, caption, directory, "", options)
+    dialog.setAcceptMode(QFileDialog.AcceptOpen)
+    dialog.setFileMode(QFileDialog.Directory)
+    dialog.setOption(QFileDialog.ShowDirsOnly, True)
+    if dialog.exec_() == QFileDialog.Accepted:
+        selected = dialog.selectedFiles()
+        if selected:
+            return selected[0]
+    return ""

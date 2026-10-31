@@ -33,13 +33,12 @@ from PyQt5.QtCore import (
     QUrl,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
 from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QProgressDialog,
     QPushButton,
     QSizePolicy,
@@ -49,7 +48,12 @@ from PyQt5.QtWidgets import (
 )
 
 import workers
-from dialogs import _dialog_lang, _FramelessDialog, colored_icon
+from dialogs import (
+    CustomConfirmDialog,
+    _dialog_lang,
+    _FramelessDialog,
+    colored_icon,
+)
 from translations import tr
 
 SNAP_MS = 500                 # шаг снапа маркеров
@@ -395,7 +399,9 @@ class WaveformWidget(QWidget):
             )
 
         # Лёгкая подсветка выбранного фрагмента.
-        painter.setBrush(QColor(81, 81, 171, 45))
+        selection = self.palette().color(QPalette.Highlight)
+        selection.setAlpha(45)
+        painter.setBrush(selection)
         painter.drawRect(
             QRectF(start_x, plot.top(), max(0.0, end_x - start_x),
                    plot.height())
@@ -702,7 +708,7 @@ class AudioTrimDialog(_FramelessDialog):
             return
         self.waveform.set_placeholder(tr("Waveform unavailable", self._lang))
         self.save_button.setEnabled(False)
-        QMessageBox.warning(
+        CustomConfirmDialog.information(
             self,
             tr("Trim audio", self._lang),
             tr("Could not load waveform:\n{e}", self._lang).format(e=message),
@@ -833,7 +839,7 @@ class AudioTrimDialog(_FramelessDialog):
 
         start, end = self.waveform.selection()
         if end - start < 100:
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self,
                 tr("Trim audio", self._lang),
                 tr("The selection is too short.", self._lang),
@@ -900,7 +906,7 @@ class AudioTrimDialog(_FramelessDialog):
         self._close_player()
 
         if self._pending_warning:
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self, tr("Trim audio", self._lang), self._pending_warning
             )
         self.accept()
@@ -910,7 +916,7 @@ class AudioTrimDialog(_FramelessDialog):
             self._progress.close()
         self._busy = False
         self._set_controls_enabled(True)
-        QMessageBox.warning(
+        CustomConfirmDialog.information(
             self,
             tr("Trim audio", self._lang),
             tr("Could not trim audio:\n{e}", self._lang).format(e=message),
@@ -1002,7 +1008,7 @@ QSlider::groove:horizontal {
     border-radius: 2px;
 }
 QSlider::handle:horizontal {
-    background: #5151ab;
+    background: palette(highlight);
     border: none;
     width: 14px;
     height: 14px;
@@ -1010,6 +1016,6 @@ QSlider::handle:horizontal {
     border-radius: 7px;
 }
 QSlider::handle:horizontal:hover {
-    background: #6161c4;
+    background: palette(highlight);
 }
 """

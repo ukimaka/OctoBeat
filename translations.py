@@ -46,6 +46,17 @@ TRANSLATIONS = {
         "YouTube": "YouTube",
         "About": "About",
         "Data": "Data",
+        "Automatic updates": "Automatic updates",
+        "Check for updates automatically": "Check for updates automatically",
+        "Check GitHub for new releases on startup.": (
+            "Check GitHub for new releases on startup."
+        ),
+        "Metadata source badges": "Metadata source badges",
+        "Show metadata source badges": "Show metadata source badges",
+        "Display small M/Y/F badges on track covers indicating the metadata source.": (
+            "Display small M/Y/F badges on track covers indicating the "
+            "metadata source."
+        ),
 
         # Панель библиотеки
         "Import files": "Import files",
@@ -322,6 +333,17 @@ TRANSLATIONS = {
         "YouTube": "YouTube",
         "About": "О программе",
         "Data": "Данные",
+        "Automatic updates": "Автоматические обновления",
+        "Check for updates automatically": "Проверять обновления автоматически",
+        "Check GitHub for new releases on startup.": (
+            "Проверять новые релизы на GitHub при запуске."
+        ),
+        "Metadata source badges": "Бейджи источников метаданных",
+        "Show metadata source badges": "Показывать бейджи источников метаданных",
+        "Display small M/Y/F badges on track covers indicating the metadata source.": (
+            "Показывать маленькие бейджи M/Y/F на обложках треков, "
+            "указывающие источник метаданных."
+        ),
 
         # Панель библиотеки
         "Import files": "Импорт файлов",

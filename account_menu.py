@@ -25,6 +25,7 @@ from api_client import ApiClient, ApiError
 from pixmap_utils import new_pixmap
 from profile_ui import _round_avatar_pixmap
 from translations import tr
+from ui_common import apply_menu_depth
 
 
 class _TokenCheckWorker(QThread):
@@ -206,6 +207,7 @@ class AccountMenu(QObject):
     def _show_account_menu(self) -> None:
         lang = self.settings.value("language", "en")
         menu = QMenu(self.parent_window)
+        apply_menu_depth(menu)
 
         profile_action = menu.addAction(
             self.icons.icon("user.svg"), tr("Profile", lang)

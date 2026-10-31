@@ -55,6 +55,7 @@ class PlayerBar(QWidget):
 
     def __init__(self, settings, icons, event_filter=None, parent=None):
         super().__init__(parent)
+        self.setObjectName("playerBar")
         self.settings = settings
         self.icons = icons
         self._duration = 0

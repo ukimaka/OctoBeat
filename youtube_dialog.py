@@ -48,27 +48,30 @@ from PyQt5.QtGui import (
     QPixmap,
 )
 from PyQt5.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
     QVBoxLayout,
+    QWidget,
 )
 
-from dialogs import colored_icon, colored_pixmap
+from dialogs import (
+    CustomConfirmDialog,
+    _FramelessDialog,
+    colored_icon,
+    colored_pixmap,
+)
 from pixmap_utils import draw_centered, draw_cover, icon_pixmap_rect
+from styles import is_dark_theme
 from translations import tr
 from youtube_worker import YoutubeSearchWorker, YoutubeWorker
 
-ACCENT = "#5151ab"
-ACCENT_HOVER = "#6161c1"
 THUMBS_DIR = Path.home() / ".cache" / "music_player" / "yt_thumbs"
 
 
@@ -90,7 +93,7 @@ class SearchResultDelegate(QStyledItemDelegate):
     # ------------------------------------------------------------------
     def _palette(self):
         settings = QSettings("MusicPlayer", "MusicPlayer")
-        if settings.value("theme", "dark") != "light":
+        if is_dark_theme(settings.value("theme", "dark")):
             return {
                 "title": QColor("#ffffff"),
                 "subtitle": QColor("#8a8a8a"),
@@ -274,10 +277,10 @@ class _ThumbnailTask(QRunnable):
             pass
 
 
-class YoutubeDialog(QDialog):
+class YoutubeDialog(_FramelessDialog):
     def __init__(self, parent=None, target_folder=None):
-        super().__init__(parent)
         self.settings = QSettings("MusicPlayer", "MusicPlayer")
+        super().__init__(parent, tr("Download from YouTube", self._lang()))
         self.target_folder = target_folder
         self.downloaded_path = None
 
@@ -291,8 +294,6 @@ class YoutubeDialog(QDialog):
         self._thumb_signals.loaded.connect(self._on_thumbnail_loaded)
         self._thumb_pool = QThreadPool(self)
 
-        lang = self._lang()
-        self.setWindowTitle(tr("Download from YouTube", lang))
         self.setMinimumSize(600, 460)
 
         self._build_ui()
@@ -301,16 +302,22 @@ class YoutubeDialog(QDialog):
         return self.settings.value("language", "en")
 
     def _icon_color(self):
-        return "#ffffff" if self.settings.value("theme", "dark") != "light" else "#000000"
+        return (
+            "#ffffff"
+            if is_dark_theme(self.settings.value("theme", "dark"))
+            else "#000000"
+        )
 
     # ------------------------------------------------------------------
     #  Построение интерфейса
     # ------------------------------------------------------------------
     def _build_ui(self):
         lang = self._lang()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        content = QWidget()
+        root = QVBoxLayout(content)
+        root.setContentsMargins(16, 12, 16, 8)
         root.setSpacing(12)
+        self.body.addWidget(content, 1)
 
         # --- Верх: поиск ---
         search_row = QHBoxLayout()
@@ -356,7 +363,7 @@ class YoutubeDialog(QDialog):
                 text-align: center;
             }}
             QProgressBar::chunk {{
-                background: {ACCENT};
+                background: palette(highlight);
                 border-radius: 4px;
             }}
         """)
@@ -366,9 +373,6 @@ class YoutubeDialog(QDialog):
         root.addWidget(self.status)
 
         # --- Низ: кнопки ---
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-
         self.btn_cancel = QPushButton(tr("Cancel", lang), self)
         self.btn_cancel.setAutoDefault(False)
         self.btn_cancel.setIcon(colored_icon("cancel.svg", self._icon_color()))
@@ -381,7 +385,7 @@ class YoutubeDialog(QDialog):
         self.btn_download.setMinimumWidth(220)
         self.btn_download.setStyleSheet(f"""
             QPushButton {{
-                background-color: {ACCENT};
+                background-color: palette(highlight);
                 color: #ffffff;
                 border: none;
                 border-radius: 6px;
@@ -390,18 +394,16 @@ class YoutubeDialog(QDialog):
                 font-weight: 600;
             }}
             QPushButton:hover {{
-                background-color: {ACCENT_HOVER};
+                background-color: palette(highlight);
             }}
             QPushButton:disabled {{
-                background-color: rgba(81, 81, 171, 0.45);
+                background-color: rgba(128, 128, 128, 0.35);
                 color: rgba(255, 255, 255, 0.6);
             }}
         """)
         self.btn_download.clicked.connect(self._on_download)
 
-        button_row.addWidget(self.btn_cancel)
-        button_row.addWidget(self.btn_download)
-        root.addLayout(button_row)
+        self._add_footer([self.btn_cancel, self.btn_download])
 
     # ------------------------------------------------------------------
     #  Поиск
@@ -454,7 +456,9 @@ class YoutubeDialog(QDialog):
         self._cleanup_search_thread()
         self._set_searching(False)
         self.status.setText(tr("Error", self._lang()))
-        QMessageBox.warning(self, tr("Error", self._lang()), message)
+        CustomConfirmDialog.information(
+            self, tr("Error", self._lang()), message
+        )
 
     def _set_searching(self, searching):
         self.btn_search.setEnabled(not searching)
@@ -551,7 +555,9 @@ class YoutubeDialog(QDialog):
         self._show_download_mode(False)
         self.btn_download.setEnabled(self.list.currentItem() is not None)
         self.status.setText(tr("Error", self._lang()))
-        QMessageBox.warning(self, tr("Error", self._lang()), message)
+        CustomConfirmDialog.information(
+            self, tr("Error", self._lang()), message
+        )
 
     def _show_download_mode(self, downloading):
         """Прячет поиск и показывает прогресс (или наоборот)."""

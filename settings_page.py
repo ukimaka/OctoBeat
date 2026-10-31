@@ -29,13 +29,11 @@ from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -45,8 +43,10 @@ from PyQt5.QtWidgets import (
 
 from api_client import ApiClient
 from auth_ui import AuthDialog
-from dialogs import colored_icon
+from dialogs import CustomConfirmDialog, colored_icon
+from styles import available_themes, is_dark_theme
 from translations import tr
+from ui_common import get_existing_directory, get_open_file_name
 
 CACHE_DIR = Path.home() / ".cache" / "music_player"
 COVERS_DIR = CACHE_DIR / "covers"
@@ -55,9 +55,6 @@ PROFILE_DATA_DIR = Path.home() / ".local" / "share" / "music_player" / "profile"
 
 # Замени на ссылку своего репозитория.
 PROJECT_GITHUB_URL = "https://github.com/yourname/music_player"
-
-# Фирменный цвет акцента (как в остальном приложении).
-ACCENT = "#5151ab"
 
 
 class SettingsPage(QWidget):
@@ -317,8 +314,10 @@ class SettingsPage(QWidget):
 
         self.theme_combo = QComboBox()
         self.theme_combo.setMinimumWidth(160)
-        self.theme_combo.addItem(tr("Dark", self._lang()), "dark")
-        self.theme_combo.addItem(tr("Light", self._lang()), "light")
+        themes = available_themes() or ["dark", "light"]
+        for name in themes:
+            label = name.replace("_", " ").replace("-", " ").title()
+            self.theme_combo.addItem(label, name)
         layout.addWidget(self._make_row(
             tr("Theme", self._lang()),
             tr("Choose the color scheme of the application.", self._lang()),
@@ -395,6 +394,16 @@ class SettingsPage(QWidget):
             control_widget,
         ))
 
+        self.auto_update_check = QCheckBox(
+            tr("Check for updates automatically", self._lang())
+        )
+        self.auto_update_check.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(self._make_row(
+            tr("Automatic updates", self._lang()),
+            tr("Check GitHub for new releases on startup.", self._lang()),
+            self.auto_update_check,
+        ))
+
         layout.addStretch(1)
         return page
 
@@ -422,48 +431,24 @@ class SettingsPage(QWidget):
     #  Тема
     # ------------------------------------------------------------------
     def apply_theme(self):
-        """Перекрашивает навигацию, описания и иконки под текущую тему."""
+        """Перекрашивает описания и иконки под текущую тему.
+        Навигация (QListWidget#settingsNav) стилизуется через QSS-тему
+        (styles.BASE_QSS + theme.qss), здесь только описания и иконки.
+        """
         theme = self.settings.value("theme", "dark")
-        is_dark = theme != "light"
+        is_dark = is_dark_theme(theme)
         icon_color = "#ffffff" if is_dark else "#000000"
-
-        if is_dark:
-            nav_bg = "#181818"
-            item_color = "#b3b3b3"
-            item_hover = "#ffffff"
-            desc_color = "#a7a7a7"
-        else:
-            nav_bg = "#f5f5f5"
-            item_color = "#555555"
-            item_hover = "#000000"
-            desc_color = "#5e5e5e"
-
-        self.nav.setStyleSheet(f"""
-            QListWidget#settingsNav {{
-                background-color: {nav_bg};
-                border: none;
-                outline: none;
-                padding: 8px;
-                selection-background-color: {ACCENT};
-                selection-color: #ffffff;
-            }}
-            QListWidget#settingsNav::item {{
-                color: {item_color};
-                padding: 9px 14px;
-                border-radius: 6px;
-            }}
-            QListWidget#settingsNav::item:hover {{
-                color: {item_hover};
-                background-color: rgba(128, 128, 128, 0.15);
-            }}
-            QListWidget#settingsNav::item:selected {{
-                background-color: {ACCENT};
-                color: #ffffff;
-            }}
-        """)
+        desc_color = "#a7a7a7" if is_dark else "#5e5e5e"
 
         for label in self._description_labels:
             label.setStyleSheet(f"color: {desc_color}; font-size: 12px;")
+
+        # Принудительно обновляем стиль навигации после смены QSS-темы.
+        self.nav.style().unpolish(self.nav)
+        self.nav.style().polish(self.nav)
+        vp = self.nav.viewport()
+        vp.style().unpolish(vp)
+        vp.style().polish(vp)
 
         for button in (self.clear_covers_button, self.clear_all_cache_button):
             button.setIcon(colored_icon("trash.svg", icon_color))
@@ -489,6 +474,10 @@ class SettingsPage(QWidget):
 
         self.show_metadata_badges_check.setChecked(
             bool(self.settings.value("show_metadata_source_badges", False, type=bool))
+        )
+
+        self.auto_update_check.setChecked(
+            bool(self.settings.value("auto_update", True, type=bool))
         )
 
         zoom = self.settings.value("zoom", 100)
@@ -553,6 +542,7 @@ class SettingsPage(QWidget):
         self.show_metadata_badges_check.toggled.connect(
             self._on_metadata_badges_toggled
         )
+        self.auto_update_check.toggled.connect(self._on_auto_update_toggled)
         self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
         self.reset_zoom_button.clicked.connect(self._on_reset_zoom)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
@@ -568,7 +558,7 @@ class SettingsPage(QWidget):
     def _on_language_changed(self):
         lang = self.language_combo.currentData()
         self.settings.setValue("language", lang)
-        QMessageBox.information(
+        CustomConfirmDialog.information(
             self,
             tr("Language changed", lang),
             tr("Restart required", lang),
@@ -586,13 +576,18 @@ class SettingsPage(QWidget):
         self.settings.sync()
         self.metadata_badges_changed.emit(bool(enabled))
 
+    def _on_auto_update_toggled(self, enabled):
+        """Запоминает, проверять ли обновления при запуске."""
+        self.settings.setValue("auto_update", bool(enabled))
+        self.settings.sync()
+
     def _on_zoom_changed(self):
         zoom = self.zoom_combo.currentData()
         self.settings.setValue("zoom", zoom)
         # QT_SCALE_FACTOR читается только при создании QApplication,
         # поэтому применяем масштаб после перезапуска.
         lang = self._lang()
-        QMessageBox.information(
+        CustomConfirmDialog.information(
             self,
             tr("Zoom changed", lang),
             tr(
@@ -612,7 +607,7 @@ class SettingsPage(QWidget):
         self.zoom_combo.blockSignals(False)
 
         lang = self._lang()
-        QMessageBox.information(
+        CustomConfirmDialog.information(
             self,
             tr("Zoom changed", lang),
             tr(
@@ -651,7 +646,7 @@ class SettingsPage(QWidget):
         removed += self._remove_contents(PLAYLIST_COVERS_DIR)
 
         lang = self._lang()
-        QMessageBox.information(
+        CustomConfirmDialog.information(
             self,
             tr("Clear Covers", lang),
             tr(
@@ -662,7 +657,7 @@ class SettingsPage(QWidget):
     def _on_clear_all_cache(self):
         """Полная очистка кэша и пользовательских аватарок/баннеров."""
         lang = self._lang()
-        answer = QMessageBox.warning(
+        answer = CustomConfirmDialog.question(
             self,
             tr("Clear ALL Cache", lang),
             tr(
@@ -670,10 +665,8 @@ class SettingsPage(QWidget):
                 "avatar/banner. Continue?",
                 lang,
             ),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
         )
-        if answer != QMessageBox.Yes:
+        if not answer:
             return
 
         self._remove_contents(CACHE_DIR)
@@ -683,7 +676,7 @@ class SettingsPage(QWidget):
             except OSError:
                 pass
 
-        QMessageBox.information(
+        CustomConfirmDialog.information(
             self,
             tr("Clear ALL Cache", lang),
             tr("All cache cleared successfully.", lang),
@@ -691,12 +684,11 @@ class SettingsPage(QWidget):
 
     def _on_browse_cookies(self):
         start_dir = self.cookies_edit.text() or str(Path.home())
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self,
             tr("Select cookies.txt", self._lang()),
             start_dir,
             "Cookies files (*.txt);;All files (*)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if path:
             self.cookies_edit.setText(path)
@@ -705,11 +697,10 @@ class SettingsPage(QWidget):
 
     def _on_browse_music_folder(self):
         start_dir = self.music_folder_edit.text() or str(Path.home())
-        path = QFileDialog.getExistingDirectory(
+        path = get_existing_directory(
             self,
             tr("Выберите папку", self._lang()),
             start_dir,
-            options=QFileDialog.DontUseNativeDialog,
         )
         if path:
             self.music_folder_edit.setText(path)

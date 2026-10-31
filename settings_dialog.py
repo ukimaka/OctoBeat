@@ -25,20 +25,20 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from dialogs import colored_icon
+from dialogs import CustomConfirmDialog, colored_icon
+from styles import is_dark_theme
 from translations import tr
+from ui_common import get_open_file_name
 
 COVERS_DIR = Path.home() / ".cache" / "music_player" / "covers"
 PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
@@ -80,7 +80,7 @@ class SettingsDialog(QDialog):
     def _apply_button_icons(self):
         """Кастомные иконки Save/Cancel, перекрашенные под текущую тему."""
         theme = self.settings.value("theme", "dark")
-        icon_color = "#ffffff" if theme != "light" else "#000000"
+        icon_color = "#ffffff" if is_dark_theme(theme) else "#000000"
         for standard_button, text, icon_name in (
             (QDialogButtonBox.Save, tr("Save", self._lang()), "save.svg"),
             (QDialogButtonBox.Cancel, tr("Cancel", self._lang()), "cancel.svg"),
@@ -229,7 +229,7 @@ class SettingsDialog(QDialog):
                     continue
 
         lang = self._lang()
-        QMessageBox.information(
+        CustomConfirmDialog.information(
             self,
             tr("Clear Cache", lang),
             tr("Cache cleared successfully.\nRemoved {n} item(s).", lang).format(n=removed),
@@ -237,12 +237,11 @@ class SettingsDialog(QDialog):
 
     def _on_browse_cookies(self):
         start_dir = self.cookies_edit.text() or str(Path.home())
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self,
             tr("Select cookies.txt", self._lang()),
             start_dir,
             "Cookies files (*.txt);;All files (*)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if path:
             self.cookies_edit.setText(path)

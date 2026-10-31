@@ -26,6 +26,7 @@ from PyQt5.QtGui import (
     QFontMetrics,
     QPainter,
     QPainterPath,
+    QPalette,
     QPixmap,
 )
 from PyQt5.QtWidgets import QStyle, QStyledItemDelegate
@@ -36,6 +37,7 @@ from pixmap_utils import (
     draw_source_badge,
     svg_file_pixmap,
 )
+from styles import is_dark_theme
 
 ICONS_DIR = Path(__file__).parent / "icons"
 
@@ -61,7 +63,17 @@ def _folder_pixmap(size=24, color="#cfcfcf"):
 def _theme_is_dark():
     """Текущая тема из QSettings (делегат не всегда знает её заранее)."""
     settings = QSettings("MusicPlayer", "MusicPlayer")
-    return settings.value("theme", "dark") != "light"
+    return is_dark_theme(settings.value("theme", "dark"))
+
+
+def _blend(first, second, ratio):
+    """Смешивает два цвета: ``ratio`` — доля ``first`` (0..1)."""
+    ratio = max(0.0, min(1.0, ratio))
+    return QColor(
+        round(first.red() * ratio + second.red() * (1 - ratio)),
+        round(first.green() * ratio + second.green() * (1 - ratio)),
+        round(first.blue() * ratio + second.blue() * (1 - ratio)),
+    )
 
 
 class TrackDelegate(QStyledItemDelegate):
@@ -69,7 +81,6 @@ class TrackDelegate(QStyledItemDelegate):
     FOLDER_HEIGHT = 44
     COVER_SIZE = 50
     COVER_RADIUS = 6
-    ACCENT_COLOR = QColor("#5151ab")
     ACCENT_WIDTH = 3
     # Зона слева, где рисуется порядковый номер / иконка Play при наведении.
     PLAY_BTN_X = 4
@@ -92,6 +103,8 @@ class TrackDelegate(QStyledItemDelegate):
     def set_dark_theme(self, is_dark_theme):
         """Задаёт тему явно (None — определять из QSettings при отрисовке)."""
         self._is_dark_theme = None if is_dark_theme is None else bool(is_dark_theme)
+        self._icons.clear()
+        self._repaint_owner()
 
     def set_current_playing(self, track_id):
         """Помечает трек как играющий и перерисовывает виджет-владелец."""
@@ -124,7 +137,51 @@ class TrackDelegate(QStyledItemDelegate):
             return self._is_dark_theme
         return _theme_is_dark()
 
-    def _palette(self):
+    def _palette(self, option=None):
+        """Цвета строки.
+
+        Если передан ``option`` — берём цвета из его ``QPalette``, поэтому
+        делегат автоматически следует любой QSS-теме: текст, приглушённый
+        текст, акцент и фон строки. Без ``option`` остаётся прежний
+        тёмный/светлый фолбэк (для вызовов вне отрисовки).
+        """
+        if option is not None:
+            pal = option.palette
+            text = pal.color(QPalette.Text)
+            window_text = pal.color(QPalette.WindowText)
+            highlight = pal.color(QPalette.Highlight)
+
+            artist = QColor(window_text)
+            artist.setAlpha(150)
+            missing = QColor(text)
+            missing.setAlpha(110)
+            # Мягкая подсветка играющего трека — акцент темы с прозрачностью.
+            playing_bg = QColor(highlight)
+            playing_bg.setAlpha(40)
+            selected_bg = QColor(highlight)
+            selected_bg.setAlpha(30)
+            hover = QColor(window_text)
+            hover.setAlpha(15)
+
+            base = pal.color(QPalette.Base)
+            # Иконки-заглушки приглушаем, чтобы не светились ярче текста.
+            note = _blend(text, base, 0.55).name()
+            folder_icon = _blend(window_text, base, 0.75).name()
+
+            return {
+                "title": text,
+                "artist": artist,
+                "missing": missing,
+                "selection": playing_bg,
+                "selected": selected_bg,
+                "hover": hover,
+                "cover_bg": base,
+                "note": note,
+                "folder_icon": folder_icon,
+                "play": text.name(),
+                "accent": highlight,
+            }
+
         if self.is_dark():
             return {
                 "title": QColor("#ffffff"),
@@ -137,6 +194,7 @@ class TrackDelegate(QStyledItemDelegate):
                 "note": "#888888",
                 "folder_icon": "#cfcfcf",
                 "play": "#ffffff",
+                "accent": QColor("#5151ab"),
             }
         return {
             "title": QColor("#000000"),
@@ -149,6 +207,7 @@ class TrackDelegate(QStyledItemDelegate):
             "note": "#000000",
             "folder_icon": "#666666",
             "play": "#000000",
+            "accent": QColor("#5151ab"),
         }
 
     def _cached_icon(self, kind, color, size):
@@ -224,7 +283,7 @@ class TrackDelegate(QStyledItemDelegate):
 
     def _paint_track(self, painter, option, data, index=None):
         rect = option.rect
-        palette = self._palette()
+        palette = self._palette(option)
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -243,10 +302,11 @@ class TrackDelegate(QStyledItemDelegate):
         if is_playing:
             # Фон играющего трека.
             painter.fillRect(row_rect, palette["selection"])
-            # Синяя полоска слева от обложки, на всю высоту строки.
+            # Акцентная полоска слева от обложки, на всю высоту строки.
+            # Цвет — highlight активной темы (без прозрачности).
             painter.fillRect(
                 QRect(row_rect.x(), row_rect.y(), self.ACCENT_WIDTH, row_rect.height()),
-                self.ACCENT_COLOR,
+                palette["accent"],
             )
         elif option.state & QStyle.State_Selected:
             painter.fillRect(row_rect, palette["selected"])  # <-- NEW
@@ -366,7 +426,9 @@ class TrackDelegate(QStyledItemDelegate):
                 painter.save()
                 painter.setRenderHint(QPainter.Antialiasing, True)
                 painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor(255, 255, 255, 30))
+                circle = QColor(palette["title"])
+                circle.setAlpha(30)
+                painter.setBrush(circle)
                 painter.drawEllipse(
                     QRectF(
                         trash_x - 4,
@@ -385,7 +447,7 @@ class TrackDelegate(QStyledItemDelegate):
 
     def _paint_folder(self, painter, option, data):
         rect = option.rect
-        palette = self._palette()
+        palette = self._palette(option)
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)

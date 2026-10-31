@@ -52,14 +52,11 @@ from PyQt5.QtGui import (
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
     QDialog,
-    QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizeGrip,
@@ -75,7 +72,12 @@ import db
 import metadata
 from api_client import ApiClient, ApiError
 from auth_ui import AuthDialog
-from dialogs import colored_icon, colored_pixmap
+from dialogs import (
+    CustomConfirmDialog,
+    CustomInputDialog,
+    colored_icon,
+    colored_pixmap,
+)
 from pixmap_utils import (
     draw_centered,
     draw_cover,
@@ -83,7 +85,9 @@ from pixmap_utils import (
     render_svg,
     svg_file_pixmap,
 )
+from styles import is_dark_theme
 from translations import tr
+from ui_common import get_open_file_name
 
 PROFILE_COVERS_DIR = Path.home() / ".cache" / "music_player" / "profile_covers"
 PROFILE_DIR = Path.home() / ".local" / "share" / "music_player" / "profile"
@@ -174,7 +178,7 @@ QPushButton#bbTool:hover {
     background: rgba(255, 255, 255, 0.12);
 }
 QPushButton#bbTool:pressed {
-    background: rgba(81, 81, 171, 0.55);
+    background: palette(highlight);
 }
 QPushButton#bbClose {
     background: transparent;
@@ -195,7 +199,7 @@ QTextEdit#bbEditor {
     color: #ffffff;
     font-size: 13px;
     padding: 8px;
-    selection-background-color: #5151ab;
+    selection-background-color: palette(highlight);
 }
 *:focus {
     outline: none;
@@ -221,7 +225,7 @@ QSplitter#bbSplitter::handle {
     width: 6px;
 }
 QPushButton#bbSave {
-    background: #5151ab;
+    background: palette(highlight);
     color: #ffffff;
     border: none;
     border-radius: 8px;
@@ -229,7 +233,7 @@ QPushButton#bbSave {
     font-weight: bold;
 }
 QPushButton#bbSave:hover {
-    background: #6161c4;
+    background: palette(highlight);
 }
 QPushButton#bbCancel {
     background: #2a2a2a;
@@ -321,7 +325,7 @@ def _description_html(text):
 
 def _theme_is_dark():
     settings = QSettings("MusicPlayer", "MusicPlayer")
-    return settings.value("theme", "dark") != "light"
+    return is_dark_theme(settings.value("theme", "dark"))
 
 
 def _icon_color():
@@ -771,8 +775,9 @@ class BannerLabel(HoverImageLabel):
         if self._source.isNull():
             painter = QPainter(self)
             gradient = QLinearGradient(0, 0, 0, self.height())
-            gradient.setColorAt(0.0, QColor("#5151ab"))
-            gradient.setColorAt(1.0, QColor("#2b2b6b"))
+            accent = self.palette().color(QPalette.Highlight)
+            gradient.setColorAt(0.0, accent)
+            gradient.setColorAt(1.0, accent.darker(160))
             painter.fillRect(self.rect(), gradient)
             painter.end()
         super().paintEvent(event)
@@ -939,7 +944,7 @@ class BBCodeEditorDialog(QDialog):
         lang = _lang()
         cursor = self.editor.textCursor()
         selected = cursor.selectedText().replace("\u2029", "\n")
-        url, ok = QInputDialog.getText(
+        url, ok = CustomInputDialog.get_text(
             self, tr("Insert Link", lang), tr("URL", lang), text="https://"
         )
         if not ok or not url.strip():
@@ -952,7 +957,7 @@ class BBCodeEditorDialog(QDialog):
     def _insert_image(self):
         """Вставляет [img]URL[/img]."""
         lang = _lang()
-        url, ok = QInputDialog.getText(
+        url, ok = CustomInputDialog.get_text(
             self, tr("Insert Image", lang), tr("Image URL", lang),
             text="https://",
         )
@@ -1265,7 +1270,9 @@ class ProfilePage(QWidget):
         try:
             user = ApiClient(token=token).get_me()
         except ApiError as exc:
-            QMessageBox.warning(self, "Authorization", str(exc))
+            CustomConfirmDialog.information(
+                self, "Authorization", str(exc)
+            )
             return
         self.set_authenticated(user.get("username", ""))
         self._sync_stats_to_server()
@@ -1342,7 +1349,7 @@ class ProfilePage(QWidget):
         lang = _lang()
         token = self.settings.value("api_token")
         if not isinstance(token, str) or not token.strip():
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self,
                 tr("Profile", lang),
                 tr("Please log in to view profiles", lang),
@@ -1431,7 +1438,7 @@ class ProfilePage(QWidget):
         empty = QLabel(tr("No playlists yet", lang))
         empty.setStyleSheet("color: #8a8a8a;")
         self.public_playlists_grid.addWidget(empty, 0, 0)
-        QMessageBox.warning(self, tr("Profile", lang), text)
+        CustomConfirmDialog.information(self, tr("Profile", lang), text)
 
     def _on_friend_worker_finished(self, worker) -> None:
         if self._friend_worker is worker:
@@ -1545,7 +1552,7 @@ class ProfilePage(QWidget):
             download.setStyleSheet(
                 "QPushButton { background: transparent; border: none;"
                 " padding: 2px 4px; }"
-                "QPushButton:hover { color: #5151ab; }"
+                "QPushButton:hover { color: palette(highlight); }"
             )
             playlist_id = int(playlist.get("id") or 0)
             download.clicked.connect(
@@ -1993,7 +2000,9 @@ class ProfilePage(QWidget):
 
     def _on_profile_sync_failed(self, message: str) -> None:
         lang = _lang()
-        QMessageBox.warning(self, tr("Profile", lang), message)
+        CustomConfirmDialog.information(
+            self, tr("Profile", lang), message
+        )
 
     def _on_profile_sync_finished(self, worker) -> None:
         self._sync_workers.discard(worker)
@@ -2005,10 +2014,9 @@ class ProfilePage(QWidget):
     def _change_banner(self):
         if self._friend_mode:
             return
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self, tr("Select Banner", _lang()), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
@@ -2023,10 +2031,9 @@ class ProfilePage(QWidget):
     def _change_avatar(self):
         if self._friend_mode:
             return
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self, tr("Select Avatar", _lang()), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
@@ -2046,7 +2053,7 @@ class ProfilePage(QWidget):
         profile = db.get_profile()
         current = (profile["nickname"] if profile else "") or ""
         lang = _lang()
-        name, ok = QInputDialog.getText(
+        name, ok = CustomInputDialog.get_text(
             self, tr("Edit Nickname", lang), tr("Nickname", lang), text=current
         )
         if not ok:

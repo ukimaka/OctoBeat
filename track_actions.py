@@ -29,14 +29,11 @@ from pathlib import Path
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from PyQt5.QtCore import QObject, QSettings, pyqtSignal
-from PyQt5.QtWidgets import (
-    QDialog,
-    QFileDialog,
-    QMessageBox,
-)
+from PyQt5.QtWidgets import QDialog
 
 from dialogs import CustomConfirmDialog, CustomInputDialog
 from translations import tr
+from ui_common import get_open_file_name
 
 
 class TrackActions(QObject):
@@ -177,7 +174,7 @@ class TrackActions(QObject):
             # Новый путь может быть уже занят другим треком в БД. Без этой
             # проверки UPDATE упрётся в UNIQUE constraint на tracks.file_path.
             if self.db.get_track_by_path(new_path) is not None:
-                QMessageBox.warning(
+                CustomConfirmDialog.information(
                     self.parent_widget, tr("Fix metadata", lang),
                     tr(
                         "A file with this name already exists in the database",
@@ -194,7 +191,7 @@ class TrackActions(QObject):
                 # переименование упало — путь в базе не трогаем.
                 os.rename(old_path, new_path)
             except Exception as e:
-                QMessageBox.warning(
+                CustomConfirmDialog.information(
                     self.parent_widget, tr("Fix metadata", lang),
                     tr("Could not rename file:\n{e}", lang).format(e=e),
                 )
@@ -242,12 +239,11 @@ class TrackActions(QObject):
         if not row:
             return
 
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self.parent_widget,
             tr("Select new cover", lang),
             "",
             "Images (*.jpg *.jpeg *.png *.webp)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
@@ -293,7 +289,7 @@ class TrackActions(QObject):
 
         except Exception as e:
             print(f"[cover-edit] failed: {e}")
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self.parent_widget, tr("Error", lang),
                 f"Failed to change cover: {e}",
             )
@@ -308,7 +304,7 @@ class TrackActions(QObject):
 
         file_path = row["file_path"]
         if not os.path.isfile(file_path):
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self.parent_widget,
                 tr("Trim audio", lang),
                 tr("File not found:\n{path}", lang).format(path=file_path),
@@ -318,7 +314,7 @@ class TrackActions(QObject):
         # pydub/numpy/ffmpeg — внешние зависимости; без них редактор
         # не сможет ни построить волну, ни перекодировать файл.
         if importlib.util.find_spec("pydub") is None:
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self.parent_widget,
                 tr("Trim audio", lang),
                 tr(
@@ -328,7 +324,7 @@ class TrackActions(QObject):
             )
             return
         if importlib.util.find_spec("numpy") is None:
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self.parent_widget,
                 tr("Trim audio", lang),
                 tr(
@@ -338,7 +334,7 @@ class TrackActions(QObject):
             )
             return
         if shutil.which("ffmpeg") is None:
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self.parent_widget,
                 tr("Trim audio", lang),
                 tr(

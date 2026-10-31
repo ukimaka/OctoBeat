@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
     QMenu,
-    QMessageBox,
+    QProgressDialog,
     QSizeGrip,
     QTabBar,
     QTabWidget,
@@ -54,14 +54,15 @@ from title_bar import CustomTitleBar
 from track_actions import TrackActions
 from track_menu import TrackContextMenu
 from translations import tr
-from ui_common import IconProvider
+from ui_common import IconProvider, apply_menu_depth
+from updater import UpdateChecker, UpdateDownloader, apply_update
 
 
 class CustomTabBar(QTabBar):
     def sizeHint(self):
         size = super().sizeHint()
-        # Принудительно делаем панель вкладок высотой 42 пикселя
-        size.setHeight(max(size.height(), 42))
+        # Принудительно делаем панель вкладок высотой 38 пикселей
+        size.setHeight(max(size.height(), 38))
         return size
 
 # MPRIS (Linux): медиа-клавиши и управление из системного трея/панели.
@@ -86,6 +87,7 @@ class MainWindow(QMainWindow):
         # Делаем окно безрамочным
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.title_bar = CustomTitleBar(self)
+        self.title_bar.setAttribute(Qt.WA_StyledBackground, True)
 
         self.resize(1000, 650)
         self.setMinimumSize(800, 520)
@@ -103,6 +105,10 @@ class MainWindow(QMainWindow):
         self.is_dark_theme = True
         self.icons = IconProvider(is_dark=self.is_dark_theme)
 
+        self._update_checker = None
+        self._update_downloader = None
+        self._update_progress = None
+
         self.lyrics_manager = LyricsManager(
             settings=self.settings,
             media_player=self.media_player,
@@ -113,6 +119,7 @@ class MainWindow(QMainWindow):
         lang = self.settings.value("language", "en")
 
         self.tabs = QTabWidget()
+        self.tabs.setAttribute(Qt.WA_StyledBackground, True)
         self.tabs.setTabBar(CustomTabBar(self.tabs))
 
         tab_bar = self.tabs.tabBar()
@@ -163,6 +170,7 @@ class MainWindow(QMainWindow):
         self.player_bar = PlayerBar(
             self.settings, self.icons, event_filter=self.event_filter
         )
+        self.player_bar.setAttribute(Qt.WA_StyledBackground, True)
         self.lyrics_panel = LyricsPanel(self.settings, self.icons)
         self.appearance = AppearanceManager(
             self.settings,
@@ -217,6 +225,100 @@ class MainWindow(QMainWindow):
 
         if start_mpris is not None:
             start_mpris(self.controller)
+
+        self._maybe_check_updates()
+
+    # ------------------------------------------------------------------
+    #  Обновления
+    # ------------------------------------------------------------------
+    def _maybe_check_updates(self):
+        """Запускает проверку обновлений, если она включена в настройках."""
+        if not bool(self.settings.value("auto_update", True, type=bool)):
+            return
+        self._check_for_updates()
+
+    def _check_for_updates(self):
+        if self._update_checker is not None:
+            return
+        self._update_checker = UpdateChecker(self)
+        self._update_checker.update_available.connect(self._on_update_available)
+        self._update_checker.no_update.connect(self._on_no_update)
+        self._update_checker.finished.connect(self._on_update_check_finished)
+        self._update_checker.start()
+
+    def _on_no_update(self):
+        pass
+
+    def _on_update_check_finished(self):
+        if self._update_checker is not None:
+            self._update_checker.deleteLater()
+            self._update_checker = None
+
+    def _on_update_available(self, version, url):
+        lang = self.settings.value("language", "en")
+        if not CustomConfirmDialog.question(
+            self,
+            tr("Update available", lang),
+            tr(
+                "A new version {version} is available. Download it now?",
+                lang,
+            ).format(version=version),
+        ):
+            return
+        self._start_update_download(url)
+
+    def _start_update_download(self, url):
+        lang = self.settings.value("language", "en")
+        self._update_progress = QProgressDialog(
+            tr("Downloading update...", lang),
+            tr("Cancel", lang),
+            0, 100, self,
+        )
+        self._update_progress.setWindowTitle(tr("Update", lang))
+        self._update_progress.setWindowModality(Qt.WindowModal)
+        self._update_progress.setMinimumDuration(0)
+        self._update_progress.setAutoClose(False)
+        self._update_progress.setAutoReset(False)
+        self._update_progress.setValue(0)
+
+        self._update_downloader = UpdateDownloader(url, self)
+        self._update_downloader.progress.connect(
+            self._update_progress.setValue
+        )
+        self._update_downloader.finished.connect(self._on_update_downloaded)
+        self._update_downloader.error.connect(self._on_update_error)
+        self._update_progress.canceled.connect(self._on_update_cancelled)
+        self._update_downloader.start()
+
+    def _on_update_cancelled(self):
+        if self._update_downloader is not None:
+            self._update_downloader.cancel()
+
+    def _close_update_progress(self):
+        if self._update_progress is not None:
+            self._update_progress.close()
+            self._update_progress.deleteLater()
+            self._update_progress = None
+
+    def _on_update_downloaded(self, filepath):
+        self._close_update_progress()
+        self._update_downloader = None
+        if not apply_update(filepath):
+            lang = self.settings.value("language", "en")
+            CustomConfirmDialog.information(
+                self,
+                tr("Update error", lang),
+                tr("Could not install the downloaded update.", lang),
+            )
+
+    def _on_update_error(self, message):
+        self._close_update_progress()
+        self._update_downloader = None
+        if message:
+            lang = self.settings.value("language", "en")
+            CustomConfirmDialog.information(
+                self, tr("Update error", lang), message
+            )
 
     def resizeEvent(self, event):
         """Позиционирует QSizeGrip в правом нижнем углу при ресайзе."""
@@ -354,6 +456,12 @@ class MainWindow(QMainWindow):
     def _apply_ui_settings(self):
         self.appearance.apply_ui_settings()
         self.is_dark_theme = self.appearance.is_dark_theme
+        # Делегаты кэшируют тему: без явного флага текст остаётся в цветах
+        # предыдущей темы (например, чёрным на Dracula).
+        for page in (self.library_tab, self.playlists_page):
+            delegate = getattr(page, "track_delegate", None)
+            if delegate is not None:
+                delegate.set_dark_theme(self.is_dark_theme)
 
     def _on_metadata_badges_changed(self, enabled: bool):
         if hasattr(self, "library_tab") and self.library_tab.track_delegate:
@@ -485,7 +593,7 @@ class MainWindow(QMainWindow):
         path = self._path_of(item)
         lang = self.settings.value("language", "en")
         if path and not Path(path).exists():
-            QMessageBox.warning(
+            CustomConfirmDialog.information(
                 self, tr("File missing", lang),
                 tr("File not found:\n{path}", lang).format(path=path),
             )
@@ -507,6 +615,7 @@ class MainWindow(QMainWindow):
 
     def _show_folder_context_menu(self, global_pos, folder_id):
         menu = QMenu(self)
+        apply_menu_depth(menu)
         lang = self.settings.value("language", "en")
 
         play_action = QAction(tr("Play this folder only", lang), menu)
@@ -515,6 +624,7 @@ class MainWindow(QMainWindow):
         menu.addAction(play_action)
 
         add_menu = QMenu(tr("Add folder to playlist", lang), menu)
+        apply_menu_depth(add_menu)
         add_menu.setIcon(self._load_icon("add-to-playlist.svg"))
         playlists = db.get_all_playlists()
         if not playlists:

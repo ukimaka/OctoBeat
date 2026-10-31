@@ -28,6 +28,7 @@ from PyQt5.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPalette,
     QPixmap,
     QStandardItem,
     QStandardItemModel,
@@ -36,16 +37,13 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
     QComboBox,
-    QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListView,
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -67,7 +65,9 @@ from dialogs import (
 )
 from musicbrainz_client import get_cached_source_for_path
 from pixmap_utils import draw_centered, draw_cover, pixmap_size
+from styles import is_dark_theme
 from translations import tr
+from ui_common import get_open_file_name
 
 PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
 
@@ -75,7 +75,7 @@ PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playl
 def _theme_is_dark():
     """Текущая тема из QSettings (виджеты читают её при отрисовке)."""
     settings = QSettings("MusicPlayer", "MusicPlayer")
-    return settings.value("theme", "dark") != "light"
+    return is_dark_theme(settings.value("theme", "dark"))
 
 
 def _icon_color():
@@ -290,15 +290,16 @@ class _CoverWidget(QWidget):
         pixmap = QPixmap(self._cover_path) if self._cover_path else QPixmap()
         if not draw_cover(painter, QRectF(rect), pixmap):
             dark = _theme_is_dark()
+            pal = self.palette()
+            surface = pal.color(QPalette.Base)
+            top = surface.lighter(118) if dark else surface.darker(104)
             gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-            if dark:
-                gradient.setColorAt(0.0, QColor("#2e2e2e"))
-                gradient.setColorAt(1.0, QColor("#1e1e1e"))
-            else:
-                gradient.setColorAt(0.0, QColor("#fbfbfb"))
-                gradient.setColorAt(1.0, QColor("#e6e6e6"))
+            gradient.setColorAt(0.0, top)
+            gradient.setColorAt(1.0, surface)
             painter.fillRect(rect, gradient)
-            note = self._note_pixmap("#888888" if dark else "#000000")
+            muted = pal.color(QPalette.WindowText)
+            muted.setAlpha(140)
+            note = self._note_pixmap(muted.name())
             draw_centered(painter, QRectF(rect), note)
 
         if self._hover:
@@ -357,23 +358,27 @@ class _DetailPage(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        palette = self.palette()
         dark = _theme_is_dark()
-        bottom = QColor("#121212") if dark else QColor("#ffffff")
+        # Нижний цвет градиента — фон текущей темы (QPalette.Window),
+        # поэтому страница автоматически подстраивается под любой .qss.
+        bottom = palette.color(QPalette.Window)
 
         if self._top_color is not None:
             top = QColor(self._top_color)
             if not dark:
-                # В светлой теме приглушаем цвет обложки, уводя его в белый.
-                top = _blend(top, QColor("#ffffff"), 0.6)
+                # В светлой теме приглушаем цвет обложки, уводя его в фон.
+                top = _blend(top, bottom, 0.6)
         else:
-            top = bottom
+            top = QColor(bottom)
 
         gradient = QLinearGradient(0, 0, 0, self.height())
         gradient.setColorAt(0.0, top)
         if dark:
             gradient.setColorAt(0.3, bottom)
         else:
-            gradient.setColorAt(0.45, QColor("#fafafa"))
+            # Светлая тема: плавный переход обложка → фон без «жёсткого» стыка.
+            gradient.setColorAt(0.45, _blend(top, bottom, 0.75))
         gradient.setColorAt(1.0, bottom)
         painter.fillRect(self.rect(), gradient)
 
@@ -584,9 +589,9 @@ class PlaylistsPage(QWidget):
             return
 
         names = [p["name"] for p in targets]
-        name, ok = QInputDialog.getItem(
+        name, ok = CustomInputDialog.get_item(
             self, tr("Add to another playlist", lang),
-            tr("Choose playlist:", lang), names, 0, False,
+            tr("Choose playlist:", lang), names, 0,
         )
         if not ok or not name:
             return
@@ -720,7 +725,7 @@ class PlaylistsPage(QWidget):
             " font-size: 22px; font-weight: 600; border: none;"
             " border-radius: 16px; background: transparent; padding: 0;"
             "}"
-            "QPushButton:hover { background: rgba(81, 81, 171, 0.35); }"
+            "QPushButton:hover { background: palette(highlight); }"
         )
         self.add_tracks_button.clicked.connect(self._on_bulk_add)
 
@@ -858,10 +863,9 @@ class PlaylistsPage(QWidget):
         if self.current_playlist_id is None:
             return
         lang = _lang()
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self, tr("Choose photo", lang), str(Path.home()),
             "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
-            options=QFileDialog.DontUseNativeDialog,
         )
         if not path:
             return
@@ -875,7 +879,9 @@ class PlaylistsPage(QWidget):
                     old.unlink(missing_ok=True)
             shutil.copyfile(path, dest)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Не удалось сохранить обложку:\n{e}")
+            CustomConfirmDialog.information(
+                self, "Error", f"Не удалось сохранить обложку:\n{e}"
+            )
             return
 
         db.update_playlist_cover(self.current_playlist_id, str(dest))
@@ -1021,7 +1027,9 @@ class PlaylistsPage(QWidget):
         data = item.data(Qt.UserRole) or {}
         path = data.get("path")
         if path and not Path(path).exists():
-            QMessageBox.warning(self, "File missing", f"Файл не найден:\n{path}")
+            CustomConfirmDialog.information(
+                self, "File missing", f"Файл не найден:\n{path}"
+            )
             return
         ids = []
         for i in range(self.tracks_list.count()):
