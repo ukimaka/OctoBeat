@@ -5,9 +5,6 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.building.datastruct import Tree
-
-
 PROJECT_ROOT = Path(SPECPATH).resolve()
 APP_NAME = "OctoBeat"
 
@@ -86,7 +83,10 @@ if sys.platform == "win32":
             )
 
     # VLC's plugin tree contains codecs, demuxers, audio outputs, etc.
-    datas += Tree(str(plugins_dir), prefix="vlc/plugins")
+    # Keep this a 2-tuple (source, destination): PyInstaller expands the
+    # directory recursively. Tree() returns 3-tuples, which Analysis()
+    # rejects because it expects (source, destination) pairs.
+    datas.append((str(plugins_dir), "vlc/plugins"))
 
     # Keep the VLC license texts next to the bundled runtime when present.
     for license_name in ("COPYING", "COPYING.LIB"):
