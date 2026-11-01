@@ -43,6 +43,17 @@ class _RemotePlaylistDownloadWorker(QObject):
         self.playlist_id = playlist_id
         self.token = token
         self.music_folder = music_folder
+        self._stopped = False
+        self._current_worker = None
+
+    def stop(self) -> None:
+        self._stopped = True
+        worker = self._current_worker
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
 
     def run(self) -> None:
         from youtube_worker import YoutubeWorker
@@ -65,7 +76,7 @@ class _RemotePlaylistDownloadWorker(QObject):
         failures: list[str] = []
         total = len(tracks)
         for index, track in enumerate(tracks):
-            if QThread.currentThread().isInterruptionRequested():
+            if self._stopped or QThread.currentThread().isInterruptionRequested():
                 break
             source = str(track.get("source_id") or "").strip()
             if not source:
@@ -75,13 +86,17 @@ class _RemotePlaylistDownloadWorker(QObject):
 
             self.progress.emit(index, total)
             worker = YoutubeWorker(source, self.music_folder)
+            self._current_worker = worker
             downloaded: list[str] = []
             errors: list[str] = []
             worker.finished.connect(downloaded.append)
             worker.error.connect(errors.append)
             worker.run()
+            self._current_worker = None
             paths.extend(downloaded)
             failures.extend(errors)
+            if self._stopped:
+                break
 
         self.progress.emit(total, total)
         if not paths and failures:
@@ -292,6 +307,46 @@ class ImportFlow(QObject):
             return token
         return None
 
+    def _stop_current_worker(self) -> None:
+        """Просит текущий воркер завершиться (кнопка Cancel/закрытие)."""
+        worker = self._worker
+        thread = self._thread
+        if thread is not None:
+            thread.requestInterruption()
+        if worker is None:
+            return
+        stop = getattr(worker, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception:
+                pass
+
+    def shutdown(self) -> None:
+        """Останавливает импорт/скачивание при закрытии приложения."""
+        self._stop_current_worker()
+        thread = self._thread
+        worker = self._worker
+        self._thread = None
+        self._worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                if thread.isRunning():
+                    thread.wait(2000)
+                thread.deleteLater()
+            except RuntimeError:
+                pass
+        if worker is not None:
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+        if self._progress_dialog is not None:
+            self._progress_dialog.close()
+            self._progress_dialog.deleteLater()
+            self._progress_dialog = None
+
     def _run_worker_with_progress(self, worker, title, on_finished):
         cancel_text = tr("Cancel", self.settings.value("language", "en"))
         self._progress_dialog = QProgressDialog(
@@ -306,12 +361,27 @@ class ImportFlow(QObject):
         worker.moveToThread(thread)
 
         def _on_progress(done, total):
-            percent = int(done * 100 / total) if total else 0
-            self._progress_dialog.setValue(percent)
+            if self._progress_dialog is not None:
+                percent = int(done * 100 / total) if total else 0
+                self._progress_dialog.setValue(percent)
 
         def _cleanup():
+            thread.requestInterruption()
             thread.quit()
-            thread.wait()
+            if thread.isRunning():
+                thread.wait(2000)
+            try:
+                worker.deleteLater()
+                thread.deleteLater()
+            except RuntimeError:
+                pass
+            if self._thread is thread:
+                self._thread = None
+                self._worker = None
+            if self._progress_dialog is not None:
+                self._progress_dialog.close()
+                self._progress_dialog.deleteLater()
+                self._progress_dialog = None
 
         worker.progress.connect(_on_progress)
         worker.finished.connect(on_finished)
@@ -327,9 +397,7 @@ class ImportFlow(QObject):
             )
 
         thread.started.connect(worker.run)
-        self._progress_dialog.canceled.connect(
-            lambda: thread.requestInterruption()
-        )
+        self._progress_dialog.canceled.connect(self._stop_current_worker)
 
         self._worker = worker
         self._thread = thread

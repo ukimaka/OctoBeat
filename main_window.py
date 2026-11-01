@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self._update_checker = None
         self._update_downloader = None
         self._update_progress = None
+        self._shutting_down = False
 
         self.lyrics_manager = LyricsManager(
             settings=self.settings,
@@ -302,7 +303,10 @@ class MainWindow(QMainWindow):
 
     def _on_update_downloaded(self, filepath):
         self._close_update_progress()
+        downloader = self._update_downloader
         self._update_downloader = None
+        if downloader is not None:
+            downloader.deleteLater()
         if not apply_update(filepath):
             lang = self.settings.value("language", "en")
             CustomConfirmDialog.information(
@@ -313,12 +317,42 @@ class MainWindow(QMainWindow):
 
     def _on_update_error(self, message):
         self._close_update_progress()
+        downloader = self._update_downloader
         self._update_downloader = None
+        if downloader is not None:
+            downloader.deleteLater()
         if message:
             lang = self.settings.value("language", "en")
             CustomConfirmDialog.information(
                 self, tr("Update error", lang), message
             )
+
+    def _shutdown_updates(self):
+        """Останавливает проверку и загрузку обновлений при выходе."""
+        checker = self._update_checker
+        self._update_checker = None
+        if checker is not None:
+            try:
+                checker.cancel()
+                checker.quit()
+                if checker.isRunning():
+                    checker.wait(2000)
+                checker.deleteLater()
+            except RuntimeError:
+                pass
+
+        downloader = self._update_downloader
+        self._update_downloader = None
+        if downloader is not None:
+            try:
+                downloader.cancel()
+                downloader.quit()
+                if downloader.isRunning():
+                    downloader.wait(2000)
+                downloader.deleteLater()
+            except RuntimeError:
+                pass
+        self._close_update_progress()
 
     def resizeEvent(self, event):
         """Позиционирует QSizeGrip в правом нижнем углу при ресайзе."""
@@ -491,11 +525,24 @@ class MainWindow(QMainWindow):
         self.player_bar.set_shuffle(self.controller.shuffle)
 
     def closeEvent(self, event):
+        # Повторный closeEvent не должен заново запускать синхронизацию и
+        # дёргать уже остановленные QThread.
+        if self._shutting_down:
+            event.accept()
+            return
+        self._shutting_down = True
+
         c = self.controller
+        self._listening_timer.stop()
         self._flush_listening_time()
         session.save(c, self.settings, self.player_bar.volume())
 
         self.library_tab.save_state()
+
+        # Сначала отменяем все сетевые/фоновые операции, затем ждём их.
+        self._shutdown_updates()
+        if hasattr(self, "import_flow"):
+            self.import_flow.shutdown()
         if hasattr(self, "profile_page"):
             self.profile_page.sync_stats_to_server()
             self.profile_page.shutdown()

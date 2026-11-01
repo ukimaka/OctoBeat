@@ -28,10 +28,12 @@ from PyQt5.QtGui import (
     QPainterPath,
     QPalette,
     QPixmap,
+    QPixmapCache,
 )
 from PyQt5.QtWidgets import QStyle, QStyledItemDelegate
 
 from pixmap_utils import (
+    device_pixel_ratio,
     draw_centered,
     draw_cover,
     draw_source_badge,
@@ -64,6 +66,40 @@ def _theme_is_dark():
     """Текущая тема из QSettings (делегат не всегда знает её заранее)."""
     settings = QSettings("MusicPlayer", "MusicPlayer")
     return is_dark_theme(settings.value("theme", "dark"))
+
+
+def _cached_cover(path, width, height):
+    """Небольшая обложка из глобального QPixmapCache.
+
+    Раньше каждый paintEvent заново читал полноразмерный JPEG с диска и
+    держал его в памяти до конца кадра. Теперь в ограниченный кэш Qt
+    попадает только уменьшенная копия под размер строки.
+    """
+    if not path:
+        return QPixmap()
+    try:
+        stat = os.stat(path)
+        key = f"track-cover:{path}:{stat.st_mtime_ns}:{width}x{height}"
+    except OSError:
+        return QPixmap()
+
+    cached = QPixmapCache.find(key)
+    if isinstance(cached, QPixmap) and not cached.isNull():
+        return cached
+
+    source = QPixmap(path)
+    if source.isNull():
+        return source
+    dpr = device_pixel_ratio()
+    target = QSize(
+        max(1, int(round(width * dpr))),
+        max(1, int(round(height * dpr))),
+    )
+    scaled = source.scaled(
+        target, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+    )
+    QPixmapCache.insert(key, scaled)
+    return scaled
 
 
 def _blend(first, second, ratio):
@@ -508,7 +544,7 @@ class TrackDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipPath(clip)
 
-        pixmap = QPixmap(cover_path) if cover_path else QPixmap()
+        pixmap = _cached_cover(cover_path, rect.width(), rect.height())
         if not draw_cover(painter, QRectF(rect), pixmap):
             painter.fillRect(rect, palette["cover_bg"])
             icon_size = 24

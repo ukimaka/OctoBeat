@@ -159,8 +159,11 @@ class LyricsWorker(QThread):
         игнорируется. Главный поток при этом не блокируется.
         """
         self._cancelled = True
+        self.requestInterruption()
 
     def run(self):
+        if self._cancelled or self.isInterruptionRequested():
+            return
         try:
             result = fetch_lyrics(self.artist, self.title, self.duration)
         except Exception as e:  # noqa: BLE001 — воркер не должен ронять поток
@@ -168,7 +171,7 @@ class LyricsWorker(QThread):
                 self.failed.emit(self.track_id, str(e))
             return
 
-        if self._cancelled:
+        if self._cancelled or self.isInterruptionRequested():
             return
 
         if result is None:
@@ -185,7 +188,7 @@ class LyricsWorker(QThread):
         self.loaded.emit(self.track_id, synced, plain)
 
     def _save(self, synced, plain):
-        if self._cancelled:
+        if self._cancelled or self.isInterruptionRequested():
             return
         try:
             db.update_track_lyrics(self.track_id, synced, plain)

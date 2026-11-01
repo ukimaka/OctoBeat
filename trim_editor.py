@@ -724,6 +724,8 @@ class AudioTrimDialog(_FramelessDialog):
         if thread is not None and thread.isRunning():
             thread.requestInterruption()
             thread.quit()
+            # Не даём приложению уничтожить ещё работающий QThread.
+            thread.wait(2000)
 
     # ------------------------------------------------------------------
     #  Плеер

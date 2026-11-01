@@ -70,16 +70,28 @@ class _RequestWorker(QThread):
     def __init__(self, func: Callable[[], Any], parent=None):
         super().__init__(parent)
         self._func = func
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Помечает запрос отменённым; сеть прервать нельзя, но результат
+        после закрытия окна уже не нужен."""
+        self._cancelled = True
+        self.requestInterruption()
 
     def run(self) -> None:
+        if self._cancelled or self.isInterruptionRequested():
+            return
         try:
             result = self._func()
         except ApiError as exc:
-            self.failed.emit(str(exc), exc.status_code or 0)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.failed.emit(str(exc), exc.status_code or 0)
         except Exception as exc:  # noqa: BLE001 - UI не должен падать из-за потока
-            self.failed.emit(f"Unexpected error: {exc}", 0)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.failed.emit(f"Unexpected error: {exc}", 0)
         else:
-            self.succeeded.emit(result)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.succeeded.emit(result)
 
 
 class FriendListItemWidget(QWidget):
@@ -759,10 +771,20 @@ class FriendsPage(QWidget):
     #  Завершение
     # ------------------------------------------------------------------
     def shutdown(self) -> None:
-        """Дожидается завершения фоновых запросов при закрытии приложения."""
-        for worker in list(self._workers):
+        """Останавливает все фоновые запросы при закрытии приложения."""
+        self._search_timer.stop()
+        workers = list(self._workers)
+        self._workers.clear()
+        self._refresh_worker = None
+        self._search_worker = None
+        self._action_worker = None
+        for worker in workers:
             try:
+                worker.cancel()
+                worker.quit()
                 if worker.isRunning():
-                    worker.wait(11000)
+                    worker.wait(2000)
+                worker.deleteLater()
             except RuntimeError:
+                # C++-объект уже удалён обработчиком finished.
                 pass

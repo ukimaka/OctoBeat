@@ -36,16 +36,27 @@ class _TokenCheckWorker(QThread):
     def __init__(self, token: str, parent=None):
         super().__init__(parent)
         self.token = token
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Просит воркер не отдавать результат после закрытия приложения."""
+        self._cancelled = True
+        self.requestInterruption()
 
     def run(self) -> None:
+        if self._cancelled or self.isInterruptionRequested():
+            return
         try:
             user = ApiClient(token=self.token, timeout=5).get_me()
         except ApiError as exc:
-            self.checked.emit(False, str(exc), exc.status_code or 0)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.checked.emit(False, str(exc), exc.status_code or 0)
         except Exception as exc:  # noqa: BLE001 - ошибка не должна ронять старт
-            self.checked.emit(False, str(exc), 0)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.checked.emit(False, str(exc), 0)
         else:
-            self.checked.emit(True, str(user.get("username", "")), 200)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.checked.emit(True, str(user.get("username", "")), 200)
 
 
 class AccountMenu(QObject):
@@ -144,8 +155,23 @@ class AccountMenu(QObject):
         self._stats_sync_timer.start()
 
     def shutdown(self) -> None:
-        if self._token_worker is not None and self._token_worker.isRunning():
-            self._token_worker.wait(6000)
+        """Останавливает фоновые проверки и освобождает QThread."""
+        self._notifications_timer.stop()
+        self._stats_sync_timer.stop()
+
+        worker = self._token_worker
+        self._token_worker = None
+        if worker is None:
+            return
+        try:
+            worker.cancel()
+            worker.quit()
+            if worker.isRunning():
+                worker.wait(2000)
+            worker.deleteLater()
+        except RuntimeError:
+            # C++-объект уже удалён.
+            pass
 
     # ------------------------------------------------------------------
     #  Аватарка

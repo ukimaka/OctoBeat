@@ -57,7 +57,20 @@ class UpdateChecker(QThread):
     update_available = pyqtSignal(str, str)   # версия, ссылка на файл
     no_update = pyqtSignal()
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return self._cancelled or self.isInterruptionRequested()
+
     def run(self):
+        if self._is_cancelled():
+            return
         try:
             response = requests.get(
                 RELEASES_API,
@@ -67,20 +80,26 @@ class UpdateChecker(QThread):
             response.raise_for_status()
             data = response.json()
         except Exception:
-            self.no_update.emit()
+            if not self._is_cancelled():
+                self.no_update.emit()
             return
 
+        if self._is_cancelled():
+            return
         tag = str(data.get("tag_name") or "")
         if not tag or _parse_version(tag) <= _parse_version(__version__):
-            self.no_update.emit()
+            if not self._is_cancelled():
+                self.no_update.emit()
             return
 
         url = self._download_url(data)
         if not url:
-            self.no_update.emit()
+            if not self._is_cancelled():
+                self.no_update.emit()
             return
 
-        self.update_available.emit(tag.lstrip("vV"), url)
+        if not self._is_cancelled():
+            self.update_available.emit(tag.lstrip("vV"), url)
 
     @staticmethod
     def _download_url(data):
@@ -110,8 +129,11 @@ class UpdateDownloader(QThread):
 
     def cancel(self):
         self._cancelled = True
+        self.requestInterruption()
 
     def run(self):
+        if self._cancelled or self.isInterruptionRequested():
+            return
         try:
             with requests.get(
                 self._url, stream=True, timeout=REQUEST_TIMEOUT
@@ -123,7 +145,7 @@ class UpdateDownloader(QThread):
 
                 with open(dest, "wb") as handle:
                     for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-                        if self._cancelled:
+                        if self._cancelled or self.isInterruptionRequested():
                             break
                         if not chunk:
                             continue
@@ -134,18 +156,20 @@ class UpdateDownloader(QThread):
                                 min(100, int(received * 100 / total))
                             )
 
-                if self._cancelled:
+                if self._cancelled or self.isInterruptionRequested():
                     try:
                         dest.unlink()
                     except OSError:
                         pass
-                    self.error.emit("")
+                    if not self._cancelled:
+                        self.error.emit("")
                     return
 
                 self.progress.emit(100)
                 self.finished.emit(str(dest))
         except Exception as exc:
-            self.error.emit(str(exc))
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.error.emit(str(exc))
 
     def _filename(self, response):
         """Имя файла из Content-Disposition или из URL."""

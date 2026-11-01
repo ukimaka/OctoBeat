@@ -466,6 +466,7 @@ class ProfileTextBrowser(QTextBrowser):
 
     doubleClicked = pyqtSignal()
     MAX_HEIGHT = 450
+    MAX_IMAGE_CACHE = 6
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -552,6 +553,13 @@ class ProfileTextBrowser(QTextBrowser):
                         available, Qt.SmoothTransformation
                     )
 
+                # Держим только несколько последних картинок: About Me
+                # может содержать много внешних изображений, и без лимита
+                # они оставались бы в памяти до закрытия приложения.
+                if len(self._image_cache) >= self.MAX_IMAGE_CACHE:
+                    self._image_cache.pop(
+                        next(iter(self._image_cache)), None
+                    )
                 variant = QVariant(image)
                 self._image_cache[key] = variant
                 return variant
@@ -663,12 +671,23 @@ class CoverLoader(QThread):
         self.query = (query or "").strip()
         self.artist = (artist or "").strip()
         self.title = (title or "").strip()
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Отменяет загрузку: результат после закрытия окна не нужен."""
+        self._cancelled = True
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return self._cancelled or self.isInterruptionRequested()
 
     def run(self):
+        if self._is_cancelled():
+            return
         cover_file = PROFILE_COVERS_DIR / f"{self.track_id}.jpg"
         if not (cover_file.exists() and cover_file.stat().st_size > 0):
             source = self._find_cover()
-            if not source:
+            if not source or self._is_cancelled():
                 return
             try:
                 PROFILE_COVERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -677,10 +696,19 @@ class CoverLoader(QThread):
                 print(f"[cover] cannot cache cover: {exc}")
                 return
 
-        pixmap = QPixmap()
-        if not pixmap.load(str(cover_file)):
+        # Полноразмерная обложка в сигнале QPixmap — лишние мегабайты:
+        # в профиле она показывается всего 36×36. Уменьшаем до 144 px
+        # (запас под High-DPI) до передачи в GUI-поток.
+        image = QImage(str(cover_file))
+        if image.isNull():
             return
-        self.loaded.emit(self.track_id, pixmap)
+        if image.width() > 144 or image.height() > 144:
+            image = image.scaled(
+                144, 144, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+        if self._is_cancelled():
+            return
+        self.loaded.emit(self.track_id, QPixmap.fromImage(image))
 
     def _find_cover(self):
         """MusicBrainz → YouTube через общий пайплайн метаданных."""
@@ -1009,17 +1037,25 @@ class _FriendProfileWorker(QThread):
         self.user_id = user_id
         self.token = token
 
+    def cancel(self) -> None:
+        self.requestInterruption()
+
     def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
         try:
             client = ApiClient(token=self.token)
             profile = client.get_user_profile(self.user_id)
             playlists = client.get_user_playlists(self.user_id)
         except ApiError as exc:
-            self.failed.emit(str(exc), exc.status_code or 0)
+            if not self.isInterruptionRequested():
+                self.failed.emit(str(exc), exc.status_code or 0)
         except Exception as exc:
-            self.failed.emit(f"Unexpected error: {exc}", 0)
+            if not self.isInterruptionRequested():
+                self.failed.emit(f"Unexpected error: {exc}", 0)
         else:
-            self.loaded.emit(profile, playlists)
+            if not self.isInterruptionRequested():
+                self.loaded.emit(profile, playlists)
 
 
 class _ProfileSyncWorker(QThread):
@@ -1042,7 +1078,12 @@ class _ProfileSyncWorker(QThread):
         self.avatar_path = avatar_path
         self.banner_path = banner_path
 
+    def cancel(self) -> None:
+        self.requestInterruption()
+
     def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
         data = dict(self.payload)
         for key, path in (
             ("avatar_base64", self.avatar_path),
@@ -1055,17 +1096,23 @@ class _ProfileSyncWorker(QThread):
                     Path(path).read_bytes()
                 ).decode("ascii")
             except OSError as exc:
-                self.failed.emit(f"Cannot read profile image: {exc}")
+                if not self.isInterruptionRequested():
+                    self.failed.emit(f"Cannot read profile image: {exc}")
+                return
+            if self.isInterruptionRequested():
                 return
 
         try:
             result = ApiClient(token=self.token).update_my_profile(data)
         except ApiError as exc:
-            self.failed.emit(str(exc))
+            if not self.isInterruptionRequested():
+                self.failed.emit(str(exc))
         except Exception as exc:
-            self.failed.emit(f"Unexpected error: {exc}")
+            if not self.isInterruptionRequested():
+                self.failed.emit(f"Unexpected error: {exc}")
         else:
-            self.synced.emit(result)
+            if not self.isInterruptionRequested():
+                self.synced.emit(result)
 
 
 class ProfilePage(QWidget):
@@ -1691,12 +1738,32 @@ class ProfilePage(QWidget):
             title=title,
         )
         loader.loaded.connect(self._on_cover_loaded)
+        loader.finished.connect(
+            lambda l=loader, tid=track_id: self._on_cover_loader_finished(
+                tid, l
+            )
+        )
         self._cover_loaders[track_id] = loader
         loader.start()
 
+    def _on_cover_loader_finished(self, track_id, loader):
+        """Убирает завершённый QThread из словаря и отдаёт его Qt."""
+        try:
+            if self._cover_loaders.get(track_id) is loader:
+                self._cover_loaders.pop(track_id, None)
+            loader.deleteLater()
+        except RuntimeError:
+            pass
+
     def _on_cover_loaded(self, track_id, pixmap):
-        for label in self._cover_labels.get(track_id, []):
-            label.setPixmap(_cover_pixmap(pixmap, 36))
+        # Ссылки на QLabel больше не нужны после первой установки обложки.
+        labels = self._cover_labels.pop(track_id, [])
+        for label in labels:
+            try:
+                label.setPixmap(_cover_pixmap(pixmap, 36))
+            except RuntimeError:
+                # Виджет уже удалён (страница перерисована/закрыта).
+                pass
 
     @staticmethod
     def _cover_query(artist, title):
@@ -1911,17 +1978,31 @@ class ProfilePage(QWidget):
             self.public_playlists_grid.addWidget(card, index // 2, index % 2)
 
     def shutdown(self):
-        """Дожидается фоновой подгрузки обложек при закрытии приложения."""
-        if self._friend_worker is not None and self._friend_worker.isRunning():
-            self._friend_worker.wait(3000)
-        for worker in list(self._sync_workers):
-            if worker.isRunning():
-                worker.wait(3000)
+        """Останавливает все фоновые QThread профиля при закрытии."""
+        workers = []
+        if self._friend_worker is not None:
+            workers.append(self._friend_worker)
+            self._friend_worker = None
+        workers.extend(self._sync_workers)
         self._sync_workers.clear()
-        for loader in list(self._cover_loaders.values()):
-            if loader.isRunning():
-                loader.wait(3000)
+        workers.extend(self._cover_loaders.values())
         self._cover_loaders.clear()
+        self._cover_labels.clear()
+
+        for worker in workers:
+            try:
+                cancel = getattr(worker, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                else:
+                    worker.requestInterruption()
+                worker.quit()
+                if worker.isRunning():
+                    worker.wait(2000)
+                worker.deleteLater()
+            except RuntimeError:
+                # Воркер уже удалён своим finished-обработчиком.
+                pass
 
     # ------------------------------------------------------------------
     #  Синхронизация с сервером

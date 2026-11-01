@@ -43,8 +43,15 @@ class _AuthWorker(QThread):
         self.mode = mode
         self.username = username
         self.password = password
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+        self.requestInterruption()
 
     def run(self) -> None:
+        if self._cancelled or self.isInterruptionRequested():
+            return
         client = ApiClient()
         try:
             if self.mode == "register":
@@ -53,11 +60,14 @@ class _AuthWorker(QThread):
                 client.register(self.username, self.password)
             data = client.login(self.username, self.password)
         except ApiError as exc:
-            self.failed.emit(str(exc))
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001 - UI не должен падать из-за потока
-            self.failed.emit(f"Unexpected error: {exc}")
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.failed.emit(f"Unexpected error: {exc}")
         else:
-            self.succeeded.emit(data)
+            if not self._cancelled and not self.isInterruptionRequested():
+                self.succeeded.emit(data)
 
 
 class AuthDialog(QDialog):
@@ -181,13 +191,30 @@ class AuthDialog(QDialog):
     # ------------------------------------------------------------------
     #  Закрытие во время запроса
     # ------------------------------------------------------------------
+    def _stop_worker(self) -> bool:
+        """Останавливает запрос; False — поток не успел завершиться."""
+        worker = self._worker
+        if worker is None:
+            return True
+        try:
+            worker.cancel()
+            worker.quit()
+            if worker.isRunning() and not worker.wait(2000):
+                return False
+            self._worker = None
+            worker.deleteLater()
+        except RuntimeError:
+            self._worker = None
+        self._set_busy(False)
+        return True
+
     def reject(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if not self._stop_worker():
             return
         super().reject()
 
     def closeEvent(self, event) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if not self._stop_worker():
             event.ignore()
             return
         super().closeEvent(event)

@@ -18,6 +18,7 @@ import os
 import sys
 
 from PyQt5.QtCore import QLibraryInfo, QLocale, QSettings, Qt, QTranslator
+from PyQt5.QtGui import QPixmapCache
 from PyQt5.QtWidgets import QApplication
 
 import db
@@ -69,6 +70,9 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    # Ограничиваем глобальный кэш обложек: 8 МБ достаточно для списков,
+    # но не позволяет Qt держать десятки мегабайт растров «на всякий случай».
+    QPixmapCache.setCacheLimit(8 * 1024)
     ensure_preset_themes()
     load_theme(settings.value("theme", "dark"), app)
 

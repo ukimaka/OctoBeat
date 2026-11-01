@@ -103,6 +103,10 @@ class ImportWorker(QObject):
         super().__init__()
         self.files = files
         self.target_folder = Path(target_folder)
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
 
     def run(self):
         try:
@@ -117,6 +121,8 @@ class ImportWorker(QObject):
         conflicts = []
 
         for i, src in enumerate(self.files, 1):
+            if self._stopped or QThread.currentThread().isInterruptionRequested():
+                break
             try:
                 status, target = self._copy_to_library(src)
 
@@ -181,11 +187,26 @@ class RescanWorker(QObject):
     finished = pyqtSignal(int, int, int)
     #               metadata_updated, loudness_processed, loudness_failed
 
+    def __init__(self):
+        super().__init__()
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
+
+    def _interrupted(self):
+        return (
+            self._stopped
+            or QThread.currentThread().isInterruptionRequested()
+        )
+
     def run(self):
         # Шаг 1: метаданные (быстро)
         meta_rows = db.get_all_tracks()
         meta_total = len(meta_rows)
         for row in meta_rows:
+            if self._interrupted():
+                break
             try:
                 path = row["file_path"]
                 current = metadata.read_metadata(path)
@@ -274,6 +295,11 @@ class RescanWorker(QObject):
             except Exception as e:
                 print(f"[rescan] failed {row['file_path']}: {e}")
 
+        if self._interrupted():
+            self.progress.emit(1, 1)
+            self.finished.emit(0, 0, 0)
+            return
+
         # Шаг 2: громкость для треков без loudness
         loud_rows = db.get_tracks_without_loudness()
         loud_total = len(loud_rows)
@@ -290,6 +316,8 @@ class RescanWorker(QObject):
         self.progress.emit(meta_total, grand_total)
 
         for i, row in enumerate(loud_rows, 1):
+            if self._interrupted():
+                break
             try:
                 loudness = get_mean_volume(row["file_path"])
                 if loudness is not None:

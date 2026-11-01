@@ -571,20 +571,48 @@ class YoutubeDialog(_FramelessDialog):
     #  Очистка
     # ------------------------------------------------------------------
     def _cleanup_search_thread(self):
-        if self._search_thread is not None:
-            self._search_thread.quit()
-            self._search_thread.wait()
-            self._search_thread = None
-            self._search_worker = None
+        thread = self._search_thread
+        worker = self._search_worker
+        self._search_thread = None
+        self._search_worker = None
+        if worker is not None:
+            worker.stop()
+        if thread is not None:
+            try:
+                thread.requestInterruption()
+                thread.quit()
+                if thread.isRunning():
+                    thread.wait(2000)
+                if worker is not None:
+                    worker.deleteLater()
+                thread.deleteLater()
+            except RuntimeError:
+                pass
 
     def _cleanup_download_thread(self):
-        if self._download_thread is not None:
-            self._download_thread.quit()
-            self._download_thread.wait()
-            self._download_thread = None
-            self._download_worker = None
+        thread = self._download_thread
+        worker = self._download_worker
+        self._download_thread = None
+        self._download_worker = None
+        if worker is not None:
+            worker.stop()
+        if thread is not None:
+            try:
+                thread.requestInterruption()
+                thread.quit()
+                if thread.isRunning():
+                    thread.wait(2000)
+                if worker is not None:
+                    worker.deleteLater()
+                thread.deleteLater()
+            except RuntimeError:
+                pass
 
     def _shutdown(self):
+        # reject() и closeEvent() могут прийти подряд — не дублируем остановку.
+        if getattr(self, "_shutting_down", False):
+            return
+        self._shutting_down = True
         if self._search_worker is not None:
             self._search_worker.stop()
         if self._download_worker is not None:

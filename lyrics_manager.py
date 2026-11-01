@@ -380,9 +380,12 @@ class LyricsManager(QObject):
         for worker in workers:
             try:
                 worker.cancel()
+                worker.quit()
                 if worker.isRunning():
                     worker.wait(2000)
+                worker.deleteLater()
             except RuntimeError:
+                # C++-объект уже удалён обработчиком finished.
                 pass
         self._lyrics_workers.clear()
         # Закрываем полноэкранный оверлей (основной плеер не трогаем).
