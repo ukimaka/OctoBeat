@@ -350,17 +350,25 @@ class CrossfadePlayer(QObject):
         self._track_loudness = loudness_db
         self._apply_current_volume()
 
-    def set_position(self, pos):
-        """Обрезает позицию по длительности трека."""
+    def safe_seek(self, pos):
+        """Безопасный seek: пауза, set_time, возобновление.
+
+        libVLC set_time() может блокировать во время воспроизведения,
+        поэтому вся работа делегируется VlcAudioPlayer.safe_seek().
+        """
         if self._shutdown:
-            return
+            return False
         dur = self._active().duration()
         if dur > 0:
             pos = max(0, min(pos, dur))
         else:
             pos = max(0, pos)
         self._about_to_finish_sent = False
-        self._active().set_position(pos)
+        return self._active().safe_seek(pos)
+
+    def set_position(self, pos):
+        """Обрезает позицию по длительности трека."""
+        return self.safe_seek(pos)
 
     def position(self):
         return self._active().position()

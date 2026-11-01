@@ -62,9 +62,16 @@ class AppEventFilter(QObject):
             if callable(tooltip) and tooltip():
                 QToolTip.hideText()
 
-        if (etype == QEvent.KeyPress
+        if etype == QEvent.ShortcutOverride:
+            if self._is_own_window_focus() and self._is_player_hotkey(event):
+                # Claim the shortcut before QTreeWidget/QListWidget can
+                # consume Space or Ctrl+Left/Right for their own actions.
+                event.accept()
+                return True
+        elif (etype == QEvent.KeyPress
                 and self._is_own_window_focus()
                 and self._handle_hotkey(event)):
+            event.accept()
             return True
         return super().eventFilter(obj, event)
 
@@ -73,8 +80,29 @@ class AppEventFilter(QObject):
         focus = QApplication.focusWidget()
         return focus is not None and focus.window() is self.window
 
+    def _is_player_hotkey(self, event):
+        """True, если клавишу обрабатывает _handle_hotkey()."""
+        key = event.key()
+        mods = event.modifiers()
+        focus = QApplication.focusWidget()
+
+        # Ctrl+F работает всегда — даже из текстового поля.
+        if key == Qt.Key_F and mods == Qt.ControlModifier:
+            return True
+        if self._is_text_input(focus):
+            return False
+        if mods == Qt.ControlModifier:
+            return key in (
+                Qt.Key_Right, Qt.Key_Left, Qt.Key_Up, Qt.Key_Down
+            )
+        if key == Qt.Key_Space and mods == Qt.NoModifier:
+            return not isinstance(focus, (QAbstractButton, QComboBox))
+        return False
+
     def _handle_hotkey(self, event):
         """Обрабатывает хоткей. True — событие поглощено."""
+        if not self._is_player_hotkey(event):
+            return False
         key = event.key()
         mods = event.modifiers()
         focus = QApplication.focusWidget()

@@ -362,11 +362,16 @@ class TrackActions(QObject):
         from trim_dialog import AudioTrimDialog
 
         media_player = self.controller.media_player
-        is_current = (track_id == self.controller.current_track_id)
-        was_playing = is_current and media_player.is_playing()
-        if is_current:
-            # Освобождаем файл перед возможной атомарной заменой.
-            media_player.release()
+        current_track_id = self.controller.current_track_id
+        current_row = (
+            self.db.get_track_by_id(current_track_id)
+            if current_track_id is not None else None
+        )
+        was_playing = media_player.is_playing()
+
+        # Всегда полностью освобождаем основной плеер перед trim-превью:
+        # так аудиовыход и файл не делятся с VlcAudioPlayer диалога.
+        media_player.release()
 
         dialog = AudioTrimDialog(
             self.parent_widget,
@@ -388,14 +393,15 @@ class TrackActions(QObject):
                     )
                     self.changed.emit()
         finally:
-            # Даже если диалог отменили или обрезка упала, возвращаем
-            # текущий трек в плеер.
-            if is_current:
-                loudness = row["loudness"]
+            # После закрытия диалога возвращаем текущий трек в основной
+            # плеер (или просто обновляем медиа, если он был на паузе).
+            if current_row is not None:
+                current_path = current_row["file_path"]
+                loudness = current_row["loudness"]
                 if was_playing:
-                    media_player.play(file_path, loudness=loudness)
+                    media_player.play(current_path, loudness=loudness)
                 else:
-                    media_player.set_media(file_path, loudness=loudness)
+                    media_player.set_media(current_path, loudness=loudness)
 
         if duration is not None:
             CustomConfirmDialog.information(
