@@ -30,3 +30,13 @@ dist/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Временные артефакты
+i3_config_temp
+idth: 18px;
+orld
+
+# Локальные настройки ИИ-агентов
+.cecli/
+.cecli.conf.yml
+.aider*
