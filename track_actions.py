@@ -345,8 +345,8 @@ class TrackActions(QObject):
             )
             return
 
-        # Импорт ленивый: trim_editor тянет QtMultimedia и pydub/numpy.
-        from trim_editor import AudioTrimDialog
+        # Импорт ленивый: trim_dialog тянет QtMultimedia и pydub/numpy.
+        from trim_dialog import AudioTrimDialog
 
         media_player = self.controller.media_player
         is_current = (track_id == self.controller.current_track_id)

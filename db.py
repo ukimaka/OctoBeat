@@ -29,6 +29,7 @@ def get_connection():
     # «database is locked», пока главный поток читает библиотеку.
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -180,6 +181,16 @@ def init_db():
                    WHERE id = 1"""
             )
 
+        # Индексы для частых запросов: папки, плейлисты, история.
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_tracks_folder
+                ON tracks(folder_id);
+            CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist
+                ON playlist_tracks(playlist_id);
+            CREATE INDEX IF NOT EXISTS idx_play_history_track
+                ON play_history(track_id);
+        """)
+
 
 # ---------------------------------------------------------------------------
 #  Tracks
@@ -195,6 +206,35 @@ def add_track(file_path):
             return cur.lastrowid
     except sqlite3.IntegrityError:
         return None
+
+
+def add_tracks_with_metadata(entries):
+    """Пакетно добавляет треки и их метаданные в одной транзакции.
+
+    ``entries`` — последовательность кортежей
+    ``(file_path, title, artist, album, duration)``.
+
+    Возвращает ``(added, duplicates)``. Дубликаты определяются по
+    уникальному ``file_path`` и не считаются добавленными.
+    """
+    rows = [tuple(entry) for entry in entries]
+    if not rows:
+        return 0, 0
+
+    with get_connection() as conn:
+        before = conn.total_changes
+        conn.executemany(
+            "INSERT OR IGNORE INTO tracks (file_path) VALUES (?)",
+            [(row[0],) for row in rows],
+        )
+        added = conn.total_changes - before
+        conn.executemany(
+            """UPDATE tracks
+               SET title = ?, artist = ?, album = ?, duration = ?
+               WHERE file_path = ?""",
+            [(row[1], row[2], row[3], row[4], row[0]) for row in rows],
+        )
+    return added, len(rows) - added
 
 
 def get_all_tracks():

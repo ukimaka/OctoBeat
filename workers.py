@@ -117,8 +117,9 @@ class ImportWorker(QObject):
             return
 
         total = len(self.files)
-        added = already = name_taken = failed = 0
+        name_taken = failed = 0
         conflicts = []
+        pending = []
 
         for i, src in enumerate(self.files, 1):
             if self._stopped or QThread.currentThread().isInterruptionRequested():
@@ -132,25 +133,37 @@ class ImportWorker(QObject):
                 elif status == "failed":
                     failed += 1
                 elif status in ("copied", "same_path"):
-                    track_id = db.add_track(target)
-                    if track_id is None:
-                        already += 1
-                    else:
+                    try:
                         md = metadata.read_metadata(target)
-                        db.update_track_metadata(
-                            track_id,
-                            title=md["title"],
-                            artist=md["artist"],
-                            album=md["album"],
-                            duration=md["duration"],
-                        )
-                        added += 1
+                    except Exception as e:
+                        print(f"[import] metadata error with {target}: {e}")
+                        md = {
+                            "title": Path(target).stem,
+                            "artist": "Unknown Artist",
+                            "album": None,
+                            "duration": 0,
+                        }
+                    pending.append((
+                        target,
+                        md["title"],
+                        md["artist"],
+                        md["album"],
+                        md["duration"],
+                    ))
             except Exception as e:
                 failed += 1
                 print(f"[import] error with {src}: {e}")
 
             if i % 5 == 0 or i == total:
                 self.progress.emit(i, total)
+
+        added = already = 0
+        if pending:
+            try:
+                added, already = db.add_tracks_with_metadata(pending)
+            except Exception as e:
+                failed += len(pending)
+                print(f"[import] batch DB insert failed: {e}")
 
         self.finished.emit(added, already, name_taken, failed, conflicts)
 

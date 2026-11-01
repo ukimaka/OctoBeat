@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QFont,
@@ -33,12 +33,13 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QListView,
     QListWidget,
-    QListWidgetItem,
+    QStyle,
+    QStyledItemDelegate,
     QTextEdit,
     QWidget,
 )
 
-from dialogs import colored_pixmap
+from dialog_base import colored_pixmap
 from pixmap_utils import draw_centered, draw_cover, pixmap_size
 from translations import tr
 from styles import is_dark_theme
@@ -369,3 +370,140 @@ class _DescriptionEdit(QTextEdit):
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
         self.editing_finished.emit(self.toPlainText())
+
+
+class PlaylistCoverDelegate(QStyledItemDelegate):
+    """Плитка плейлиста: квадратная обложка + название, кнопка Play при hover."""
+
+    COVER_SIZE = 160
+    COVER_RADIUS = 8
+    TILE_WIDTH = 180
+    TILE_HEIGHT = 210
+    PLAY_BTN_SIZE = 44
+    PLAY_MARGIN = 8
+
+    def __init__(self, parent=None, is_dark_theme=None):
+        super().__init__(parent)
+        self._is_dark_theme = is_dark_theme
+        self._play = colored_pixmap("play.svg", 20, "#ffffff")
+        self._note_cache = {}
+
+    def set_dark_theme(self, is_dark_theme):
+        """Задаёт тему явно (None — определять из QSettings при отрисовке)."""
+        self._is_dark_theme = None if is_dark_theme is None else bool(is_dark_theme)
+
+    def is_dark(self):
+        if self._is_dark_theme is not None:
+            return self._is_dark_theme
+        return _theme_is_dark()
+
+    def _palette(self):
+        if self.is_dark():
+            return {
+                "title": QColor("#ffffff"),
+                "cover_bg": QColor("#282828"),
+                "note": "#888888",
+            }
+        return {
+            "title": QColor("#000000"),
+            "cover_bg": QColor("#f0f0f0"),
+            "note": "#000000",
+        }
+
+    def _note_pixmap(self, color):
+        """Нота-заглушка, перекрашенная и кэшированная по цвету."""
+        note = self._note_cache.get(color)
+        if note is None:
+            note = colored_pixmap("music-note.svg", 48, color)
+            self._note_cache[color] = note
+        return note
+
+    def sizeHint(self, option, index):
+        return QSize(self.TILE_WIDTH, self.TILE_HEIGHT)
+
+    @classmethod
+    def cover_rect(cls, item_rect):
+        return QRect(
+            item_rect.x() + (item_rect.width() - cls.COVER_SIZE) // 2,
+            item_rect.y() + 8,
+            cls.COVER_SIZE,
+            cls.COVER_SIZE,
+        )
+
+    @classmethod
+    def play_rect(cls, item_rect):
+        cover = cls.cover_rect(item_rect)
+        return QRect(
+            cover.right() - cls.PLAY_BTN_SIZE - cls.PLAY_MARGIN,
+            cover.bottom() - cls.PLAY_BTN_SIZE - cls.PLAY_MARGIN,
+            cls.PLAY_BTN_SIZE,
+            cls.PLAY_BTN_SIZE,
+        )
+
+    def paint(self, painter, option, index):
+        if painter is None:
+            return
+
+        data = index.data(Qt.UserRole) or {}
+        rect = option.rect
+        hover = bool(option.state & QStyle.State_MouseOver)
+        palette = self._palette()
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        self._draw_cover(painter, self.cover_rect(rect), data.get("cover_path"), hover,
+                         palette)
+
+        title_font = QFont(painter.font())
+        title_font.setPixelSize(13)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.setPen(palette["title"])
+
+        text_rect = QRect(
+            rect.x() + 8,
+            self.cover_rect(rect).bottom() + 10,
+            rect.width() - 16,
+            20,
+        )
+        title = QFontMetrics(title_font).elidedText(
+            data.get("name") or "Unknown", Qt.ElideRight, text_rect.width()
+        )
+        painter.drawText(text_rect, Qt.AlignHCenter | Qt.AlignVCenter, title)
+
+        painter.restore()
+
+    def _draw_cover(self, painter, rect, cover_path, hover, palette):
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(rect), self.COVER_RADIUS, self.COVER_RADIUS)
+
+        painter.save()
+        painter.setClipPath(clip)
+
+        pixmap = QPixmap(cover_path) if cover_path else QPixmap()
+        if not draw_cover(painter, QRectF(rect), pixmap):
+            painter.fillRect(rect, palette["cover_bg"])
+            note = self._note_pixmap(palette["note"])
+            draw_centered(painter, QRectF(rect), note)
+
+        if hover:
+            painter.fillRect(rect, QColor(0, 0, 0, 120))
+
+        painter.restore()
+
+        if hover:
+            btn = QRect(
+                rect.right() - self.PLAY_BTN_SIZE - self.PLAY_MARGIN,
+                rect.bottom() - self.PLAY_BTN_SIZE - self.PLAY_MARGIN,
+                self.PLAY_BTN_SIZE,
+                self.PLAY_BTN_SIZE,
+            )
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#1DB954"))
+            painter.drawEllipse(btn)
+            draw_centered(painter, QRectF(btn), self._play)
+            painter.restore()
