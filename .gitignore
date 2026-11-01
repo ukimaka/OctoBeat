@@ -1,10 +1,32 @@
+# Временные файлы и артефакты
+i3_config_temp
+idth: 18px;
+orld
+
+# Файлы базы данных SQLite (WAL и shared memory)
+music.db-shm
+music.db-wal
+music.db*
+
+# Виртуальное окружение
 .venv/
+venv/
+env/
+
+# Кэш Python
 __pycache__/
-*.pyc
-music.db
-*.spec
+*.py[cod]
+*$py.class
+
+# Сборки
 build/
 dist/
-.cache/
-agent-reach-venv
-.cecli*
+*.AppImage
+*.spec
+
+# Настройки редакторов и ОС
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

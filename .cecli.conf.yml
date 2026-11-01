@@ -1,0 +1,5 @@
+openai-api-base: http://127.0.0.1:8080/v1
+openai-api-key: local
+model: openai/saluki
+agent-config:
+  skip_cli_confirmations: true
