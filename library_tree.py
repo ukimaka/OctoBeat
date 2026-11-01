@@ -16,11 +16,15 @@
 
 """Дерево библиотеки с Drag & Drop и кликом по иконке Play."""
 
-from PyQt5.QtCore import QItemSelectionModel, Qt, pyqtSignal
-from PyQt5.QtWidgets import QTreeWidget
+import os
+
+from PyQt5.QtCore import QItemSelectionModel, QRect, Qt, pyqtSignal
+from PyQt5.QtWidgets import QAbstractItemView, QTreeWidget
 
 import db
 from delegates import TrackDelegate
+
+_HOVER_DEBUG = os.environ.get("OCTOBEAT_HOVER_DEBUG") == "1"
 
 
 class LibraryTreeWidget(QTreeWidget):
@@ -33,6 +37,42 @@ class LibraryTreeWidget(QTreeWidget):
     play_requested = pyqtSignal(object)  # QTreeWidgetItem с треком
     # Дерево изменило folder_id треков в БД (после drop).
     library_changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.verticalScrollBar().setSingleStep(20)
+        # Кэш последнего hover: при 8K-мыши mouseMoveEvent приходит тысячи
+        # раз в секунду, поэтому пересчитываем строку/иконку только при
+        # переходе курсора между строками или зоной trash-иконки.
+        self._last_hovered_index = None
+        self._last_row_rect = None
+        self._last_hovered_icon = False
+        self._last_trash_rect = None
+
+    def _repaint_hover_rows(self, *row_rects):
+        """Перерисовывает только указанные строки, не весь viewport."""
+        viewport = self.viewport()
+        area = viewport.rect()
+        seen = set()
+        for row_rect in row_rects:
+            if row_rect is None:
+                continue
+            rect = QRect(
+                0, row_rect.y(), viewport.width(), row_rect.height()
+            ).intersected(area)
+            if rect.isEmpty():
+                continue
+            key = (rect.x(), rect.y(), rect.width(), rect.height())
+            if key in seen:
+                continue
+            seen.add(key)
+            if _HOVER_DEBUG:
+                print(
+                    f"[hover] {type(self).__name__} repaint "
+                    f"y={rect.y()} h={rect.height()}"
+                )
+            viewport.update(rect)
 
     def dropEvent(self, event):
         super().dropEvent(event)
@@ -56,8 +96,8 @@ class LibraryTreeWidget(QTreeWidget):
             event.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
         ):
             self.clearSelection()
-        # CHANGED: сбрасываем устаревший hover после клика.
-        self.viewport().update()
+        # Сбрасываем только строку, где был hover, а не весь viewport.
+        self._repaint_hover_rows(self._last_row_rect)
 
     def keyPressEvent(self, event):
         # CHANGED: Ctrl+A переключает «выбрать всё / снять выделение».
@@ -97,7 +137,7 @@ class LibraryTreeWidget(QTreeWidget):
                 if event.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier):
                     # CHANGED: let Qt handle native multi-selection (Ctrl/Shift+click)
                     super().mousePressEvent(event)
-                    self.viewport().update()
+                    self._repaint_hover_rows(self._last_row_rect)
                     return
                 self.selectionModel().select(
                     self.indexFromItem(item),
@@ -105,46 +145,75 @@ class LibraryTreeWidget(QTreeWidget):
                     | QItemSelectionModel.Rows,
                 )
         super().mousePressEvent(event)
-        # CHANGED: force repaint to clear stale hover state
-        self.viewport().update()
+        # Перерисовываем только строку с потенциально устаревшим hover.
+        self._repaint_hover_rows(self._last_row_rect)
 
     def leaveEvent(self, event):
-        # CHANGED: clear stale hover state when the mouse leaves the view
-        self.viewport().update()
+        # Сбрасываем кэш и hover-иконку, иначе после повторного входа
+        # курсора на ту же строку состояние может остаться устаревшим.
+        old_row_rect = self._last_row_rect
+        self._last_hovered_index = None
+        self._last_row_rect = None
+        self._last_hovered_icon = False
+        self._last_trash_rect = None
+        delegate = self.itemDelegate()
+        if getattr(delegate, "hovered_trash_index", None) is not None:
+            delegate.hovered_trash_index = None
+            delegate.hovered_trash_rect = None
+        self._repaint_hover_rows(old_row_rect)
         super().leaveEvent(event)
 
     def mouseMoveEvent(self, event):
-        # CHANGED: view сам отслеживает наведение на иконку мусорки.
-        super().mouseMoveEvent(event)
-        index = self.indexAt(event.pos())
+        pos = event.pos()
+        index = self.indexAt(pos)
         delegate = self.itemDelegate()
 
-        if index.isValid() and hasattr(delegate, "get_trash_rect_for_index"):
-            trash_rect = delegate.get_trash_rect_for_index(self, index)
-
-            old_index = delegate.hovered_trash_index
-            old_rect = delegate.hovered_trash_rect
-
-            if trash_rect and trash_rect.contains(event.pos()):
-                delegate.hovered_trash_index = index
-                delegate.hovered_trash_rect = trash_rect
+        # QModelIndex() не равен None, поэтому для пустой области
+        # используем None как единый ключ — иначе update() вызывался бы
+        # на каждое движение мыши вне строк.
+        index_key = index if index.isValid() else None
+        row_rect = self.visualRect(index) if index.isValid() else None
+        old_row_rect = self._last_row_rect
+        row_changed = (
+            index_key != self._last_hovered_index
+            or row_rect != self._last_row_rect
+        )
+        if row_changed:
+            self._last_hovered_index = index_key
+            self._last_row_rect = row_rect
+            if (
+                index.isValid()
+                and hasattr(delegate, "get_trash_rect_for_index")
+            ):
+                self._last_trash_rect = (
+                    delegate.get_trash_rect_for_index(self, index)
+                )
             else:
+                self._last_trash_rect = None
+
+        icon_hovered = bool(
+            self._last_trash_rect
+            and self._last_trash_rect.contains(pos)
+        )
+        if not row_changed and icon_hovered == self._last_hovered_icon:
+            # Обычное движение внутри строки: никакой перерисовки.
+            super().mouseMoveEvent(event)
+            return
+
+        self._last_hovered_icon = icon_hovered
+        if hasattr(delegate, "hovered_trash_index"):
+            if icon_hovered and index.isValid():
+                delegate.hovered_trash_index = index
+                delegate.hovered_trash_rect = self._last_trash_rect
+            elif delegate.hovered_trash_index is not None:
                 delegate.hovered_trash_index = None
                 delegate.hovered_trash_rect = None
 
-            if (
-                old_index != delegate.hovered_trash_index
-                or old_rect != delegate.hovered_trash_rect
-            ):
-                self.viewport().update()
+        if row_changed:
+            self._repaint_hover_rows(old_row_rect, row_rect)
         else:
-            if (
-                hasattr(delegate, "hovered_trash_index")
-                and delegate.hovered_trash_index is not None
-            ):
-                delegate.hovered_trash_index = None
-                delegate.hovered_trash_rect = None
-                self.viewport().update()
+            self._repaint_hover_rows(row_rect)
+        super().mouseMoveEvent(event)
 
     def _sync_tree_to_db(self):
         """Приводит folder_id треков в БД в соответствие с деревом."""

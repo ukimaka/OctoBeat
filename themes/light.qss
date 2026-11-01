@@ -9,6 +9,10 @@ QMainWindow, QWidget, QDialog {
     background-color: #F4F6F8;
 }
 
+QMainWindow#mainWindow QWidget#mainSurface {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
 QTabWidget::pane {
     border: none;
     background-color: #F4F6F8;

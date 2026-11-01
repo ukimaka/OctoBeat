@@ -27,6 +27,7 @@ from pathlib import Path
 from PyQt5.QtCore import QSettings, QSize, Qt, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QHBoxLayout,
@@ -85,6 +86,7 @@ class SettingsPage(QWidget):
         # --- Левая колонка: навигация ---
         self.nav = QListWidget()
         self.nav.setObjectName("settingsNav")
+        self.nav.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         # Не фиксируем ширину: при системном масштабе/узком окне колонка
         # должна сжиматься, а не выдавливать контент за край.
         self.nav.setMinimumWidth(150)

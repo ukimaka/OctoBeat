@@ -264,6 +264,9 @@ class FriendsPage(QWidget):
         # CHANGED: всплывающий список результатов поиска (как в Google).
         self.search_popup = QListWidget(self)
         self.search_popup.setObjectName("friendsSearchPopup")
+        self.search_popup.setVerticalScrollMode(
+            QAbstractItemView.ScrollPerPixel
+        )
         self.search_popup.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.search_popup.setFocusPolicy(Qt.NoFocus)
         self.search_popup.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -279,6 +282,7 @@ class FriendsPage(QWidget):
     def _make_list(self, object_name: str) -> QListWidget:
         widget = QListWidget()
         widget.setObjectName(object_name)
+        widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         widget.setSelectionMode(QAbstractItemView.NoSelection)
         widget.setSpacing(4)
         return widget

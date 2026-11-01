@@ -25,8 +25,18 @@
 но с полным физическим разрешением.
 """
 
+import math
+import os
+
 from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt5.QtGui import QColor, QPainter, QPixmap
+from PyQt5.QtGui import (
+    QColor,
+    QImage,
+    QImageReader,
+    QPainter,
+    QPixmap,
+    QPixmapCache,
+)
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import QApplication
 
@@ -184,6 +194,71 @@ def draw_cover(painter, rect, pixmap):
     )
     painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
     return True
+
+
+def cover_cache_version(path):
+    """Версия обложки для кэша. Вызывать при подготовке данных, не в paint."""
+    if not path:
+        return 0
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def cached_cover(path, width, height, version=0):
+    """Уменьшенная обложка из глобального QPixmapCache.
+
+    ``version`` — mtime файла, вычисленный при подготовке данных, поэтому
+    paint() не делает stat(). При первом обращении к обложке она один раз
+    декодируется и уменьшается, дальше берётся только готовая копия из кэша.
+    """
+    if not path:
+        return QPixmap()
+    key = f"cover:{path}:{version}:{width}x{height}"
+    cached = QPixmapCache.find(key)
+    if isinstance(cached, QPixmap) and not cached.isNull():
+        return cached
+
+    # Декодируем и уменьшаем в QImage, а не в QPixmap. Загрузка
+    # QPixmap(path) в Qt подмешивает полноразмерный растр в тот же
+    # QPixmapCache и вытесняет готовые миниатюры: при прокрутке каждая
+    # строка снова декодировала файл с диска. QImage этого не делает,
+    # поэтому 50x50-копии остаются в кэше, а paint читает только его.
+    dpr = device_pixel_ratio()
+    target = QSize(
+        max(1, int(round(width * dpr))),
+        max(1, int(round(height * dpr))),
+    )
+    reader = QImageReader(str(path))
+    # Расширение файла может не совпадать с содержимым (обложки часто
+    # переименовывают), поэтому формат определяем по данным.
+    reader.setDecideFormatFromContent(True)
+    source_size = reader.size()
+    if source_size.isValid() and not source_size.isEmpty():
+        # Просим JPEG/PNG-декодер сразу уменьшить кадр. Для обложки
+        # 2400x2400 полное декодирование занимает ~12 мс на строку,
+        # масштабированное чтение — ~2 мс.
+        ratio = max(
+            target.width() / source_size.width(),
+            target.height() / source_size.height(),
+        )
+        if ratio < 1.0:
+            reader.setScaledSize(
+                QSize(
+                    max(1, math.ceil(source_size.width() * ratio)),
+                    max(1, math.ceil(source_size.height() * ratio)),
+                )
+            )
+    image = reader.read()
+    if image.isNull():
+        return QPixmap()
+    scaled = image.scaled(
+        target, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+    )
+    pixmap = QPixmap.fromImage(scaled)
+    QPixmapCache.insert(key, pixmap)
+    return pixmap
 
 
 SOURCE_BADGE_LABELS = {

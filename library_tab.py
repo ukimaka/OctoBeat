@@ -40,6 +40,7 @@ from musicbrainz_client import get_cached_source_for_path
 from next_track_island import NextTrackIsland
 from path_utils import normalize_track_path
 from paths import MUSIC_DIR
+from pixmap_utils import cover_cache_version
 from translations import tr
 
 
@@ -76,6 +77,10 @@ class LibraryTab(QWidget):
         lang = self.settings.value("language", "en")
 
         self.tracks_list = LibraryTreeWidget()
+        self.tracks_list.setVerticalScrollMode(
+            QAbstractItemView.ScrollPerPixel
+        )
+        self.tracks_list.verticalScrollBar().setSingleStep(20)
         self.tracks_list.setHeaderHidden(True)
         self.tracks_list.setColumnCount(1)
         self.track_delegate = TrackDelegate(self.tracks_list, controller=self)
@@ -100,8 +105,9 @@ class LibraryTab(QWidget):
         self.tracks_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # Разворот папок обрабатываем сами (двойной клик по папке)
         self.tracks_list.setExpandsOnDoubleClick(False)
-        # Высота строк разная: треки выше, папки ниже
-        self.tracks_list.setUniformRowHeights(False)
+        # Все строки одной высоты (папки и треки): Qt не пересчитывает
+        # геометрию дерева на каждый пиксель прокрутки.
+        self.tracks_list.setUniformRowHeights(True)
         # Drag & Drop: перетаскивание треков в папки (сохранение в БД — след. шаг)
         self.tracks_list.setDragEnabled(True)
         self.tracks_list.setAcceptDrops(True)
@@ -149,6 +155,7 @@ class LibraryTab(QWidget):
         top.addWidget(self.tracks_count_label)
 
         self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("searchEdit")
         self.search_edit.setPlaceholderText(
             tr("Search by title or artist...", lang)
         )
@@ -312,16 +319,22 @@ class LibraryTab(QWidget):
 
     def _make_track_item(self, row, index=None):
         item = QTreeWidgetItem()
-        source = get_cached_source_for_path(row["file_path"])
+        path = row["file_path"]
+        source = get_cached_source_for_path(path)
+        cover_path = metadata.extract_cover(path, row["id"])
+        cover_version = cover_cache_version(cover_path)
         item.setData(0, Qt.UserRole, {
             "id": row["id"],
-            "path": row["file_path"],
+            "path": path,
             "title": row["title"] or "Unknown Title",
             "artist": row["artist"] or "Unknown Artist",
             "duration": row["duration"],
-            "cover_path": metadata.extract_cover(row["file_path"], row["id"]),
+            "cover_path": cover_path,
+            "cover_version": cover_version,
             "metadata_source": source,
             "index": index,
+            # stat() is done here, once per reload, instead of in paint().
+            "exists": os.path.exists(path),
         })
         # Треки можно таскать, но нельзя принимать drop (не станут контейнером)
         item.setFlags(

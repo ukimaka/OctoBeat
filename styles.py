@@ -50,6 +50,27 @@ _ACCENT_NAV_RE = re.compile(
     r"#settingsNav::item:selected\s*\{[^}]*?background-color:\s*(#[0-9a-fA-F]{3,8})",
     re.S,
 )
+_THEME_BG_RE = re.compile(
+    r"QMainWindow\s*,\s*QWidget\s*,\s*QDialog\s*\{[^}]*?"
+    r"background-color:\s*(#[0-9a-fA-F]{3,8})",
+    re.S,
+)
+
+
+def theme_background(theme_name):
+    """Фоновый цвет темы — нужен для palette(window) в QSS."""
+    name = str(theme_name or DEFAULT_THEME)
+    path = THEMES_DIR / f"{name}.qss"
+    if not path.is_file():
+        path = THEMES_DIR / f"{DEFAULT_THEME}.qss"
+    try:
+        qss = path.read_text(encoding="utf-8")
+    except OSError:
+        return "#121212" if is_dark_theme(name) else "#F4F6F8"
+    match = _THEME_BG_RE.search(qss)
+    if match:
+        return match.group(1)
+    return "#121212" if is_dark_theme(name) else "#F4F6F8"
 
 
 def theme_accent(theme_name):
@@ -245,6 +266,104 @@ QTreeView, QListView {
     border: none;
     outline: none;
 }
+
+/* ------------------------------------------------------------------
+   Spotify-like glass surface, pill search and hover-only scrollbars.
+   ------------------------------------------------------------------ */
+/* Статичная 1 px рамка вместо QGraphicsDropShadowEffect. */
+QWidget#mainSurface {
+    background-color: palette(window);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#playerBar, #customTitleBar {
+    background-color: rgba(255, 255, 255, 0.05);
+    background-image: none;
+    border: none;
+    border-radius: 12px;
+}
+
+QLineEdit#searchEdit {
+    border: none;
+    border-radius: 15px;
+    padding: 6px 14px;
+}
+
+QLineEdit#searchEdit:hover,
+QLineEdit#searchEdit:focus {
+    border: none;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: transparent;
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:vertical:pressed {
+    background: palette(mid);
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+    background: transparent;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 6px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal {
+    background: transparent;
+    border-radius: 3px;
+    min-width: 24px;
+}
+
+QScrollBar::handle:horizontal:hover,
+QScrollBar::handle:horizontal:pressed {
+    background: palette(mid);
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: transparent;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+
+QScrollBar#profileScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+}
+
+QScrollBar#profileScrollBar::handle:vertical {
+    background: transparent;
+    border-radius: 3px;
+}
+
+QScrollBar#profileScrollBar::handle:vertical:hover,
+QScrollBar#profileScrollBar::handle:vertical:pressed {
+    background: palette(mid);
+}
 """
 
 
@@ -305,6 +424,9 @@ def load_theme(theme_name, app=None):
         if not accent.isValid():
             accent = QColor(DEFAULT_ACCENT)
         palette = app.palette()
+        background = QColor(theme_background(theme_name))
+        if background.isValid():
+            palette.setColor(QPalette.Window, background)
         palette.setColor(QPalette.Highlight, accent)
         palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
         app.setPalette(palette)

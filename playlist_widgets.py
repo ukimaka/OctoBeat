@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import os
+
 from PyQt5.QtCore import QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
@@ -40,10 +42,12 @@ from PyQt5.QtWidgets import (
 )
 
 from dialog_base import colored_pixmap
-from pixmap_utils import draw_centered, draw_cover, pixmap_size
+from pixmap_utils import cached_cover, draw_centered, draw_cover, pixmap_size
 from translations import tr
 from styles import is_dark_theme
 from PyQt5.QtCore import QSettings
+
+_HOVER_DEBUG = os.environ.get("OCTOBEAT_HOVER_DEBUG") == "1"
 
 
 def _theme_is_dark():
@@ -82,6 +86,7 @@ class _PlaylistGridView(QListView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
@@ -158,6 +163,44 @@ class PlaylistTracksWidget(QListWidget):
 
     play_requested = pyqtSignal(object)  # QListWidgetItem
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.verticalScrollBar().setSingleStep(20)
+        # Все строки треков фиксированной высоты 60 px.
+        self.setUniformItemSizes(True)
+        # Кэш последнего hover: при 8K-мыши mouseMoveEvent приходит тысячи
+        # раз в секунду, поэтому пересчитываем строку/иконку только при
+        # переходе курсора между строками или зоной trash-иконки.
+        self._last_hovered_index = None
+        self._last_row_rect = None
+        self._last_hovered_icon = False
+        self._last_trash_rect = None
+
+    def _repaint_hover_rows(self, *row_rects):
+        """Перерисовывает только указанные строки, не весь viewport."""
+        viewport = self.viewport()
+        area = viewport.rect()
+        seen = set()
+        for row_rect in row_rects:
+            if row_rect is None:
+                continue
+            rect = QRect(
+                0, row_rect.y(), viewport.width(), row_rect.height()
+            ).intersected(area)
+            if rect.isEmpty():
+                continue
+            key = (rect.x(), rect.y(), rect.width(), rect.height())
+            if key in seen:
+                continue
+            seen.add(key)
+            if _HOVER_DEBUG:
+                print(
+                    f"[hover] {type(self).__name__} repaint "
+                    f"y={rect.y()} h={rect.height()}"
+                )
+            viewport.update(rect)
+
     def mouseReleaseEvent(self, event):
         """Одиночный клик по иконке Play слева запускает трек."""
         if event.button() == Qt.LeftButton:
@@ -170,38 +213,72 @@ class PlaylistTracksWidget(QListWidget):
                     self.play_requested.emit(item)
         super().mouseReleaseEvent(event)
 
+    def leaveEvent(self, event):
+        # Сбрасываем кэш и hover-иконку, иначе после повторного входа
+        # курсора на ту же строку состояние может остаться устаревшим.
+        old_row_rect = self._last_row_rect
+        self._last_hovered_index = None
+        self._last_row_rect = None
+        self._last_hovered_icon = False
+        self._last_trash_rect = None
+        delegate = self.itemDelegate()
+        if getattr(delegate, "hovered_trash_index", None) is not None:
+            delegate.hovered_trash_index = None
+            delegate.hovered_trash_rect = None
+        self._repaint_hover_rows(old_row_rect)
+        super().leaveEvent(event)
+
     def mouseMoveEvent(self, event):
-        # CHANGED: view сам отслеживает наведение на иконку мусорки.
-        super().mouseMoveEvent(event)
-        index = self.indexAt(event.pos())
+        pos = event.pos()
+        index = self.indexAt(pos)
         delegate = self.itemDelegate()
 
-        if index.isValid() and hasattr(delegate, "get_trash_rect_for_index"):
-            trash_rect = delegate.get_trash_rect_for_index(self, index)
-
-            old_index = delegate.hovered_trash_index
-            old_rect = delegate.hovered_trash_rect
-
-            if trash_rect and trash_rect.contains(event.pos()):
-                delegate.hovered_trash_index = index
-                delegate.hovered_trash_rect = trash_rect
+        # QModelIndex() не равен None, поэтому для пустой области
+        # используем None как единый ключ — иначе update() вызывался бы
+        # на каждое движение мыши вне строк.
+        index_key = index if index.isValid() else None
+        row_rect = self.visualRect(index) if index.isValid() else None
+        old_row_rect = self._last_row_rect
+        row_changed = (
+            index_key != self._last_hovered_index
+            or row_rect != self._last_row_rect
+        )
+        if row_changed:
+            self._last_hovered_index = index_key
+            self._last_row_rect = row_rect
+            if (
+                index.isValid()
+                and hasattr(delegate, "get_trash_rect_for_index")
+            ):
+                self._last_trash_rect = (
+                    delegate.get_trash_rect_for_index(self, index)
+                )
             else:
+                self._last_trash_rect = None
+
+        icon_hovered = bool(
+            self._last_trash_rect
+            and self._last_trash_rect.contains(pos)
+        )
+        if not row_changed and icon_hovered == self._last_hovered_icon:
+            # Обычное движение внутри строки: никакой перерисовки.
+            super().mouseMoveEvent(event)
+            return
+
+        self._last_hovered_icon = icon_hovered
+        if hasattr(delegate, "hovered_trash_index"):
+            if icon_hovered and index.isValid():
+                delegate.hovered_trash_index = index
+                delegate.hovered_trash_rect = self._last_trash_rect
+            elif delegate.hovered_trash_index is not None:
                 delegate.hovered_trash_index = None
                 delegate.hovered_trash_rect = None
 
-            if (
-                old_index != delegate.hovered_trash_index
-                or old_rect != delegate.hovered_trash_rect
-            ):
-                self.viewport().update()
+        if row_changed:
+            self._repaint_hover_rows(old_row_rect, row_rect)
         else:
-            if (
-                hasattr(delegate, "hovered_trash_index")
-                and delegate.hovered_trash_index is not None
-            ):
-                delegate.hovered_trash_index = None
-                delegate.hovered_trash_rect = None
-                self.viewport().update()
+            self._repaint_hover_rows(row_rect)
+        super().mouseMoveEvent(event)
 
 
 class _CoverWidget(QWidget):
@@ -453,8 +530,14 @@ class PlaylistCoverDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
-        self._draw_cover(painter, self.cover_rect(rect), data.get("cover_path"), hover,
-                         palette)
+        self._draw_cover(
+            painter,
+            self.cover_rect(rect),
+            data.get("cover_path"),
+            hover,
+            palette,
+            data.get("cover_version", 0),
+        )
 
         title_font = QFont(painter.font())
         title_font.setPixelSize(13)
@@ -475,14 +558,18 @@ class PlaylistCoverDelegate(QStyledItemDelegate):
 
         painter.restore()
 
-    def _draw_cover(self, painter, rect, cover_path, hover, palette):
+    def _draw_cover(
+        self, painter, rect, cover_path, hover, palette, cover_version=0
+    ):
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(rect), self.COVER_RADIUS, self.COVER_RADIUS)
 
         painter.save()
         painter.setClipPath(clip)
 
-        pixmap = QPixmap(cover_path) if cover_path else QPixmap()
+        pixmap = cached_cover(
+            cover_path, rect.width(), rect.height(), cover_version
+        )
         if not draw_cover(painter, QRectF(rect), pixmap):
             painter.fillRect(rect, palette["cover_bg"])
             note = self._note_pixmap(palette["note"])

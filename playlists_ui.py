@@ -65,7 +65,12 @@ from dialogs import (
 )
 from musicbrainz_client import get_cached_source_for_path
 from paths import DATA_DIR
-from pixmap_utils import draw_centered, draw_cover, pixmap_size
+from pixmap_utils import (
+    cover_cache_version,
+    draw_centered,
+    draw_cover,
+    pixmap_size,
+)
 from translations import tr
 from ui_common import get_open_file_name
 
@@ -150,6 +155,9 @@ class PlaylistsPage(QWidget):
 
         self.grid_model = QStandardItemModel(self)
         self.grid_view = _PlaylistGridView()
+        self.grid_view.setVerticalScrollMode(
+            QAbstractItemView.ScrollPerPixel
+        )
         self.grid_view.setModel(self.grid_model)
         self.grid_view.setViewMode(QListView.IconMode)
         self.grid_view.setResizeMode(QListView.Adjust)
@@ -255,6 +263,7 @@ class PlaylistsPage(QWidget):
 
         # --- Строка поиска и сортировки ---
         self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("searchEdit")
         self.search_edit.setPlaceholderText(
             tr("Search in playlist...", lang)
         )
@@ -293,6 +302,10 @@ class PlaylistsPage(QWidget):
 
         # --- Список треков ---
         self.tracks_list = PlaylistTracksWidget()
+        self.tracks_list.setVerticalScrollMode(
+            QAbstractItemView.ScrollPerPixel
+        )
+        self.tracks_list.verticalScrollBar().setSingleStep(20)
         self.track_delegate = TrackDelegate(self.tracks_list, controller=self)
         self.track_delegate.delete_requested.connect(
             self.delete_track_requested.emit
@@ -340,6 +353,7 @@ class PlaylistsPage(QWidget):
                 "id": row["id"],
                 "name": row["name"],
                 "cover_path": cover_path,
+                "cover_version": cover_cache_version(cover_path),
                 "is_pinned": row["is_pinned"],
             }, Qt.UserRole)
             self.grid_model.appendRow(item)
@@ -371,12 +385,12 @@ class PlaylistsPage(QWidget):
 
     def _on_create_playlist(self):
         dialog = CustomInputDialog(
+            self,
             tr("Create Playlist", _lang()),
             tr("Enter playlist name:", _lang()),
-            self,
         )
-        if dialog.exec_() and dialog.text().strip():
-            name = dialog.text().strip()
+        if dialog.exec_() and dialog.text_value().strip():
+            name = dialog.text_value().strip()
             playlist_id = db.create_playlist(name)
             if playlist_id:
                 self.reload()
@@ -456,13 +470,13 @@ class PlaylistsPage(QWidget):
         if row is None:
             return
         dialog = CustomInputDialog(
+            self,
             tr("Rename Playlist", _lang()),
             tr("New name:", _lang()),
-            self,
             row["name"],
         )
-        if dialog.exec_() and dialog.text().strip():
-            db.rename_playlist(playlist_id, dialog.text().strip())
+        if dialog.exec_() and dialog.text_value().strip():
+            db.rename_playlist(playlist_id, dialog.text_value().strip())
             self.reload()
 
     def _delete_playlist(self, playlist_id):
@@ -584,19 +598,20 @@ class PlaylistsPage(QWidget):
 
         for index, row in enumerate(rows, start=1):
             item = QListWidgetItem()
+            path = row["file_path"]
+            cover_path = metadata.extract_cover(path, row["id"])
             item.setData(Qt.UserRole, {
                 "id": row["id"],
-                "path": row["file_path"],
+                "path": path,
                 "title": row["title"] or "Unknown Title",
                 "artist": row["artist"] or "Unknown Artist",
                 "duration": row["duration"],
-                "cover_path": metadata.extract_cover(
-                    row["file_path"], row["id"]
-                ),
-                "metadata_source": get_cached_source_for_path(
-                    row["file_path"]
-                ),
+                "cover_path": cover_path,
+                "cover_version": cover_cache_version(cover_path),
+                "metadata_source": get_cached_source_for_path(path),
                 "index": index,
+                # Disk check happens during list build, not in paint().
+                "exists": Path(path).is_file(),
             })
             self.tracks_list.addItem(item)
 

@@ -17,7 +17,7 @@
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer
+from PyQt5.QtCore import QSettings, Qt, QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -81,11 +81,10 @@ MUSIC_FOLDER = MUSIC_DIR
 
 class MainWindow(QMainWindow):
 
-    _NORMAL_MARGINS = (0, 0, 0, 0)
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("OctoBeat")
+        self.setObjectName("mainWindow")
 
         # Делаем окно безрамочным
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -195,11 +194,16 @@ class MainWindow(QMainWindow):
         )
 
         # --- Компоновка ---
+        # Никаких wrapper-виджетов и QGraphicsDropShadowEffect: только
+        # обычный central widget и лёгкая статичная рамка из QSS.
         central = QWidget()
+        central.setObjectName("mainSurface")
+        central.setAttribute(Qt.WA_StyledBackground, True)
+
         root = QVBoxLayout(central)
-        # Убираем стандартные отступы для безрамочного окна
-        root.setContentsMargins(*self._NORMAL_MARGINS)
-        self._root_layout = root
+        # 1 px оставляем под QSS-рамку, чтобы дочерние виджеты её не
+        # перекрывали.
+        root.setContentsMargins(1, 1, 1, 1)
         root.setSpacing(0)
 
         root.addWidget(self.title_bar)
@@ -357,18 +361,6 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
         self._close_update_progress()
-
-    def changeEvent(self, event):
-        """Убирает внешние поля окна в развёрнутом состоянии."""
-        super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange:
-            layout = getattr(self, "_root_layout", None)
-            if layout is not None:
-                margins = (
-                    (0, 0, 0, 0) if self.isMaximized()
-                    else self._NORMAL_MARGINS
-                )
-                layout.setContentsMargins(*margins)
 
     def resizeEvent(self, event):
         """Позиционирует QSizeGrip в правом нижнем углу при ресайзе."""

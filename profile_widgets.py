@@ -348,11 +348,12 @@ class ProfileTextBrowser(QTextBrowser):
                     return None
 
                 # QTextDocument не применяет max-width из HTML, поэтому
-                # вписываем широкие картинки в текущую ширину браузера.
-                available = self.viewport().width() - 32
-                if available > 0 and image.width() > available:
+                # подгоняем картинку точно под текущую ширину браузера:
+                # маленькие изображения тоже должны растягиваться.
+                available_width = self.viewport().width() - 32
+                if available_width > 0 and image.width() != available_width:
                     image = image.scaledToWidth(
-                        available, Qt.SmoothTransformation
+                        available_width, Qt.SmoothTransformation
                     )
 
                 # Держим только несколько последних картинок: About Me

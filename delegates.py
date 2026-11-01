@@ -18,7 +18,16 @@
 
 import os
 
-from PyQt5.QtCore import QEvent, QRect, QRectF, QSettings, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import (
+    QElapsedTimer,
+    QEvent,
+    QRect,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    pyqtSignal,
+)
 from PyQt5.QtGui import (
     QColor,
     QFont,
@@ -27,12 +36,11 @@ from PyQt5.QtGui import (
     QPainterPath,
     QPalette,
     QPixmap,
-    QPixmapCache,
 )
 from PyQt5.QtWidgets import QStyle, QStyledItemDelegate
 
 from pixmap_utils import (
-    device_pixel_ratio,
+    cached_cover,
     draw_centered,
     draw_cover,
     draw_source_badge,
@@ -42,6 +50,10 @@ from paths import RESOURCE_DIR
 from styles import is_dark_theme
 
 ICONS_DIR = RESOURCE_DIR / "icons"
+
+# Обычный лог медленных строк ограничен одним сообщением в секунду.
+# OCTOBEAT_PAINT_DEBUG=1 печатает каждую строку медленнее 2 мс.
+_PAINT_DEBUG = os.environ.get("OCTOBEAT_PAINT_DEBUG") == "1"
 
 
 def _svg_pixmap(filename, size=24, color="#888888"):
@@ -68,40 +80,6 @@ def _theme_is_dark():
     return is_dark_theme(settings.value("theme", "dark"))
 
 
-def _cached_cover(path, width, height):
-    """Небольшая обложка из глобального QPixmapCache.
-
-    Раньше каждый paintEvent заново читал полноразмерный JPEG с диска и
-    держал его в памяти до конца кадра. Теперь в ограниченный кэш Qt
-    попадает только уменьшенная копия под размер строки.
-    """
-    if not path:
-        return QPixmap()
-    try:
-        stat = os.stat(path)
-        key = f"track-cover:{path}:{stat.st_mtime_ns}:{width}x{height}"
-    except OSError:
-        return QPixmap()
-
-    cached = QPixmapCache.find(key)
-    if isinstance(cached, QPixmap) and not cached.isNull():
-        return cached
-
-    source = QPixmap(path)
-    if source.isNull():
-        return source
-    dpr = device_pixel_ratio()
-    target = QSize(
-        max(1, int(round(width * dpr))),
-        max(1, int(round(height * dpr))),
-    )
-    scaled = source.scaled(
-        target, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
-    )
-    QPixmapCache.insert(key, scaled)
-    return scaled
-
-
 def _blend(first, second, ratio):
     """Смешивает два цвета: ``ratio`` — доля ``first`` (0..1)."""
     ratio = max(0.0, min(1.0, ratio))
@@ -114,7 +92,9 @@ def _blend(first, second, ratio):
 
 class TrackDelegate(QStyledItemDelegate):
     ROW_HEIGHT = 60
-    FOLDER_HEIGHT = 44
+    # Одинаковая высота папок и треков: QTreeView может включить
+    # uniformRowHeights и не пересчитывать геометрию на каждый пиксель.
+    FOLDER_HEIGHT = ROW_HEIGHT
     COVER_SIZE = 50
     COVER_RADIUS = 6
     ACCENT_WIDTH = 3
@@ -135,6 +115,47 @@ class TrackDelegate(QStyledItemDelegate):
         # CHANGED: индекс и rect иконки мусорки под курсором (задаёт view).
         self.hovered_trash_index = None
         self.hovered_trash_rect = None
+        # Последние замеры для диагностики прокрутки, мс.
+        self.last_paint_ms = 0.0
+        self.last_cover_ms = 0.0
+        self.last_text_ms = 0.0
+        # Медленные строки логируем не чаще раза в секунду, чтобы сам
+        # print() не превращался в источник лагов. С OCTOBEAT_PAINT_DEBUG=1
+        # пишем каждую строку медленнее 2 мс.
+        self._slow_log_timer = QElapsedTimer()
+        self._slow_log_timer.start()
+        # Шрифты и метрики неизменны между кадрами: создаём один раз,
+        # а не четыре QFont/QFontMetrics на каждую строку при прокрутке.
+        base_font = QFont(parent.font()) if parent is not None else QFont()
+        self._set_fonts(base_font)
+
+    def _set_fonts(self, base_font):
+        """Кэширует шрифты делегата; вызывается только при их смене."""
+        self._font_key = base_font.key()
+        self._num_font = QFont(base_font)
+        self._num_font.setPixelSize(11)
+        self._num_font.setBold(False)
+        self._dur_font = QFont(base_font)
+        self._dur_font.setPixelSize(11)
+        self._title_font = QFont(base_font)
+        self._title_font.setPixelSize(13)
+        self._title_font.setBold(True)
+        self._artist_font = QFont(base_font)
+        self._artist_font.setPixelSize(11)
+        self._artist_font.setBold(False)
+        self._folder_font = QFont(base_font)
+        self._folder_font.setPixelSize(14)
+        self._folder_font.setBold(True)
+        self._num_metrics = QFontMetrics(self._num_font)
+        self._dur_metrics = QFontMetrics(self._dur_font)
+        self._title_metrics = QFontMetrics(self._title_font)
+        self._artist_metrics = QFontMetrics(self._artist_font)
+        self._folder_metrics = QFontMetrics(self._folder_font)
+
+    def _ensure_fonts(self, base_font):
+        """Дешёвая проверка на случай смены QSS-шрифта/темы."""
+        if base_font.key() != self._font_key:
+            self._set_fonts(base_font)
 
     def set_dark_theme(self, is_dark_theme):
         """Задаёт тему явно (None — определять из QSettings при отрисовке)."""
@@ -263,7 +284,7 @@ class TrackDelegate(QStyledItemDelegate):
         return pixmap
 
     def get_trash_rect_for_index(self, view, index):
-        """CHANGED: rect иконки мусорки для индекса в координатах viewport."""
+        """Rect иконки мусорки; вид вызывает это только при смене hover."""
         option = view.viewOptions()
         option.rect = view.visualRect(index)
         data = index.data(Qt.UserRole) or {}
@@ -271,9 +292,7 @@ class TrackDelegate(QStyledItemDelegate):
             return None
         duration = data.get("duration") or 0
         dur_text = f"{duration // 60}:{duration % 60:02d}"
-        font = QFont(option.font)
-        font.setPixelSize(11)
-        dur_w = QFontMetrics(font).horizontalAdvance(dur_text) + 24
+        dur_w = self._dur_metrics.horizontalAdvance(dur_text) + 24
         rect = option.rect
         text_right = rect.right() - dur_w
         trash_size = 16
@@ -318,6 +337,11 @@ class TrackDelegate(QStyledItemDelegate):
         return rect
 
     def _paint_track(self, painter, option, data, index=None):
+        paint_timer = QElapsedTimer()
+        paint_timer.start()
+        cover_ms = 0.0
+        text_ms = 0.0
+        self._ensure_fonts(option.font)
         rect = option.rect
         palette = self._palette(option)
 
@@ -384,10 +408,7 @@ class TrackDelegate(QStyledItemDelegate):
         else:
             index_num = data.get("index")
             if index_num is not None:
-                num_font = QFont(painter.font())
-                num_font.setPixelSize(11)
-                num_font.setBold(False)
-                painter.setFont(num_font)
+                painter.setFont(self._num_font)
                 painter.setPen(artist_color)
                 painter.drawText(
                     QRect(rect.x(), rect.y(), 30, self.ROW_HEIGHT),
@@ -401,34 +422,35 @@ class TrackDelegate(QStyledItemDelegate):
             self.COVER_SIZE,
             self.COVER_SIZE,
         )
+        cover_started = paint_timer.nsecsElapsed()
         self._draw_cover(
             painter,
             cover_rect,
             data.get("cover_path"),
             palette,
             data.get("metadata_source"),
+            data.get("cover_version", 0),
         )
+        cover_ms = (paint_timer.nsecsElapsed() - cover_started) / 1_000_000.0
+        text_started = paint_timer.nsecsElapsed()
 
         # Длительность (измеряем до текстов)
         duration = data.get("duration") or 0
         dur_text = f"{duration // 60}:{duration % 60:02d}"
-        dur_font = QFont(painter.font())
-        dur_font.setPixelSize(11)
-        dur_w = QFontMetrics(dur_font).horizontalAdvance(dur_text) + 24
+        dur_w = self._dur_metrics.horizontalAdvance(dur_text) + 24
 
         text_left = rect.x() + 100
         text_right = rect.right() - dur_w
         text_width = max(0, text_right - text_left)
 
-        missing = not os.path.exists(data.get("path") or "")
+        # File existence is computed once while the rows are built; doing
+        # stat()/exists() here made scrolling hit the disk for every row.
+        missing = not data.get("exists", True)
 
         # Название
-        title_font = QFont(painter.font())
-        title_font.setPixelSize(13)
-        title_font.setBold(True)
-        painter.setFont(title_font)
+        painter.setFont(self._title_font)
         painter.setPen(missing_color if missing else title_color)
-        title = QFontMetrics(title_font).elidedText(
+        title = self._title_metrics.elidedText(
             data.get("title") or "Unknown Title", Qt.ElideRight, text_width
         )
         painter.drawText(
@@ -437,12 +459,9 @@ class TrackDelegate(QStyledItemDelegate):
         )
 
         # Исполнитель
-        artist_font = QFont(painter.font())
-        artist_font.setPixelSize(11)
-        artist_font.setBold(False)
-        painter.setFont(artist_font)
+        painter.setFont(self._artist_font)
         painter.setPen(artist_color)
-        artist = QFontMetrics(artist_font).elidedText(
+        artist = self._artist_metrics.elidedText(
             data.get("artist") or "Unknown Artist", Qt.ElideRight, text_width
         )
         painter.drawText(
@@ -451,12 +470,13 @@ class TrackDelegate(QStyledItemDelegate):
         )
 
         # Длительность
-        painter.setFont(dur_font)
+        painter.setFont(self._dur_font)
         painter.setPen(artist_color)
         painter.drawText(
             QRect(text_right, rect.y(), dur_w - 10, self.ROW_HEIGHT),
             Qt.AlignRight | Qt.AlignVCenter, dur_text,
         )
+        text_ms = (paint_timer.nsecsElapsed() - text_started) / 1_000_000.0
 
         # CHANGED: Отрисовка иконки мусорки при наведении.
         if option.state & QStyle.State_MouseOver:
@@ -494,7 +514,21 @@ class TrackDelegate(QStyledItemDelegate):
 
         painter.restore()
 
+        self.last_paint_ms = paint_timer.nsecsElapsed() / 1_000_000.0
+        self.last_cover_ms = cover_ms
+        self.last_text_ms = text_ms
+        if self.last_paint_ms > 2.0 and (
+            _PAINT_DEBUG or self._slow_log_timer.elapsed() >= 1000
+        ):
+            self._slow_log_timer.restart()
+            print(
+                f"[paint] row={self.last_paint_ms:.2f}ms "
+                f"cover={cover_ms:.2f}ms text={text_ms:.2f}ms",
+                flush=True,
+            )
+
     def _paint_folder(self, painter, option, data):
+        self._ensure_fonts(option.font)
         rect = option.rect
         palette = self._palette(option)
 
@@ -516,15 +550,12 @@ class TrackDelegate(QStyledItemDelegate):
         painter.drawPixmap(icon_x, icon_y, folder_icon)
 
         # Название папки — крупным жирным шрифтом, без артиста и длительности
-        font = QFont(painter.font())
-        font.setPixelSize(14)
-        font.setBold(True)
-        painter.setFont(font)
+        painter.setFont(self._folder_font)
         painter.setPen(palette["title"])
 
         text_left = icon_x + icon_size + 10
         text_width = max(0, rect.right() - text_left)
-        name = QFontMetrics(font).elidedText(
+        name = self._folder_metrics.elidedText(
             data.get("name") or "Folder", Qt.ElideRight, text_width
         )
         painter.drawText(
@@ -535,7 +566,8 @@ class TrackDelegate(QStyledItemDelegate):
         painter.restore()
 
     def _draw_cover(
-        self, painter, rect, cover_path, palette, metadata_source=None
+        self, painter, rect, cover_path, palette, metadata_source=None,
+        cover_version=0,
     ):
         radius = self.COVER_RADIUS
         clip = QPainterPath()
@@ -544,7 +576,9 @@ class TrackDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipPath(clip)
 
-        pixmap = _cached_cover(cover_path, rect.width(), rect.height())
+        pixmap = cached_cover(
+            cover_path, rect.width(), rect.height(), cover_version
+        )
         if not draw_cover(painter, QRectF(rect), pixmap):
             painter.fillRect(rect, palette["cover_bg"])
             icon_size = 24
@@ -556,6 +590,17 @@ class TrackDelegate(QStyledItemDelegate):
         if self._show_metadata_badges:
             draw_source_badge(painter, rect, metadata_source, size=13)
 
+    def event(self, event):
+        """Не считаем hover-геометрию на каждый пиксель MouseMove.
+
+        Hover строки и trash-иконки ведёт view (LibraryTreeWidget /
+        PlaylistTracksWidget), причём только при смене строки или зоны
+        иконки. Делегат не должен выполнять работу на каждый MouseMove.
+        """
+        if event is not None and event.type() == QEvent.MouseMove:
+            return False
+        return super().event(event)
+
     # ВНИМАНИЕ: editorEvent теперь на том же уровне, что и _draw_cover!
     def editorEvent(self, event, model, option, index):
         if event is None:
@@ -566,9 +611,7 @@ class TrackDelegate(QStyledItemDelegate):
             if not data.get("is_folder") and data.get("id") is not None:
                 duration = data.get("duration") or 0
                 dur_text = f"{duration // 60}:{duration % 60:02d}"
-                font = QFont(option.font)
-                font.setPixelSize(11)
-                dur_w = QFontMetrics(font).horizontalAdvance(dur_text) + 24
+                dur_w = self._dur_metrics.horizontalAdvance(dur_text) + 24
 
                 # Координаты иконки мусорки (совпадают с тем, что в _paint_track)
                 rect = option.rect

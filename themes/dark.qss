@@ -15,16 +15,18 @@ QTabWidget::pane {
     margin-top: 0px;
 }
 
-/* Заголовок: лёгкий вертикальный градиент. Плеер: плоский фон. */
+/* Заголовок и плеер: лёгкое стекло Spotify-стиля. */
 #customTitleBar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #282828, stop:1 #121212);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background-color: rgba(255, 255, 255, 0.05);
+    border: none;
+    border-radius: 12px;
 }
 
 #playerBar {
+    background-color: rgba(255, 255, 255, 0.05);
     background-image: none;
-    background-color: #121212;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    border: none;
+    border-radius: 12px;
 }
 
 QTabBar {
@@ -121,6 +123,20 @@ QLineEdit:focus, QComboBox:focus {
 
 QLineEdit:hover, QComboBox:hover {
     border: 1px solid #5151ab;
+}
+
+/* Поиск: пилюля с более светлой тёмной подложкой. */
+QLineEdit#searchEdit {
+    background-color: #242424;
+    border: none;
+    border-radius: 15px;
+    padding: 6px 14px;
+}
+
+QLineEdit#searchEdit:hover,
+QLineEdit#searchEdit:focus {
+    background-color: #2a2a2a;
+    border: none;
 }
 
 QWidget#playlistDetail {
@@ -284,19 +300,59 @@ QProgressDialog {
 }
 
 QScrollBar:vertical {
-    background: #121212;
-    width: 10px;
+    background: transparent;
+    width: 6px;
     margin: 0;
 }
 
 QScrollBar::handle:vertical {
-    background: #282828;
-    border-radius: 5px;
+    background: transparent;
+    border-radius: 3px;
     min-height: 24px;
 }
 
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:vertical:pressed {
+    background: palette(mid);
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
     height: 0;
+    background: transparent;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 6px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal {
+    background: transparent;
+    border-radius: 3px;
+    min-width: 24px;
+}
+
+QScrollBar::handle:horizontal:hover,
+QScrollBar::handle:horizontal:pressed {
+    background: palette(mid);
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: transparent;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: transparent;
 }
 
 QToolTip {
@@ -344,19 +400,20 @@ QTextBrowser#lyricsView {
 }
 
 QScrollBar#profileScrollBar:vertical {
-    background: #121212;
+    background: transparent;
     width: 6px;
     margin: 2px 0;
 }
 
 QScrollBar#profileScrollBar::handle:vertical {
-    background: #3e3e3e;
+    background: transparent;
     border-radius: 3px;
     min-height: 24px;
 }
 
-QScrollBar#profileScrollBar::handle:vertical:hover {
-    background: #5151ab;
+QScrollBar#profileScrollBar::handle:vertical:hover,
+QScrollBar#profileScrollBar::handle:vertical:pressed {
+    background: palette(mid);
 }
 
 QScrollBar#profileScrollBar::add-line:vertical,

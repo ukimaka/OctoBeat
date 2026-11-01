@@ -47,6 +47,7 @@ from PyQt5.QtGui import (
     QPixmap,
 )
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -73,6 +74,22 @@ from translations import tr
 from youtube_worker import YoutubeSearchWorker, YoutubeWorker
 
 THUMBS_DIR = CACHE_DIR / "yt_thumbs"
+
+# QThread, который не успел остановиться за 2 секунды, нельзя уничтожать.
+# Держим ссылку до его сигнала finished, иначе Qt пишет
+# "QThread: Destroyed while thread is still running" и завершает процесс.
+_LINGERING_THREADS = []
+
+
+def _release_lingering_thread(thread):
+    try:
+        _LINGERING_THREADS.remove(thread)
+    except ValueError:
+        pass
+    try:
+        thread.deleteLater()
+    except RuntimeError:
+        pass
 
 
 class SearchResultDelegate(QStyledItemDelegate):
@@ -339,6 +356,7 @@ class YoutubeDialog(_FramelessDialog):
 
         # --- Центр: результаты ---
         self.list = QListWidget(self)
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.setItemDelegate(SearchResultDelegate(self.list))
         self.list.setUniformItemSizes(True)
         self.list.setMouseTracking(True)
@@ -570,61 +588,71 @@ class YoutubeDialog(_FramelessDialog):
     # ------------------------------------------------------------------
     #  Очистка
     # ------------------------------------------------------------------
+    @staticmethod
+    def _stop_thread(thread, worker):
+        """Останавливает worker и дожидается завершения QThread."""
+        if worker is not None:
+            worker.stop()
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            if thread.isRunning():
+                thread.wait(2000)
+            if worker is not None:
+                worker.deleteLater()
+            if thread.isRunning():
+                # Нельзя удалять работающий QThread: Qt аварийно завершит
+                # приложение. Отвязываем его от диалога и уничтожаем только
+                # после реального завершения потока.
+                thread.setParent(None)
+                thread.finished.connect(
+                    lambda: _release_lingering_thread(thread)
+                )
+                _LINGERING_THREADS.append(thread)
+            else:
+                thread.deleteLater()
+        except RuntimeError:
+            pass
+
     def _cleanup_search_thread(self):
         thread = self._search_thread
         worker = self._search_worker
         self._search_thread = None
         self._search_worker = None
-        if worker is not None:
-            worker.stop()
-        if thread is not None:
-            try:
-                thread.requestInterruption()
-                thread.quit()
-                if thread.isRunning():
-                    thread.wait(2000)
-                if worker is not None:
-                    worker.deleteLater()
-                thread.deleteLater()
-            except RuntimeError:
-                pass
+        self._stop_thread(thread, worker)
 
     def _cleanup_download_thread(self):
         thread = self._download_thread
         worker = self._download_worker
         self._download_thread = None
         self._download_worker = None
-        if worker is not None:
-            worker.stop()
-        if thread is not None:
-            try:
-                thread.requestInterruption()
-                thread.quit()
-                if thread.isRunning():
-                    thread.wait(2000)
-                if worker is not None:
-                    worker.deleteLater()
-                thread.deleteLater()
-            except RuntimeError:
-                pass
+        self._stop_thread(thread, worker)
 
     def _shutdown(self):
         # reject() и closeEvent() могут прийти подряд — не дублируем остановку.
         if getattr(self, "_shutting_down", False):
             return
         self._shutting_down = True
-        if self._search_worker is not None:
-            self._search_worker.stop()
-        if self._download_worker is not None:
-            self._download_worker.stop()
-        if self._thumb_pool is not None:
-            self._thumb_pool.clear()
-            self._thumb_pool.waitForDone(2000)
+
+        # Сначала гарантированно останавливаем фоновые потоки: иначе при
+        # уничтожении диалога Qt получит QThread: Destroyed while running.
+        # _stop_thread() внутри _cleanup_* вызывает worker.stop(),
+        # thread.quit() и thread.wait(2000).
         self._cleanup_search_thread()
         self._cleanup_download_thread()
 
+        if self._thumb_pool is not None:
+            self._thumb_pool.clear()
+            self._thumb_pool.waitForDone(2000)
+
     def _on_cancel(self):
         self.reject()
+
+    def done(self, result):
+        # Все пути закрытия (accept/reject/close) проходят через done().
+        self._shutdown()
+        super().done(result)
 
     def reject(self):
         # Esc и кнопка Cancel должны останавливать фоновые задачи.
