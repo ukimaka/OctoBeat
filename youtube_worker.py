@@ -14,12 +14,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Фоновый воркер: скачивание аудио с YouTube через yt-dlp (subprocess)."""
+"""Фоновый воркер: скачивание аудио с YouTube через python-yt-dlp."""
 
-import json
 import os
 import re
-import subprocess
 from pathlib import Path
 
 from mutagen.easyid3 import EasyID3
@@ -29,27 +27,16 @@ from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 from metadata import clean_youtube_title
 from musicbrainz_client import get_track_metadata_with_fallback
 from paths import MUSIC_DIR
-from path_utils import (
-    find_tool,
-    subprocess_creationflags,
-    subprocess_env,
+from ytdlp_support import (
+    DownloadCancelled,
+    download_audio,
+    format_error,
+    search_videos,
 )
 
 # MUSIC_FOLDER is now read from settings.
 MUSIC_FOLDER = MUSIC_DIR
 
-# Пример строки: "[download]  45.3% of 3.42MiB at 1.20MiB/s ETA 00:02"
-PROGRESS_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
-
-# Группы в скобках: ( ... ) или [ ... ]
-_BRACKET_RE = re.compile(r"[\\(\[]([^\\)\]]*)[\\)\]]")
-
-# Мусорные ключевые слова внутри скобок (без учёта регистра)
-_NOISE_KEYWORDS_RE = re.compile(
-    r"official\s+(?:music\s+)?video|official\s+audio"
-    r"|official|lyric|visuali[sz]er|\bm/?v\b|prod\b|explicit|audio",
-    re.IGNORECASE,
-)
 # Небезопасные для файловой системы символы
 _UNSAFE_FS_RE = re.compile(r'[\\/:*?"<>|]')
 
@@ -104,17 +91,23 @@ class YoutubeWorker(QObject):
         settings = QSettings("MusicPlayer", "MusicPlayer")
         default_dir = MUSIC_DIR
         self.target_folder = Path(settings.value("download_dir", str(default_dir)))
-        self._proc = None
         self._stopped = False
 
     def run(self):
+        """Run the download without ever letting yt-dlp kill the Qt thread."""
+        try:
+            self._run()
+        except DownloadCancelled:
+            return
+        except Exception as exc:
+            if not self._stopped:
+                self.error.emit(
+                    f"Ошибка загрузки YouTube:\n{format_error(exc)}"
+                )
+
+    def _run(self):
         if not self.query:
             self.error.emit("Пустой запрос")
-            return
-
-        exe = find_tool("yt-dlp")
-        if exe is None:
-            self.error.emit("yt-dlp не найден")
             return
 
         try:
@@ -128,57 +121,22 @@ class YoutubeWorker(QObject):
             if self._looks_like_url(self.query)
             else f"ytsearch1:{self.query}"
         )
-
         cookies_path = _find_cookies_file(self.target_folder)
 
-        cmd = [
-            exe,
-            "--no-playlist",
-            "--no-warnings",
-            "--newline",
-            "-x", "--audio-format", "mp3", "--audio-quality", "0",
-            "--write-thumbnail",
-            "--convert-thumbnails", "jpg",
-            "-o", str(self.target_folder / "%(title)s.%(ext)s"),
-            "--print", "after_move:filepath",
-        ]
-        if cookies_path is not None:
-            cmd += ["--cookies", str(cookies_path)]
-        cmd.append(source)
-
-        final_path = None
-        last_lines = []
-        try:
-            self._proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                env=subprocess_env(),
-                creationflags=subprocess_creationflags(),
-            )
-            if self._proc.stdout:
-                for line in self._proc.stdout:
-                    line = line.rstrip()
-
-            self._proc.wait()
-        except Exception as e:
-            self.error.emit(str(e))
-            return
-
+        final_path = download_audio(
+            source,
+            str(self.target_folder / "%(title)s.%(ext)s"),
+            cookies_path=cookies_path,
+            progress_callback=self._on_progress,
+            cancel_check=lambda: self._stopped,
+        )
         if self._stopped:
             return
 
-        if self._proc.returncode != 0:
-            error_text = "\n".join(last_lines)
-            self.error.emit(f"yt-dlp error:\n{error_text}")
-            return
-
         if not (final_path and Path(final_path).exists()):
-            self.error.emit("Загрузка прошла, но не удалось определить путь к файлу")
+            self.error.emit(
+                "Загрузка прошла, но не удалось определить путь к файлу"
+            )
             return
 
         # --- Метаданные: MusicBrainz → YouTube → имя файла ---
@@ -295,15 +253,13 @@ class YoutubeWorker(QObject):
         self.progress.emit(100)
         self.finished.emit(final_path)
 
+    def _on_progress(self, percent):
+        if not self._stopped:
+            self.progress.emit(max(0, min(100, int(percent))))
+
     def stop(self):
-        """Прерывает запущенный yt-dlp (вызывается при закрытии окна)."""
+        """Ask yt-dlp to stop from its progress hook."""
         self._stopped = True
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
 
     @staticmethod
     def _looks_like_url(text):
@@ -345,6 +301,8 @@ def _pick_thumbnail(entry):
 
 def _entry_to_result(entry):
     """Преобразует запись yt-dlp в словарь результата поиска."""
+    if not isinstance(entry, dict):
+        return None
     raw_url = entry.get("webpage_url") or entry.get("url") or ""
     video_id = _extract_video_id(raw_url) or _extract_video_id(entry.get("id"))
     if str(raw_url).startswith("http"):
@@ -391,86 +349,45 @@ class YoutubeSearchWorker(QObject):
     def __init__(self, query, parent=None):
         super().__init__(parent)
         self.query = (query or "").strip()
-        self._proc = None
         self._stopped = False
 
     def run(self):
+        """Run the search without ever letting yt-dlp kill the Qt thread."""
+        try:
+            self._run()
+        except DownloadCancelled:
+            return
+        except Exception as exc:
+            if not self._stopped:
+                self.error.emit(
+                    f"Ошибка поиска YouTube:\n{format_error(exc)}"
+                )
+
+    def _run(self):
         if not self.query:
             self.error.emit("Пустой запрос")
             return
 
-        exe = find_tool("yt-dlp")
-        if exe is None:
-            self.error.emit("yt-dlp не найден")
-            return
-
-        cmd = [
-            exe,
-            "--no-warnings",
-            "--flat-playlist",
-            "--dump-json",
-            f"ytsearch{self.RESULT_LIMIT}:{self.query}",
-        ]
         cookies_path = _find_cookies_file()
-        if cookies_path is not None:
-            cmd += ["--cookies", str(cookies_path)]
-
-        results = []
-        last_lines = []
-        try:
-            self._proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                env=subprocess_env(),
-                creationflags=subprocess_creationflags(),
-            )
-
-            if self._proc.stdout:
-                for line in self._proc.stdout:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if not line.startswith("{"):
-                        last_lines.append(line)
-                        if len(last_lines) > 10:
-                            last_lines.pop(0)
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    results.append(_entry_to_result(entry))
-
-            self._proc.wait()
-        except Exception as e:
-            self.error.emit(str(e))
-            return
-
+        entries = search_videos(
+            self.query,
+            limit=self.RESULT_LIMIT,
+            cookies_path=cookies_path,
+        )
         if self._stopped:
             return
 
+        results = [
+            result
+            for entry in entries
+            if (result := _entry_to_result(entry)) is not None
+        ]
         if not results:
-            if self._proc.returncode != 0:
-                self.error.emit(
-                    "yt-dlp error:\n" + "\n".join(last_lines)
-                )
-            else:
-                self.error.emit("Ничего не найдено")
+            self.error.emit("Ничего не найдено")
             return
 
         self.finished.emit(results)
 
     def stop(self):
-        """Прерывает запущенный yt-dlp."""
+        """Ask the search to stop; yt-dlp is interrupted on return."""
         self._stopped = True
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass

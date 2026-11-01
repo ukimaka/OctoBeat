@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=OctoBeat
+Exec=OctoBeat
+Icon=octobeat
+Type=Application
+Categories=AudioVideo;Audio;Player;
+Comment=A lightweight music player

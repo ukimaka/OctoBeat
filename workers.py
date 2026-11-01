@@ -43,6 +43,13 @@ from path_utils import (
     subprocess_env,
     unique_path,
 )
+from ytdlp_support import (
+    DownloadCancelled,
+    YtDlpUnavailable,
+    download_audio,
+    format_error,
+    load_ytdlp,
+)
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav"}
 
@@ -399,7 +406,6 @@ class CsvImportWorker(QObject):
         super().__init__()
         self.csv_path = Path(csv_path)
         self.target_folder = Path(target_folder)
-        self._proc = None
         self._stopped = False
 
     # ------------------------------------------------------------------
@@ -422,6 +428,15 @@ class CsvImportWorker(QObject):
             self.target_folder.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             self.error.emit(f"Не могу создать папку {self.target_folder}: {e}")
+            self.finished.emit(0, 0)
+            return
+
+        # Fail once with a clean message instead of failing every CSV row
+        # when yt-dlp is missing or broken.
+        try:
+            load_ytdlp()
+        except YtDlpUnavailable as exc:
+            self.error.emit(str(exc))
             self.finished.emit(0, 0)
             return
 
@@ -534,81 +549,33 @@ class CsvImportWorker(QObject):
     #  Скачивание
     # ------------------------------------------------------------------
     def _download(self, artist, track_name, output_base):
-        exe = find_tool("yt-dlp")
-        if exe is None:
-            raise RuntimeError("yt-dlp не найден")
-
+        """Download one search result through the yt-dlp Python API."""
         from youtube_worker import _find_cookies_file
 
         query = f"{artist} - {track_name}"
-        cmd = [
-            exe,
-            "--no-playlist",
-            "--no-warnings",
-            "--newline",
-            "-x", "--audio-format", "mp3", "--audio-quality", "0",
-            "--write-thumbnail",
-            "--convert-thumbnails", "jpg",
-            "-o", str(self.target_folder / (output_base + ".%(ext)s")),
-            "--print", "after_move:filepath",
-        ]
         cookies_path = _find_cookies_file(self.target_folder)
-        if cookies_path is not None:
-            cmd += ["--cookies", str(cookies_path)]
-        cmd.append(f"ytsearch1:{query}")
 
-        final_path = None
-        last_lines = []
         try:
-            self._proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                env=subprocess_env(),
-                creationflags=subprocess_creationflags(),
+            final_path = download_audio(
+                f"ytsearch1:{query}",
+                str(self.target_folder / (output_base + ".%(ext)s")),
+                cookies_path=cookies_path,
+                cancel_check=lambda: self._stopped,
             )
-            if self._proc.stdout:
-                for line in self._proc.stdout:
-                    line = line.rstrip()
-                    if not line:
-                        continue
-                    if "Sign in to confirm you're not a bot" in line:
-                        raise RuntimeError(
-                            "YouTube требует авторизации (нужен cookies.txt)"
-                        )
-                    if not line.startswith("[") and line.lower().endswith(".mp3"):
-                        final_path = line.strip()
-                        continue
-                    last_lines.append(line)
-                    if len(last_lines) > 10:
-                        last_lines.pop(0)
-
-            self._proc.wait() # <--- Важно: эта строка должна быть на уровне с 'if', но внутри 'try'
-
-        except Exception:
-            self._terminate_proc() # type: ignore
-            raise
-            raise
+        except DownloadCancelled:
+            return None
+        except Exception as exc:
+            if self._stopped:
+                return None
+            raise RuntimeError(format_error(exc)) from exc
 
         if self._stopped:
             return None
-
-        if self._proc.returncode != 0:
-            raise RuntimeError(
-                "yt-dlp error: " + " | ".join(last_lines[-3:])
-            )
-
         if not (final_path and Path(final_path).exists()):
             candidate = self.target_folder / (output_base + ".mp3")
             if candidate.exists():
-                final_path = str(candidate)
-            else:
-                raise RuntimeError("не удалось определить путь к mp3")
-
+                return str(candidate)
+            raise RuntimeError("yt-dlp завершился, но файл не найден")
         return final_path
 
     def _unique_output_base(self, artist, track_name):
@@ -633,14 +600,6 @@ class CsvImportWorker(QObject):
             base = f"{safe} ({counter})"
             counter += 1
         return base
-
-    def _terminate_proc(self):
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------
     #  Обложка и теги
@@ -718,9 +677,8 @@ class CsvImportWorker(QObject):
     #  Остановка
     # ------------------------------------------------------------------
     def stop(self):
-        """Прерывает текущее скачивание (при отмене прогресс-диалога)."""
+        """Ask the current yt-dlp download to stop."""
         self._stopped = True
-        self._terminate_proc()
 
 
 # ---------------------------------------------------------------------------

@@ -19,10 +19,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -42,12 +40,8 @@ from metadata_normalize import (
     split_featured_artists,
 )
 from paths import CACHE_DIR
-from path_utils import (
-    find_tool,
-    safe_replace,
-    subprocess_creationflags,
-    subprocess_env,
-)
+from path_utils import safe_replace
+from ytdlp_support import format_error, search_videos
 
 COVER_DIR = CACHE_DIR / "musicbrainz_covers"
 YOUTUBE_COVER_DIR = CACHE_DIR / "youtube_covers"
@@ -316,60 +310,29 @@ def _pick_thumbnail(entry: dict[str, Any]) -> str:
 
 
 def _youtube_first_result(query: str) -> dict[str, Any] | None:
-    """Один результат поиска YouTube через yt-dlp (без скачивания файла)."""
+    """Один результат поиска YouTube через python-yt-dlp.
+
+    Cover lookup is best-effort: any yt-dlp failure is logged and converted
+    to ``None`` so metadata lookup can continue without crashing the worker.
+    """
     if not query:
         return None
 
-    exe = find_tool("yt-dlp")
-    if exe is None:
-        return None
-
-    cmd = [
-        exe,
-        "--no-warnings",
-        "--flat-playlist",
-        "--dump-json",
-        f"ytsearch1:{query}",
-    ]
-
     # Cookies из настроек YouTube-загрузчика (если PyQt/QSettings доступны).
+    cookies_path = None
     try:
         from youtube_worker import _find_cookies_file
 
         cookies_path = _find_cookies_file()
-        if cookies_path is not None:
-            cmd += ["--cookies", str(cookies_path)]
     except Exception:
         pass
 
     try:
-        completed = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            check=False,
-            env=subprocess_env(),
-            creationflags=subprocess_creationflags(),
-        )
+        entries = search_videos(query, limit=1, cookies_path=cookies_path)
     except Exception as exc:
-        print(f"[youtube] search failed: {exc}")
+        print(f"[youtube] search failed: {format_error(exc)}")
         return None
-
-    for line in (completed.stdout or "").splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(entry, dict):
-            return entry
-    return None
+    return entries[0] if entries else None
 
 
 def _youtube_cover(

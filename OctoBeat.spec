@@ -23,9 +23,9 @@ for notice in ("LICENSE", "THIRD_PARTY_LICENSES.md"):
 
 binaries = []
 hiddenimports = [
-    # python-vlc is imported lazily by vlc_backend, so make sure PyInstaller
-    # always includes the ctypes binding.
+    # Both bindings are imported lazily, so list them explicitly.
     "vlc",
+    "yt_dlp",
 ]
 
 

@@ -346,6 +346,8 @@ class YoutubeDialog(_FramelessDialog):
 
         self.btn_search = QPushButton(tr("Search", lang), self)
         self.btn_search.setAutoDefault(False)
+        # Make Enter act as Search instead of QDialog's implicit accept().
+        self.btn_search.setDefault(True)
         self.btn_search.setIcon(colored_icon("search.svg", self._icon_color()))
         self.btn_search.setIconSize(QSize(18, 18))
         self.btn_search.clicked.connect(self._on_search)
@@ -393,12 +395,14 @@ class YoutubeDialog(_FramelessDialog):
         # --- Низ: кнопки ---
         self.btn_cancel = QPushButton(tr("Cancel", lang), self)
         self.btn_cancel.setAutoDefault(False)
+        self.btn_cancel.setDefault(False)
         self.btn_cancel.setIcon(colored_icon("cancel.svg", self._icon_color()))
         self.btn_cancel.setIconSize(QSize(18, 18))
         self.btn_cancel.clicked.connect(self._on_cancel)
 
         self.btn_download = QPushButton(tr("Download Selected", lang), self)
         self.btn_download.setAutoDefault(False)
+        self.btn_download.setDefault(False)
         self.btn_download.setEnabled(False)
         self.btn_download.setMinimumWidth(220)
         self.btn_download.setStyleSheet(f"""
