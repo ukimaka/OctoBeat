@@ -41,7 +41,7 @@ class CrossfadePlayer(QObject):
 
         self._user_volume = 70
         self._track_loudness = None         # dB текущего трека или None
-        self._reference_db = -18.0          # опорный уровень нормализации
+        self._reference_db = -14.0          # опорный уровень нормализации
         self._crossfade_enabled = True
         self._crossfade_duration = 3000    # желаемая длительность, мс
         self._crossfade_started = False
@@ -168,8 +168,10 @@ class CrossfadePlayer(QObject):
         """Мгновенное переключение на трек (без crossfade)."""
         if self._shutdown:
             return
-        self._track_loudness = loudness
+        # Cancel a fade while the old track is still the active one, then
+        # switch the loudness to the new track before applying its gain.
         self._cancel_fade()
+        self._track_loudness = loudness
         self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
@@ -179,7 +181,7 @@ class CrossfadePlayer(QObject):
             print(f"[player] could not load {path}")
             return
         gain = self._compute_gain()
-        actual = max(0, min(100, int(self._user_volume * gain)))
+        actual = max(0, min(200, int(self._user_volume * gain)))
         active.set_volume(actual)
         if not active.play():
             print(f"[player] could not start {path}")
@@ -189,8 +191,8 @@ class CrossfadePlayer(QObject):
         переименования файла (медиа сбрасывается на новый путь)."""
         if self._shutdown:
             return
-        self._track_loudness = loudness
         self._cancel_fade()
+        self._track_loudness = loudness
         self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
@@ -200,23 +202,26 @@ class CrossfadePlayer(QObject):
             print(f"[player] could not load {path}")
             return
         gain = self._compute_gain()
-        actual = max(0, min(100, int(self._user_volume * gain)))
+        actual = max(0, min(200, int(self._user_volume * gain)))
         active.set_volume(actual)
 
     def crossfade_to(self, path, loudness=None):
         """Плавно перейти на новый трек (наложение)."""
         if self._shutdown:
             return
-        self._track_loudness = loudness
         # Crossfade выключен в настройках (или звук полностью убран) —
         # переключаемся мгновенно, без затухания и наложения.
         if not self._crossfade_enabled or self._user_volume == 0:
             self.play(path, loudness=loudness)
             return
 
-        # Если уже в crossfade — сначала завершим текущий мгновенно
+        # Если уже в crossfade — сначала завершим текущий мгновенно.
+        # Текущая нормализация должна примениться к старому целевому
+        # треку, поэтому loudness нового трека ставим после swap.
         if self._in_crossfade:
             self._complete_swap_now()
+
+        self._track_loudness = loudness
 
         # Ставим флаг ЗДЕСЬ — раз UI реально решил делать fade
         self._crossfade_started = True
@@ -245,8 +250,9 @@ class CrossfadePlayer(QObject):
         self._fade_from_active = self._active().volume()
         # Целевая громкость fade-in: user_volume с учётом gain НОВОГО трека
         gain = self._compute_gain()
+        # libVLC accepts up to 200 for +6 dB of headroom on quiet tracks.
         self._fade_target_volume = max(
-            0, min(100, int(self._user_volume * gain))
+            0, min(200, int(self._user_volume * gain))
         )
         self._in_crossfade = True
         self._fade_timer.start()
@@ -333,7 +339,7 @@ class CrossfadePlayer(QObject):
         if self._in_crossfade or self._shutdown:
             return
         gain = self._compute_gain()
-        actual = max(0, min(100, int(self._user_volume * gain)))
+        actual = max(0, min(200, int(self._user_volume * gain)))
         self._active().set_volume(actual)
 
     def _compute_gain(self):
