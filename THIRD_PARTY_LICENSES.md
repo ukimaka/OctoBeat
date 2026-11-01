@@ -2,6 +2,61 @@
 
 This project uses open-source assets. We are grateful to the creators for making their work freely available.
 
+## Multimedia Runtime
+
+### libVLC
+
+OctoBeat uses **libVLC**, the multimedia engine of the VLC media player, through
+the `python-vlc` bindings. libVLC is loaded dynamically at runtime and is not
+modified by OctoBeat.
+
+Copyright (C) 1996-2026 VideoLAN and the VLC authors.
+
+libVLC is free software; you can redistribute it and/or modify it under the
+terms of the GNU Lesser General Public License as published by the Free Software
+Foundation, either version 2.1 of the License, or (at your option) any later
+version.
+
+libVLC is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License along
+with libVLC. If not, see
+<https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>.
+
+* Upstream source: <https://code.videolan.org/videolan/vlc>
+* License text: <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>
+
+Windows builds may bundle an unmodified libVLC runtime (DLLs and plugins) from
+the locally installed 64-bit VLC. Those files remain under their respective
+licenses; the VLC `COPYING` and `COPYING.LIB` files are copied next to the
+bundled runtime when available. Users may replace the bundled libVLC DLLs and
+plugins with compatible versions.
+
+### python-vlc
+
+OctoBeat uses **python-vlc**, the Python ctypes bindings for libVLC.
+
+Copyright (C) 2009-2017 the VideoLAN team and the python-vlc contributors.
+
+python-vlc is free software; you can redistribute it and/or modify it under the
+terms of the GNU Lesser General Public License as published by the Free Software
+Foundation, either version 2.1 of the License, or (at your option) any later
+version.
+
+python-vlc is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License along
+with python-vlc. If not, see
+<https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>.
+
+* Upstream source: <https://github.com/oaubert/python-vlc>
+* License text: <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>
+
+
 ## Icons
 
 All icons used in this project were sourced from [SVGRrepo](https://www.svgrepo.com/). 

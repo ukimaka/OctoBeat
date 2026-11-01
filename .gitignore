@@ -23,6 +23,7 @@ build/
 dist/
 *.AppImage
 *.spec
+!OctoBeat.spec
 
 # Настройки редакторов и ОС
 .idea/
