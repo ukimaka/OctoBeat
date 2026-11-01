@@ -102,7 +102,7 @@ _FORMAT_ICONS = {
 # Стиль современного безрамочного редактора BBCode
 _BBCODE_DIALOG_QSS = """
 QDialog {
-    background: transparent;
+    background-color: palette(window);
 }
 #bbRoot {
     background-color: palette(window);
@@ -547,7 +547,6 @@ class BBCodeEditorDialog(QDialog):
             Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
             | Qt.NoDropShadowWindowHint
         )
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.resize(760, 540)
         self._build_ui(text, lang)

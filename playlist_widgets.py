@@ -1,0 +1,371 @@
+# OctoBeat - музыкальный плеер
+# Copyright (C) 2026 ukimaka
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+"""Виджеты для вкладки Плейлисты: грид, треки, обложка, страница деталей."""
+
+from __future__ import annotations
+
+from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPixmap,
+)
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
+    QTextEdit,
+    QWidget,
+)
+
+from dialogs import colored_pixmap
+from pixmap_utils import draw_centered, draw_cover, pixmap_size
+from translations import tr
+from styles import is_dark_theme
+from PyQt5.QtCore import QSettings
+
+
+def _theme_is_dark():
+    """Текущая тема из QSettings (виджеты читают её при отрисовке)."""
+    settings = QSettings("MusicPlayer", "MusicPlayer")
+    return is_dark_theme(settings.value("theme", "dark"))
+
+
+def _icon_color():
+    """Цвет перекраски иконок под текущую тему."""
+    return "#ffffff" if _theme_is_dark() else "#000000"
+
+
+def _lang():
+    settings = QSettings("MusicPlayer", "MusicPlayer")
+    return settings.value("language", "en")
+
+
+def _blend(color_a, color_b, factor):
+    """Смешивает два цвета: factor — доля color_b в результате."""
+    factor = max(0.0, min(1.0, factor))
+    return QColor(
+        round(color_a.red() * (1 - factor) + color_b.red() * factor),
+        round(color_a.green() * (1 - factor) + color_b.green() * factor),
+        round(color_a.blue() * (1 - factor) + color_b.blue() * factor),
+    )
+
+
+class _PlaylistGridView(QListView):
+    """QListView, различающий клик по кнопке Play и клик по плитке."""
+
+    play_clicked = pyqtSignal(object)   # QModelIndex
+    item_clicked = pyqtSignal(object)   # QModelIndex
+    context_menu_requested = pyqtSignal(object, object)  # QPoint, QModelIndex
+    positions_changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            index = self.indexAt(event.pos())
+            if index.isValid():
+                delegate = self.itemDelegate()
+                rect = self.visualRect(index)
+                if (hasattr(delegate, 'play_rect')
+                        and delegate.play_rect(rect).contains(event.pos())):
+                    self.play_clicked.emit(index)
+                else:
+                    self.item_clicked.emit(index)
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        index = self.indexAt(event.pos())
+        if index.isValid():
+            self.context_menu_requested.emit(event.globalPos(), index)
+            event.accept()
+            return
+        super().contextMenuEvent(event)
+
+    def dragMoveEvent(self, event):
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+
+    def dropEvent(self, event):
+        # Получаем индексы
+        source_index = self.currentIndex()
+        target_index = self.indexAt(event.pos())
+
+        if not source_index.isValid():
+            event.ignore()
+            return
+
+        # Если дропнули в пустоту (ниже всех плиток) — ставим в конец
+        if target_index.isValid():
+            target_row = target_index.row()
+        else:
+            target_row = self.model().rowCount() - 1
+
+        source_row = source_index.row()
+
+        if source_row == target_row:
+            event.ignore()
+            return
+
+        # Вручную двигаем строку в QStandardItemModel
+        item = self.model().takeRow(source_row)[0]
+        self.model().insertRow(target_row, item)
+
+        event.acceptProposedAction()
+
+        # Сохраняем новый порядок в БД
+        import db
+        new_order_ids = []
+        for row in range(self.model().rowCount()):
+            data = self.model().index(row, 0).data(Qt.UserRole) or {}
+            pid = data.get("id")
+            if pid is not None:
+                new_order_ids.append(pid)
+
+        if new_order_ids:
+            db.update_all_playlists_positions(new_order_ids)
+            self.positions_changed.emit()
+
+
+class PlaylistTracksWidget(QListWidget):
+    """Список треков плейлиста с реакцией на клик по иконке Play слева."""
+
+    play_requested = pyqtSignal(object)  # QListWidgetItem
+
+    def mouseReleaseEvent(self, event):
+        """Одиночный клик по иконке Play слева запускает трек."""
+        if event.button() == Qt.LeftButton:
+            item = self.itemAt(event.pos())
+            if item is not None:
+                from delegates import TrackDelegate
+                if TrackDelegate.is_play_click(
+                    event.pos(), self.visualItemRect(item)
+                ):
+                    self.play_requested.emit(item)
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event):
+        # CHANGED: view сам отслеживает наведение на иконку мусорки.
+        super().mouseMoveEvent(event)
+        index = self.indexAt(event.pos())
+        delegate = self.itemDelegate()
+
+        if index.isValid() and hasattr(delegate, "get_trash_rect_for_index"):
+            trash_rect = delegate.get_trash_rect_for_index(self, index)
+
+            old_index = delegate.hovered_trash_index
+            old_rect = delegate.hovered_trash_rect
+
+            if trash_rect and trash_rect.contains(event.pos()):
+                delegate.hovered_trash_index = index
+                delegate.hovered_trash_rect = trash_rect
+            else:
+                delegate.hovered_trash_index = None
+                delegate.hovered_trash_rect = None
+
+            if (
+                old_index != delegate.hovered_trash_index
+                or old_rect != delegate.hovered_trash_rect
+            ):
+                self.viewport().update()
+        else:
+            if (
+                hasattr(delegate, "hovered_trash_index")
+                and delegate.hovered_trash_index is not None
+            ):
+                delegate.hovered_trash_index = None
+                delegate.hovered_trash_rect = None
+                self.viewport().update()
+
+
+class _CoverWidget(QWidget):
+    """Большая обложка плейлиста с hover-оверлеем «Choose photo»."""
+
+    clicked = pyqtSignal()
+
+    COVER_SIZE = 140
+    RADIUS = 8
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Обложка может немного сжиматься в узком окне, но не раздувается
+        # больше своего обычного размера.
+        self.setMinimumSize(110, 110)
+        self.setMaximumSize(self.COVER_SIZE, self.COVER_SIZE)
+        self.setSizePolicy(
+            self.sizePolicy().Policy.Preferred,
+            self.sizePolicy().Policy.Preferred
+        )
+        self.setCursor(Qt.PointingHandCursor)
+        self._cover_path = None
+        self._hover = False
+        self._note_cache = {}
+        # Карандаш рисуется поверх тёмного hover-оверлея — всегда белый.
+        self._pencil = colored_pixmap("pencil.svg", 20, "#ffffff")
+
+    def sizeHint(self):
+        return QSize(self.COVER_SIZE, self.COVER_SIZE)
+
+    def set_cover(self, path):
+        self._cover_path = path
+        self.update()
+
+    def _note_pixmap(self, color):
+        """Нота-заглушка, перекрашенная и кэшированная по цвету."""
+        note = self._note_cache.get(color)
+        if note is None:
+            note = colored_pixmap("music-note.svg", 56, color)
+            self._note_cache[color] = note
+        return note
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        rect = self.rect()
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(rect), self.RADIUS, self.RADIUS)
+        painter.setClipPath(clip)
+
+        pixmap = QPixmap(self._cover_path) if self._cover_path else QPixmap()
+        if not draw_cover(painter, QRectF(rect), pixmap):
+            dark = _theme_is_dark()
+            pal = self.palette()
+            surface = pal.color(QPalette.Base)
+            top = surface.lighter(118) if dark else surface.darker(104)
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            gradient.setColorAt(0.0, top)
+            gradient.setColorAt(1.0, surface)
+            painter.fillRect(rect, gradient)
+            muted = pal.color(QPalette.WindowText)
+            muted.setAlpha(140)
+            note = self._note_pixmap(muted.name())
+            draw_centered(painter, QRectF(rect), note)
+
+        if self._hover:
+            painter.fillRect(rect, QColor(0, 0, 0, 140))
+
+            font = QFont(painter.font())
+            font.setPixelSize(13)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor("#ffffff"))
+
+            text = tr("Choose photo", _lang())
+            tw = QFontMetrics(font).horizontalAdvance(text)
+            gap = 8
+            pencil_size = pixmap_size(self._pencil)
+            total = pencil_size.width() + gap + tw
+            start_x = rect.x() + (rect.width() - total) // 2
+            cy = rect.y() + rect.height() // 2
+
+            painter.drawPixmap(
+                start_x, cy - pencil_size.height() // 2, self._pencil
+            )
+            painter.drawText(
+                start_x + pencil_size.width() + gap,
+                cy - 10, tw, 20,
+                Qt.AlignLeft | Qt.AlignVCenter, text,
+            )
+
+        painter.end()
+
+
+def _average_color(pixmap):
+    """Средний цвет обложки: масштабируем QPixmap до 1x1 и берём пиксель."""
+    if pixmap is None or pixmap.isNull():
+        # None → _DetailPage сам подставит фон текущей темы.
+        return None
+    tiny = pixmap.scaled(1, 1, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    return tiny.toImage().pixelColor(0, 0)
+
+
+class _DetailPage(QWidget):
+    """Контейнер страницы 2: вертикальный градиент от цвета обложки к фону."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAutoFillBackground(False)
+        # None → верхний цвет градиента равен фону текущей темы.
+        self._top_color = None
+
+    def set_cover_color(self, color):
+        if color is not None and color.isValid():
+            self._top_color = color
+        else:
+            self._top_color = None
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        palette = self.palette()
+        dark = _theme_is_dark()
+        # Нижний цвет градиента — фон текущей темы (QPalette.Window),
+        # поэтому страница автоматически подстраивается под любой .qss.
+        bottom = palette.color(QPalette.Window)
+
+        if self._top_color is not None:
+            top = QColor(self._top_color)
+            if not dark:
+                # В светлой теме приглушаем цвет обложки, уводя его в фон.
+                top = _blend(top, bottom, 0.6)
+        else:
+            top = QColor(bottom)
+
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0.0, top)
+        if dark:
+            gradient.setColorAt(0.3, bottom)
+        else:
+            # Светлая тема: плавный переход обложка → фон без «жёсткого» стыка.
+            gradient.setColorAt(0.45, _blend(top, bottom, 0.75))
+        gradient.setColorAt(1.0, bottom)
+        painter.fillRect(self.rect(), gradient)
+
+
+class _DescriptionEdit(QTextEdit):
+    """QTextEdit, сохраняющий текст при потере фокуса."""
+
+    editing_finished = pyqtSignal(str)
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.editing_finished.emit(self.toPlainText())
