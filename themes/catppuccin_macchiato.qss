@@ -22,6 +22,7 @@ QTabWidget::pane {
 }
 
 #playerBar {
+    background-image: none;
     background-color: #24273a;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
