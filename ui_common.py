@@ -43,7 +43,6 @@ from PyQt5.QtWidgets import (
     QStyle,
 )
 
-from styles import DARK_THEME
 from pixmap_utils import (
     draw_centered,
     draw_cover,
@@ -202,7 +201,7 @@ class IconProvider:
         return QIcon(pixmap)
 
     def icon_button(self, icon_name, tooltip, size=22, event_filter=None):
-        """Плоская кнопка-иконка (фон и hover задаются в DARK_THEME)."""
+        """Плоская кнопка-иконка (фон и hover задаются QSS темы)."""
         btn = QPushButton()
         btn.setIcon(self.icon(icon_name))
         btn.setIconSize(QSize(size, size))
@@ -244,23 +243,42 @@ class IconProvider:
         return result
 
 
-def _file_dialog_stylesheet():
-    """Текущая QSS приложения (или тёмная тема по умолчанию)."""
-    app = QApplication.instance()
-    if app is not None:
-        stylesheet = app.styleSheet()
-        if stylesheet:
-            return stylesheet
-    return DARK_THEME
-
-
 def _make_file_dialog(parent, caption, directory, file_filter, options=None):
     dialog = QFileDialog(parent, caption, directory, file_filter)
     if options is not None:
         dialog.setOptions(options)
     dialog.setOption(QFileDialog.DontUseNativeDialog, True)
-    dialog.setStyleSheet(_file_dialog_stylesheet())
     return dialog
+
+
+def _file_dialog_button_icon(filename, color):
+    """Перекрашенная SVG-иконка для внутренних кнопок QFileDialog."""
+    path = Path(__file__).resolve().parent / "icons" / "black" / filename
+    if not path.is_file():
+        return QIcon()
+    pixmap = svg_file_pixmap(path, 32, color=color)
+    return QIcon() if pixmap.isNull() else QIcon(pixmap)
+
+
+def _decorate_file_dialog(dialog):
+    """Заменяет emoji-иконки кнопок на SVG, не трогая layout диалога."""
+    # Полируем, чтобы палитра окна соответствовала QSS темы.
+    dialog.ensurePolished()
+    icon_color = dialog.palette().windowText().color().name()
+    cancel_color = "#e05a5a"
+    for button in dialog.findChildren(QPushButton):
+        text = button.text().replace("&", "").strip().lower()
+        if not text:
+            continue
+        if any(word in text for word in (
+            "open", "choose", "select", "открыть", "выбрать", "сохранить",
+            "save",
+        )):
+            button.setIcon(_file_dialog_button_icon("confirm.svg", icon_color))
+            button.setIconSize(QSize(16, 16))
+        elif any(word in text for word in ("cancel", "отмена", "закрыть")):
+            button.setIcon(_file_dialog_button_icon("cancel.svg", cancel_color))
+            button.setIconSize(QSize(16, 16))
 
 
 def get_open_file_name(parent=None, caption="", directory="", file_filter="",
@@ -271,6 +289,7 @@ def get_open_file_name(parent=None, caption="", directory="", file_filter="",
     )
     dialog.setAcceptMode(QFileDialog.AcceptOpen)
     dialog.setFileMode(QFileDialog.ExistingFile)
+    _decorate_file_dialog(dialog)
     if dialog.exec_() == QFileDialog.Accepted:
         selected = dialog.selectedFiles()
         if selected:
@@ -286,6 +305,7 @@ def get_open_file_names(parent=None, caption="", directory="", file_filter="",
     )
     dialog.setAcceptMode(QFileDialog.AcceptOpen)
     dialog.setFileMode(QFileDialog.ExistingFiles)
+    _decorate_file_dialog(dialog)
     if dialog.exec_() == QFileDialog.Accepted:
         return dialog.selectedFiles(), dialog.selectedNameFilter()
     return [], ""
@@ -298,6 +318,7 @@ def get_existing_directory(parent=None, caption="", directory="",
     dialog.setAcceptMode(QFileDialog.AcceptOpen)
     dialog.setFileMode(QFileDialog.Directory)
     dialog.setOption(QFileDialog.ShowDirsOnly, True)
+    _decorate_file_dialog(dialog)
     if dialog.exec_() == QFileDialog.Accepted:
         selected = dialog.selectedFiles()
         if selected:

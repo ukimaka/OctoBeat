@@ -1001,9 +1001,23 @@ QPushButton#trimPlay:disabled {
     color: #777777;
     background: #222222;
 }
+QSlider {
+    background: transparent;
+    border: none;
+}
 QSlider::groove:horizontal {
     border: none;
-    background: #2e2e2e;
+    background: transparent;
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: palette(highlight);
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::add-page:horizontal {
+    background: palette(mid);
     height: 4px;
     border-radius: 2px;
 }
@@ -1017,5 +1031,6 @@ QSlider::handle:horizontal {
 }
 QSlider::handle:horizontal:hover {
     background: palette(highlight);
+    border: none;
 }
 """

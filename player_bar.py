@@ -140,6 +140,7 @@ class PlayerBar(QWidget):
 
         self.volume_icon_label = QLabel()
         self.volume_slider = ClickSlider(Qt.Horizontal)
+        self.volume_slider.setObjectName("volumeSlider")
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(70)
         self.volume_slider.setFixedWidth(120)
@@ -148,6 +149,7 @@ class PlayerBar(QWidget):
         # невидимый отступ слева компенсирует его ширину, поэтому группа
         # кнопок управления стоит ровно по центру панели, а не смещена вбок.
         volume_block = QWidget()
+        volume_block.setObjectName("volumeBlock")
         volume_block.setFixedWidth(VOLUME_BLOCK_WIDTH)
         volume_row = QHBoxLayout(volume_block)
         volume_row.setContentsMargins(0, 0, 0, 0)

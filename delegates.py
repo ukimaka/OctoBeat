@@ -285,6 +285,19 @@ class TrackDelegate(QStyledItemDelegate):
         rect = option.rect
         palette = self._palette(option)
 
+        # Цвета текста берём напрямую из палитры строки: QSS-тема может
+        # задавать их независимо от глобального QPalette приложения. Так
+        # название и исполнитель остаются читаемыми в любой теме (Dracula,
+        # светлые темы и т.п.).
+        if option is not None:
+            title_color = option.palette.text().color()
+            artist_color = option.palette.windowText().color()
+        else:
+            title_color = palette["title"]
+            artist_color = palette["artist"]
+        missing_color = QColor(title_color)
+        missing_color.setAlpha(110)
+
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
@@ -339,7 +352,7 @@ class TrackDelegate(QStyledItemDelegate):
                 num_font.setPixelSize(11)
                 num_font.setBold(False)
                 painter.setFont(num_font)
-                painter.setPen(palette["artist"])
+                painter.setPen(artist_color)
                 painter.drawText(
                     QRect(rect.x(), rect.y(), 30, self.ROW_HEIGHT),
                     Qt.AlignCenter, str(index_num),
@@ -378,7 +391,7 @@ class TrackDelegate(QStyledItemDelegate):
         title_font.setPixelSize(13)
         title_font.setBold(True)
         painter.setFont(title_font)
-        painter.setPen(palette["missing"] if missing else palette["title"])
+        painter.setPen(missing_color if missing else title_color)
         title = QFontMetrics(title_font).elidedText(
             data.get("title") or "Unknown Title", Qt.ElideRight, text_width
         )
@@ -392,7 +405,7 @@ class TrackDelegate(QStyledItemDelegate):
         artist_font.setPixelSize(11)
         artist_font.setBold(False)
         painter.setFont(artist_font)
-        painter.setPen(palette["artist"])
+        painter.setPen(artist_color)
         artist = QFontMetrics(artist_font).elidedText(
             data.get("artist") or "Unknown Artist", Qt.ElideRight, text_width
         )
@@ -403,7 +416,7 @@ class TrackDelegate(QStyledItemDelegate):
 
         # Длительность
         painter.setFont(dur_font)
-        painter.setPen(palette["artist"])
+        painter.setPen(artist_color)
         painter.drawText(
             QRect(text_right, rect.y(), dur_w - 10, self.ROW_HEIGHT),
             Qt.AlignRight | Qt.AlignVCenter, dur_text,

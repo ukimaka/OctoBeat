@@ -154,18 +154,18 @@ QDialog {
     background: transparent;
 }
 #bbRoot {
-    background-color: #121212;
+    background-color: palette(window);
     border: none;
     outline: none;
     border-radius: 12px;
 }
 #bbTitle {
-    color: #ffffff;
+    color: palette(window-text);
     font-size: 14px;
     font-weight: bold;
 }
 #bbHint {
-    color: #8a8a8a;
+    color: palette(mid);
     font-size: 11px;
 }
 QPushButton#bbTool {
@@ -175,7 +175,7 @@ QPushButton#bbTool {
     padding: 6px;
 }
 QPushButton#bbTool:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(127, 127, 127, 0.18);
 }
 QPushButton#bbTool:pressed {
     background: palette(highlight);
@@ -187,16 +187,16 @@ QPushButton#bbClose {
     padding: 4px;
 }
 QPushButton#bbClose:hover {
-    background: rgba(255, 255, 255, 0.14);
+    background: rgba(127, 127, 127, 0.22);
 }
 QTextEdit {
-    border: 1px solid #2e2e2e;
+    border: 1px solid palette(mid);
 }
 QTextEdit#bbEditor {
-    background: #181818;
-    border: 1px solid #2e2e2e;
+    background: palette(base);
+    border: 1px solid palette(mid);
     border-radius: 8px;
-    color: #ffffff;
+    color: palette(text);
     font-size: 13px;
     padding: 8px;
     selection-background-color: palette(highlight);
@@ -214,10 +214,10 @@ QFocusFrame {
     background: transparent;
 }
 QTextBrowser#bbPreview {
-    background: #181818;
-    border: 1px solid #2e2e2e;
+    background: palette(base);
+    border: 1px solid palette(mid);
     border-radius: 8px;
-    color: #ffffff;
+    color: palette(text);
     padding: 8px;
 }
 QSplitter#bbSplitter::handle {
@@ -226,7 +226,7 @@ QSplitter#bbSplitter::handle {
 }
 QPushButton#bbSave {
     background: palette(highlight);
-    color: #ffffff;
+    color: palette(highlighted-text);
     border: none;
     border-radius: 8px;
     padding: 8px 22px;
@@ -236,14 +236,14 @@ QPushButton#bbSave:hover {
     background: palette(highlight);
 }
 QPushButton#bbCancel {
-    background: #2a2a2a;
-    color: #dddddd;
+    background: palette(button);
+    color: palette(button-text);
     border: none;
     border-radius: 8px;
     padding: 8px 22px;
 }
 QPushButton#bbCancel:hover {
-    background: #3a3a3a;
+    background: palette(mid);
 }
 """
 
@@ -580,13 +580,35 @@ class _ClickableCard(QFrame):
 
 
 class _DialogTitleBar(QWidget):
-    """Заголовок безрамочного диалога с перетаскиванием окна мышью."""
+    """Заголовок безрамочного диалога с перетаскиванием окна мышью.
+    Фон — QPalette.Window, слегка затемнённый (darker(110)).
+    """
 
-    def __init__(self, dialog, title, parent=None):
+    def __init__(self, dialog, title, parent=None, bg_color=None):
         super().__init__(parent)
         self._dialog = dialog
         self._drag_pos = None
         self.setFixedHeight(44)
+        # QSS темы применяется при полировке; без неё палитра остаётся
+        # системной, и заголовок/иконка не совпадают с темой.
+        self.ensurePolished()
+
+        # Фон заголовка = QPalette.Window, слегка затемнённый. Так строка
+        # заголовка совпадает с темой (светлой или тёмной) и не выбивается
+        # из общего фона диалога.
+        if bg_color is None:
+            bg_color = QColor(self.palette().window().color()).darker(110)
+        self.setAutoFillBackground(True)
+        pal = self.palette()
+        pal.setColor(QPalette.Window, bg_color)
+        self.setPalette(pal)
+
+        # Тень под заголовком для визуального отрыва от тела диалога.
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 90))
+        self.setGraphicsEffect(shadow)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(16, 0, 8, 0)
@@ -601,7 +623,7 @@ class _DialogTitleBar(QWidget):
         close_button.setObjectName("bbClose")
         close_button.setFlat(True)
         close_button.setCursor(Qt.PointingHandCursor)
-        close_button.setIcon(colored_icon("cancel.svg", "#ffffff"))
+        close_button.setIcon(colored_icon("cancel.svg", self.palette().windowText().color().name()))
         close_button.setIconSize(QSize(16, 16))
         close_button.setToolTip(tr("Cancel", _lang()))
         close_button.clicked.connect(dialog.reject)
@@ -818,7 +840,8 @@ class BBCodeEditorDialog(QDialog):
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
 
-        # Заголовок (безрамочное окно перетаскивается за него)
+        # Заголовок (безрамочное окно перетаскивается за него).
+        # Цвет фона _DialogTitleBar вычисляет сам после полировки палитры.
         col.addWidget(_DialogTitleBar(self, tr("Edit About Me", lang)))
 
         # Панель форматирования

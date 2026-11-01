@@ -399,6 +399,9 @@ class _CustomTitleBar(QWidget):
         self._dialog = dialog
         self._drag_pos = None
         self.setFixedHeight(44)
+        # Полируем до чтения палитры: QSS темы применяется при полировке,
+        # иначе windowText остаётся системным (чёрным) в тёмной теме.
+        self.ensurePolished()
 
         row = QHBoxLayout(self)
         row.setContentsMargins(16, 0, 8, 0)
@@ -416,7 +419,7 @@ class _CustomTitleBar(QWidget):
         close_button.setIcon(
             colored_icon(
                 "cancel.svg",
-                dialog.palette().color(QPalette.WindowText).name(),
+                self.palette().windowText().color().name(),
             )
         )
         close_button.setIconSize(QSize(16, 16))

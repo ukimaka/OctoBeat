@@ -15,35 +15,52 @@ QTabWidget::pane {
     margin-top: 0px;
 }
 
-/* Панели: лёгкий вертикальный градиент вместо плоского цвета. */
+/* Заголовок: лёгкий вертикальный градиент. Плеер: плоский фон. */
 #customTitleBar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #343746, stop:1 #282a36);
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 #playerBar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #343746, stop:1 #282a36);
+    background-color: #282a36;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+QTabBar {
+    qproperty-drawBase: 0;
+    border: none;
 }
 
 QTabBar::tab {
     background: transparent;
-    color: #6272a4;
-    padding: 0px 14px;
-    min-height: 38px;
-    border: none; /* Убирает белые полосы */
+    border: none;
+    padding: 6px 14px;
 }
 
-QTabBar::tab:selected {
-    color: #f8f8f2;
-    border-top: 2px solid #bd93f9; /* Наш фирменный цвет */
-}
-
+/* Hover should ONLY change background/text color, NO BORDERS */
 QTabBar::tab:hover {
     background: #44475a;
+    border: none;
 }
 
+/* Selected tab gets the top line */
+QTabBar::tab:selected {
+    border-top: 2px solid palette(highlight);
+    color: #ffffff;
+}
+
+/* CRITICAL: Keep the top line visible even if the active tab is hovered */
+QTabBar::tab:selected:hover {
+    border-top: 2px solid palette(highlight);
+    border-bottom: none;
+    border-left: none;
+    border-right: none;
+    color: #ffffff;
+}
+
+
 QListWidget {
+    color: #f8f8f2;
     background-color: #282a36;
     border: none;
     outline: none;
@@ -65,9 +82,14 @@ QListWidget::item:selected {
     border: none;
 }
 
+QTreeView, QListView {
+    color: #f8f8f2;
+}
+
 QTreeView, QTreeWidget {
     outline: none;
     border: none;
+    color: #f8f8f2;
     show-decoration-selected: 0;
 }
 
@@ -189,6 +211,45 @@ QMenu::separator {
     margin: 4px 8px;
 }
 
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid palette(mid);
+    border-radius: 4px;
+    background: transparent;
+}
+
+QCheckBox::indicator:checked {
+    border: 2px solid palette(highlight);
+    background: transparent;
+    image: url("@ICONS_DIR@/white/confirm.svg");
+}
+
+QSlider#volumeSlider,
+QWidget#volumeBlock,
+QSlider#volumeSlider::groove:horizontal {
+    background: transparent;
+    border: none;
+}
+QSlider#volumeSlider::sub-page:horizontal {
+    background: palette(highlight);
+    border: none;
+}
+QSlider#volumeSlider::add-page:horizontal {
+    background: palette(mid);
+    border: none;
+}
+QSlider#volumeSlider::handle:horizontal {
+    background: palette(highlight);
+    border: none;
+    border-radius: 6px;
+}
+
+QSlider {
+    background: transparent;
+    border: none;
+}
+
 QSlider::groove:horizontal {
     height: 4px;
     background: transparent;
@@ -196,26 +257,28 @@ QSlider::groove:horizontal {
 }
 
 QSlider::sub-page:horizontal {
-    background: #bd93f9;
+    background: palette(highlight);
     border-radius: 2px;
     height: 4px;
 }
 
 QSlider::add-page:horizontal {
-    background: #44475a;
+    background: palette(mid);
     border-radius: 2px;
     height: 4px;
 }
 
 QSlider::handle:horizontal {
-    background: #f8f8f2;
+    background: palette(highlight);
+    border: none;
     width: 12px;
     margin: -5px 0;
     border-radius: 6px;
 }
 
 QSlider::handle:horizontal:hover {
-    background: #bd93f9;
+    background: palette(highlight);
+    border: none;
     width: 14px;
     margin: -6px 0;
 }
@@ -308,11 +371,6 @@ QScrollBar#profileScrollBar::sub-line:vertical {
 QScrollBar#profileScrollBar::add-page:vertical,
 QScrollBar#profileScrollBar::sub-page:vertical {
     background: transparent;
-}
-
-QFileDialog {
-    background-color: #282a36;
-    border: none;
 }
 
 QFileDialog QPushButton {

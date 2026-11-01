@@ -125,8 +125,12 @@ BASE_QSS = """
     border: none;
 }
 
-/* Панели (заголовок/плеер) намеренно не входят в жёсткий список выше:
-   их фон-градиент и тонкую границу задаёт каждая тема (.qss). */
+/* Заголовок и плеер не входят в жёсткий список выше: тонкую границу и
+   фон задаёт каждая тема (.qss). Плеер всегда плоский — градиенты снимаем. */
+#playerBar {
+    background-image: none;
+}
+
 #globalAvatarButton {
     background: transparent;
     border: none;
@@ -136,18 +140,87 @@ QTabWidget::pane {
     border: none;
 }
 
-/* Вкладки: убираем любые рамки у обычного и наведённого состояния
-   (иначе сторонние темы рисуют белые полосы), активную подчёркиваем
-   цветом акцента текущей темы через palette(highlight). */
-QTabBar::tab {
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid palette(mid);
+    border-radius: 4px;
+    background: transparent;
+}
+QCheckBox::indicator:checked {
+    border: 2px solid palette(highlight);
+    background: transparent;
+}
+
+QSlider {
+    background: transparent;
     border: none;
 }
+QSlider::groove:horizontal,
+QSlider::groove:vertical {
+    background: transparent;
+    border: none;
+}
+QSlider::handle:horizontal {
+    background: palette(highlight);
+    border: none;
+}
+QSlider#volumeSlider,
+QWidget#volumeBlock,
+QSlider#volumeSlider::groove:horizontal {
+    background: transparent;
+    border: none;
+}
+QSlider#volumeSlider::sub-page:horizontal {
+    background: palette(highlight);
+    border: none;
+}
+QSlider#volumeSlider::add-page:horizontal {
+    background: palette(mid);
+    border: none;
+}
+QSlider#volumeSlider::handle:horizontal {
+    background: palette(highlight);
+    border: none;
+    border-radius: 6px;
+}
+QSlider::add-page:horizontal,
+QSlider::add-page:vertical,
+QSlider::sub-page:horizontal,
+QSlider::sub-page:vertical {
+    background: palette(mid);
+    border: none;
+}
+QSlider::sub-page:horizontal,
+QSlider::sub-page:vertical {
+    background: palette(highlight);
+}
+
+/* Вкладки: отключаем glitchy drawBase и держим верхнюю линию активной
+   вкладки даже при наведении. Hover меняет только фон, без border. */
+QTabBar {
+    qproperty-drawBase: 0;
+    border: none;
+}
+QTabBar::tab {
+    background: transparent;
+    border: none;
+    padding: 6px 14px;
+}
 QTabBar::tab:hover {
+    background: rgba(127, 127, 127, 0.12);
     border: none;
 }
 QTabBar::tab:selected {
-    border: none;
     border-top: 2px solid palette(highlight);
+    color: #ffffff;
+}
+QTabBar::tab:selected:hover {
+    border-top: 2px solid palette(highlight);
+    border-bottom: none;
+    border-left: none;
+    border-right: none;
+    color: #ffffff;
 }
 
 /* Settings navigation — цвета берутся из каждой темы (.qss).
