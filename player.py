@@ -14,16 +14,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Обёртка над двумя QMediaPlayer для плавных переходов (crossfade)."""
+"""Crossfade player built on two reusable libVLC media-player slots."""
 
 import math
+from functools import partial
 
-from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtSignal, pyqtSlot
-from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
+
+from vlc_backend import PlaybackState, VlcAudioPlayer
 
 
 class CrossfadePlayer(QObject):
-    """Плеер с поддержкой crossfade между двумя внутренними QMediaPlayer."""
+    """Плеер с поддержкой crossfade между двумя VlcAudioPlayer."""
 
     positionChanged = pyqtSignal(int)
     durationChanged = pyqtSignal(int)
@@ -33,8 +35,9 @@ class CrossfadePlayer(QObject):
 
     def __init__(self):
         super().__init__()
-        self._players = [QMediaPlayer(), QMediaPlayer()]
+        self._players = [VlcAudioPlayer(self), VlcAudioPlayer(self)]
         self._active_index = 0
+        self._shutdown = False
 
         self._user_volume = 70
         self._track_loudness = None         # dB текущего трека или None
@@ -43,6 +46,7 @@ class CrossfadePlayer(QObject):
         self._crossfade_duration = 3000    # желаемая длительность, мс
         self._crossfade_started = False
         self._in_crossfade = False
+        self._about_to_finish_sent = False
 
         self._fade_timer = QTimer(self)
         self._fade_timer.setInterval(50)
@@ -54,10 +58,11 @@ class CrossfadePlayer(QObject):
         self._fade_target_volume = 0
 
         for p in self._players:
-            p.stateChanged.connect(self._on_state_changed)
-            p.positionChanged.connect(self._on_position_changed)
-            p.durationChanged.connect(self._on_duration_changed)
-            p.mediaStatusChanged.connect(self._on_media_status_changed)
+            p.stateChanged.connect(partial(self._on_state_changed, p))
+            p.positionChanged.connect(partial(self._on_position_changed, p))
+            p.durationChanged.connect(partial(self._on_duration_changed, p))
+            p.endReached.connect(partial(self._on_end_reached, p))
+            p.errorOccurred.connect(partial(self._on_error, p))
 
     # ------------------------------------------------------------------
     #  Внутренние хелперы
@@ -86,93 +91,122 @@ class CrossfadePlayer(QObject):
         old_active.stop()
         self._in_crossfade = False
         self._crossfade_started = False
+        self._about_to_finish_sent = False
         # Применяем нормализованную громкость к новому активному
         self._apply_current_volume()
-        self.stateChanged.emit(self._active().state())
+        self.stateChanged.emit(int(self._active().state()))
         self.durationChanged.emit(self._active().duration())
         self.positionChanged.emit(self._active().position())
 
     def _cancel_fade(self):
         """Прервать fade без swap: standby стоп, active восстановить громкость."""
         self._fade_timer.stop()
-        if self._in_crossfade:
-            self._standby().stop()
-            self._standby().setVolume(self._user_volume)
-            self._active().setVolume(self._user_volume)
+        was_fading = self._in_crossfade
         self._in_crossfade = False
         self._crossfade_started = False
+        self._about_to_finish_sent = False
+        if was_fading:
+            self._standby().stop()
+            self._apply_current_volume()
 
     # ------------------------------------------------------------------
-    #  Обработчики сигналов QMediaPlayer
+    #  Обработчики сигналов VlcAudioPlayer
     # ------------------------------------------------------------------
-    def _on_state_changed(self, state):
-        if self.sender() is self._active():
-            self.stateChanged.emit(state)
-
-    def _on_position_changed(self, pos):
-        if self.sender() is not self._active():
+    def _on_state_changed(self, player, state):
+        if self._shutdown:
             return
-        self.positionChanged.emit(pos)
+        if player is self._active():
+            self.stateChanged.emit(int(state))
 
-        if (self._crossfade_enabled
-                and not self._crossfade_started
-                and not self._in_crossfade
-                and self._user_volume > 0):
+    def _on_position_changed(self, player, pos):
+        if self._shutdown or player is not self._active():
+            return
+        self.positionChanged.emit(int(pos))
+
+        if (
+            self._crossfade_enabled
+            and not self._crossfade_started
+            and not self._in_crossfade
+            and self._user_volume > 0
+        ):
             dur = self._active().duration()
             if dur > 0:
                 remaining = dur - pos
                 threshold = self._effective_crossfade_duration()
-                # Минимум 500мс до конца трека — иначе пропускаем fade
-                if 500 < remaining <= threshold:
-                    # Флаг НЕ ставим тут — только уведомляем.
-                    # Флаг будет установлен в crossfade_to(), если UI решит делать fade.
+                # Минимум 500мс до конца трека — иначе пропускаем fade.
+                if (
+                    500 < remaining <= threshold
+                    and not self._about_to_finish_sent
+                ):
+                    # Флаг ставим здесь, чтобы VLC не присылал aboutToFinish
+                    # на каждом следующем тике позиции.
+                    self._about_to_finish_sent = True
                     self.aboutToFinish.emit()
 
-    def _on_duration_changed(self, dur):
-        if self.sender() is self._active():
-            self.durationChanged.emit(dur)
+    def _on_duration_changed(self, player, dur):
+        if self._shutdown or player is not self._active():
+            return
+        self.durationChanged.emit(int(dur))
 
-    def _on_media_status_changed(self, status):
-        if self.sender() is self._active() and status == QMediaPlayer.EndOfMedia:
-            # Если crossfade уже обработал переход — игнорируем
-            if self._crossfade_started or self._in_crossfade:
-                return
-            self.trackFinished.emit()
+    def _on_end_reached(self, player):
+        if self._shutdown or player is not self._active():
+            return
+        # Если crossfade уже обработал переход — игнорируем.
+        if self._crossfade_started or self._in_crossfade:
+            return
+        self.trackFinished.emit()
+
+    def _on_error(self, player, message):
+        if self._shutdown or player is not self._active():
+            return
+        print(f"[player] {message}")
 
     # ------------------------------------------------------------------
     #  Публичный API
     # ------------------------------------------------------------------
     def play(self, path, loudness=None):
         """Мгновенное переключение на трек (без crossfade)."""
+        if self._shutdown:
+            return
         self._track_loudness = loudness
         self._cancel_fade()
+        self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
 
         active = self._active()
-        active.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
-        # устанавливаем с учётом loudness
+        if not active.set_media(path):
+            print(f"[player] could not load {path}")
+            return
         gain = self._compute_gain()
         actual = max(0, min(100, int(self._user_volume * gain)))
-        active.setVolume(actual)
-        active.play()
+        active.set_volume(actual)
+        if not active.play():
+            print(f"[player] could not start {path}")
 
     def set_media(self, path, loudness=None):
         """Загружает трек без запуска — для обновления пути после
         переименования файла (медиа сбрасывается на новый путь)."""
+        if self._shutdown:
+            return
         self._track_loudness = loudness
         self._cancel_fade()
+        self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
 
         active = self._active()
-        active.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
+        if not active.set_media(path):
+            print(f"[player] could not load {path}")
+            return
         gain = self._compute_gain()
         actual = max(0, min(100, int(self._user_volume * gain)))
-        active.setVolume(actual)
+        active.set_volume(actual)
 
     def crossfade_to(self, path, loudness=None):
         """Плавно перейти на новый трек (наложение)."""
+        if self._shutdown:
+            return
         self._track_loudness = loudness
         # Crossfade выключен в настройках (или звук полностью убран) —
         # переключаемся мгновенно, без затухания и наложения.
@@ -186,12 +220,22 @@ class CrossfadePlayer(QObject):
 
         # Ставим флаг ЗДЕСЬ — раз UI реально решил делать fade
         self._crossfade_started = True
+        self._about_to_finish_sent = True
 
         standby = self._standby()
         standby.stop()
-        standby.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
-        standby.setVolume(0)
-        standby.play()
+        if not standby.set_media(path):
+            self._crossfade_started = False
+            self._about_to_finish_sent = False
+            self.play(path, loudness=loudness)
+            return
+
+        standby.set_volume(0)
+        if not standby.play():
+            self._crossfade_started = False
+            self._about_to_finish_sent = False
+            self.play(path, loudness=loudness)
+            return
 
         effective = self._effective_crossfade_duration()
         steps = max(1, effective // self._fade_timer.interval())
@@ -201,17 +245,20 @@ class CrossfadePlayer(QObject):
         self._fade_from_active = self._active().volume()
         # Целевая громкость fade-in: user_volume с учётом gain НОВОГО трека
         gain = self._compute_gain()
-        self._fade_target_volume = max(0, min(100, int(self._user_volume * gain)))
+        self._fade_target_volume = max(
+            0, min(100, int(self._user_volume * gain))
+        )
         self._in_crossfade = True
         self._fade_timer.start()
 
     def _on_fade_tick(self):
+        if self._shutdown:
+            self._fade_timer.stop()
+            return
         self._fade_step += 1
         t = min(1.0, self._fade_step / self._fade_steps)
         # Equal-power кривая: cos²(t·π/2) + sin²(t·π/2) = 1, поэтому
-        # суммарная мощность двух треков остаётся постоянной. На слух
-        # переход не «проваливается» в тишину на середине, в отличие от
-        # линейной интерполяции или smoothstep.
+        # суммарная мощность двух треков остаётся постоянной.
         active_vol = max(
             0, int(self._fade_from_active * math.cos(t * math.pi / 2))
         )
@@ -219,8 +266,8 @@ class CrossfadePlayer(QObject):
             self._fade_target_volume,
             int(self._fade_target_volume * math.sin(t * math.pi / 2)),
         )
-        self._active().setVolume(active_vol)
-        self._standby().setVolume(standby_vol)
+        self._active().set_volume(active_vol)
+        self._standby().set_volume(standby_vol)
 
         if self._fade_step >= self._fade_steps:
             self._complete_swap_now()
@@ -234,7 +281,8 @@ class CrossfadePlayer(QObject):
     def resume(self):
         self._crossfade_started = False
         self._in_crossfade = False
-        self._active().play()
+        self._about_to_finish_sent = False
+        self._active().resume()
 
     def stop(self):
         self._cancel_fade()
@@ -245,13 +293,29 @@ class CrossfadePlayer(QObject):
     def release(self):
         """Останавливает оба плеера и отпускает медиафайлы.
 
-        На Windows QMediaPlayer держит файл открытым, пока он загружен в
+        На Windows VLC может держать файл открытым, пока он загружен в
         плеер. После release файл можно переименовать или заменить.
         """
+        if self._shutdown:
+            return
         self._cancel_fade()
+        self._about_to_finish_sent = False
+        self._crossfade_started = False
+        self._in_crossfade = False
         for p in self._players:
-            p.stop()
-            p.setMedia(QMediaContent())
+            p.release_media()
+
+    def shutdown(self):
+        """Release VLC players and detach all event callbacks."""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._fade_timer.stop()
+        self._about_to_finish_sent = False
+        self._crossfade_started = False
+        self._in_crossfade = False
+        for p in self._players:
+            p.shutdown()
 
     def volume(self):
         """Текущая пользовательская громкость (0..100)."""
@@ -260,41 +324,17 @@ class CrossfadePlayer(QObject):
     def set_volume(self, volume):
         volume = max(0, min(100, int(volume)))
         if volume == self._user_volume:
-            return   # ничего не поменялось — не трогаем QMediaPlayer
+            return   # ничего не поменялось — не трогаем VLC
         self._user_volume = volume
         self._apply_current_volume()
 
     def _apply_current_volume(self):
-        """Применяет громкость с учётом loudness текущего трека.
-        Если QMediaPlayer сломался от частых setVolume — восстанавливаем."""
-        if self._in_crossfade:
+        """Применяет громкость с учётом loudness текущего трека."""
+        if self._in_crossfade or self._shutdown:
             return
         gain = self._compute_gain()
         actual = max(0, min(100, int(self._user_volume * gain)))
-
-        p = self._active()
-        was_playing = (p.state() == QMediaPlayer.PlayingState)
-
-        p.setVolume(actual)
-
-        # Watchdog: если плеер играл до setVolume, а после — Stopped,
-        # значит GStreamer pipeline сломался. Перезапускаем.
-        if was_playing and p.state() == QMediaPlayer.StoppedState:
-            print("[player] setVolume killed playback — recovering")
-            self._recover_active()
-            p.setVolume(actual)   # применим ещё раз после восстановления
-
-    def _recover_active(self):
-        """Принудительно перезапускает текущий трек с сохранением позиции."""
-        p = self._active()
-        if p.media().isNull():
-            return
-        pos = p.position()
-        p.stop()
-        p.play()
-        # setPosition применяем с небольшой задержкой — GStreamer должен
-        # успеть загрузить pipeline, иначе seek проигнорируется
-        QTimer.singleShot(50, lambda: p.setPosition(pos))
+        self._active().set_volume(actual)
 
     def _compute_gain(self):
         """Множитель громкости: тихие треки — громче, громкие — тише.
@@ -311,13 +351,16 @@ class CrossfadePlayer(QObject):
         self._apply_current_volume()
 
     def set_position(self, pos):
-        """Обрезает позицию по длительности трека — защита от GStreamer assertion."""
+        """Обрезает позицию по длительности трека."""
+        if self._shutdown:
+            return
         dur = self._active().duration()
         if dur > 0:
             pos = max(0, min(pos, dur))
         else:
             pos = max(0, pos)
-        self._active().setPosition(pos)
+        self._about_to_finish_sent = False
+        self._active().set_position(pos)
 
     def position(self):
         return self._active().position()
@@ -329,10 +372,10 @@ class CrossfadePlayer(QObject):
         return self._active().state()
 
     def is_playing(self):
-        return self._active().state() == QMediaPlayer.PlayingState
+        return self._active().state() == PlaybackState.PLAYING
 
     def media_is_null(self):
-        return self._active().media().isNull()
+        return self._active().media_is_null()
 
     def set_crossfade_enabled(self, enabled):
         """Включает/выключает кроссфейд без изменения его длительности."""
