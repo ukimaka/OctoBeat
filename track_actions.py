@@ -197,7 +197,7 @@ class TrackActions(QObject):
                 )
                 return
             if is_current:
-                # Windows не даст переименовать файл, пока QMediaPlayer
+                # Windows не даст переименовать файл, пока libVLC
                 # держит его открытым. release очищает оба плеера.
                 media_player.release()
                 stopped = True
@@ -358,7 +358,7 @@ class TrackActions(QObject):
             )
             return
 
-        # Импорт ленивый: trim_dialog тянет QtMultimedia и pydub/numpy.
+        # Импорт ленивый: trim_dialog тянет libVLC и pydub/numpy.
         from trim_dialog import AudioTrimDialog
 
         media_player = self.controller.media_player
@@ -366,7 +366,7 @@ class TrackActions(QObject):
         was_playing = is_current and media_player.is_playing()
         if is_current:
             # Освобождаем файл перед возможной атомарной заменой.
-            media_player.stop()
+            media_player.release()
 
         dialog = AudioTrimDialog(
             self.parent_widget,

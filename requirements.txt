@@ -1,4 +1,5 @@
 PyQt5
+python-vlc
 mutagen
 requests
 yt-dlp

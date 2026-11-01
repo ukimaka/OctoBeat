@@ -18,8 +18,7 @@
 
 from pathlib import Path
 
-from PyQt5.QtCore import QThread, QTimer, QUrl, Qt
-from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
+from PyQt5.QtCore import QThread, QTimer, Qt
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -40,6 +39,7 @@ from dialogs import (
 )
 from trim_waveform import WaveformLoader, WaveformWidget, _format_time
 from translations import tr
+from vlc_backend import PlaybackState, VlcAudioPlayer
 
 # QThread нельзя удалять, пока он работает. Если диалог закрыли во время
 # загрузки волны, поток живёт до завершения; этот словарь не даёт Python
@@ -159,13 +159,13 @@ class AudioTrimDialog(_FramelessDialog):
         self.waveform.seekRequested.connect(self._seek_to)
         self.waveform.markersChanged.connect(self._on_markers_changed)
 
-        self.player = QMediaPlayer(self)
-        self.player.setVolume(70)
-        self.player.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
+        self.player = VlcAudioPlayer(self)
+        self.player.set_volume(70)
+        self.player.set_media(file_path)
         self.player.positionChanged.connect(self._on_player_position)
         self.player.durationChanged.connect(self._on_player_duration)
         self.player.stateChanged.connect(self._on_player_state)
-        self.player.mediaStatusChanged.connect(self._on_media_status)
+        self.player.endReached.connect(self._on_player_end_reached)
 
         self._end_timer = QTimer(self)
         self._end_timer.setInterval(50)
@@ -203,7 +203,7 @@ class AudioTrimDialog(_FramelessDialog):
         self._duration_ms = int(duration_ms)
         self.waveform.set_waveform(peaks, duration_ms)
         self.save_button.setEnabled(True)
-        self.player.setPosition(0)
+        self.player.set_position(0)
         self._update_labels()
 
     def _dependency_error(self, message):
@@ -256,7 +256,7 @@ class AudioTrimDialog(_FramelessDialog):
     def _toggle_play(self):
         if self._busy or not self._wave_loaded:
             return
-        if self.player.state() == QMediaPlayer.PlayingState:
+        if self.player.state() == PlaybackState.PLAYING:
             self.player.pause()
             return
 
@@ -265,7 +265,7 @@ class AudioTrimDialog(_FramelessDialog):
             return
         position = self.player.position()
         if position < start or position >= end:
-            self.player.setPosition(start)
+            self.player.set_position(start)
             self.waveform.set_position(start)
         self.player.play()
 
@@ -273,17 +273,17 @@ class AudioTrimDialog(_FramelessDialog):
         if self._busy or not self._wave_loaded:
             return
         position_ms = max(0, min(int(position_ms), self._duration_ms))
-        self.player.setPosition(position_ms)
+        self.player.set_position(position_ms)
         self.waveform.set_position(position_ms)
         self._update_labels()
 
     def _on_markers_changed(self, start, end):
         self._update_labels()
-        if self.player.state() != QMediaPlayer.PlayingState:
+        if self.player.state() != PlaybackState.PLAYING:
             return
         position = self.player.position()
         if position < start:
-            self.player.setPosition(start)
+            self.player.set_position(start)
         elif position >= end:
             self._pause_at_end()
 
@@ -291,7 +291,7 @@ class AudioTrimDialog(_FramelessDialog):
         self.waveform.set_position(position)
         self._update_labels()
         if (
-            self.player.state() == QMediaPlayer.PlayingState
+            self.player.state() == PlaybackState.PLAYING
             and self._wave_loaded
             and position >= self.waveform.end_ms()
         ):
@@ -302,7 +302,7 @@ class AudioTrimDialog(_FramelessDialog):
         self._update_labels()
 
     def _on_player_state(self, state):
-        if state == QMediaPlayer.PlayingState:
+        if state == PlaybackState.PLAYING:
             self._end_timer.start()
             self.play_button.setText(tr("Pause", self._lang))
             self.play_button.setIcon(colored_icon("pause.svg", "#ffffff"))
@@ -311,20 +311,20 @@ class AudioTrimDialog(_FramelessDialog):
             self.play_button.setText(tr("Play", self._lang))
             self.play_button.setIcon(colored_icon("play.svg", "#ffffff"))
 
-    def _on_media_status(self, status):
-        if status == QMediaPlayer.EndOfMedia:
-            self.player.pause()
-            if self._wave_loaded:
-                end = self.waveform.end_ms()
-                self.player.setPosition(end)
-                self.waveform.set_position(end)
+    def _on_player_end_reached(self):
+        self._end_timer.stop()
+        if self._wave_loaded:
+            end = self.waveform.end_ms()
+            self.player.set_position(end)
+            self.waveform.set_position(end)
+            self._update_labels()
 
     # CHANGED: обработчик изменения громкости
     def _on_volume_changed(self, value):
-        self.player.setVolume(value)
+        self.player.set_volume(value)
 
     def _enforce_preview_end(self):
-        if self.player.state() != QMediaPlayer.PlayingState:
+        if self.player.state() != PlaybackState.PLAYING:
             self._end_timer.stop()
             return
         if self._wave_loaded and self.player.position() >= self.waveform.end_ms():
@@ -333,7 +333,7 @@ class AudioTrimDialog(_FramelessDialog):
     def _pause_at_end(self):
         end = self.waveform.end_ms()
         self.player.pause()
-        self.player.setPosition(end)
+        self.player.set_position(end)
         self.waveform.set_position(end)
         self._update_labels()
 
@@ -470,16 +470,15 @@ class AudioTrimDialog(_FramelessDialog):
     # ------------------------------------------------------------------
     def _release_player(self):
         """Отпускает файл, чтобы Windows разрешил его заменить."""
-        self.player.stop()
-        self.player.setMedia(QMediaContent())
+        self.player.release_media()
 
     def _restore_player(self):
         """Возвращает файл в плеер после неудачной/отменённой обрезки."""
-        self.player.setMedia(QMediaContent(QUrl.fromLocalFile(self._file_path)))
+        self.player.set_media(self._file_path)
 
     def _close_player(self):
         self._end_timer.stop()
-        self._release_player()
+        self.player.shutdown()
 
     def done(self, result):
         if self._busy and result == QDialog.Rejected:

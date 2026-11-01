@@ -37,7 +37,7 @@ import paths
 
 
 class PlaybackState(IntEnum):
-    """State values matching the old QMediaPlayer integer contract."""
+    """Playback states matching the previous integer contract."""
 
     STOPPED = 0
     PLAYING = 1

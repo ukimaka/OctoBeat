@@ -18,7 +18,6 @@ import random
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer
-from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -57,6 +56,7 @@ from track_menu import TrackContextMenu
 from translations import tr
 from ui_common import IconProvider, apply_menu_depth
 from updater import UpdateChecker, UpdateDownloader, apply_update
+from vlc_backend import PlaybackState
 
 
 class CustomTabBar(QTabBar):
@@ -568,6 +568,7 @@ class MainWindow(QMainWindow):
         self.lyrics_manager.shutdown()
         if stop_mpris is not None:
             stop_mpris(c)
+        self.media_player.shutdown()
         super().closeEvent(event)
 
     def _on_track_changed(self, track_id, title):
@@ -832,7 +833,7 @@ class MainWindow(QMainWindow):
                 c.clear_context()
 
     def _on_player_state_changed(self, state):
-        playing = state if isinstance(state, bool) else (state == QMediaPlayer.PlayingState)
+        playing = state if isinstance(state, bool) else (state == PlaybackState.PLAYING)
         self.player_bar.set_playing(playing)
 
         if playing:

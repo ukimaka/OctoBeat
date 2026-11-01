@@ -32,7 +32,8 @@ from mpris_server import (
     Server,
 )
 from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtMultimedia import QMediaPlayer
+
+from vlc_backend import PlaybackState
 
 # В библиотеке mpris_server состояние плеера называется PlayState.
 # Псевдоним оставлен для читаемости и совместимости с формулировкой задачи.
@@ -50,7 +51,7 @@ class _MprisCommandBridge(QObject):
     """Мост между D-Bus-потоком и Qt-потоком.
 
     Методы MPRIS вызываются glib-потоком (в котором крутится D-Bus loop),
-    а работа с QMediaPlayer обязана происходить в потоке главного окна.
+    а работа с libVLC обязана происходить в потоке главного окна.
     Поэтому адаптер не дёргает контроллер напрямую, а испускает Qt-сигналы:
     они доставляются в UI-поток через queued connection.
     """
@@ -129,7 +130,7 @@ class PlayerMprisAdapter(MprisAdapter):
             return PlaybackStatus.STOPPED
         if player.is_playing():
             return PlaybackStatus.PLAYING
-        if player.state() == QMediaPlayer.PausedState:
+        if player.state() == PlaybackState.PAUSED:
             return PlaybackStatus.PAUSED
         return PlaybackStatus.STOPPED
 

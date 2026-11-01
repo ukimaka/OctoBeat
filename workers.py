@@ -288,7 +288,7 @@ class RescanWorker(QObject):
                                 db.get_track_by_path(value) is not None
                             ),
                         )
-                        # QMediaPlayer живёт в главном потоке, поэтому
+                        # libVLC живёт в главном потоке, поэтому
                         # release вызывается через блокирующий сигнал.
                         self.release_requested.emit()
                         try:
