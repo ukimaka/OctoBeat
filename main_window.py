@@ -17,7 +17,7 @@
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
     QAction,
@@ -47,6 +47,7 @@ from library_tab import LibraryTab
 from lyrics_manager import LyricsManager
 from lyrics_panel import LyricsPanel
 from player_bar import PlayerBar
+from paths import MUSIC_DIR
 from playlists_ui import PlaylistsPage
 from profile_ui import ProfilePage
 from settings_page import SettingsPage
@@ -75,10 +76,12 @@ except Exception as exc:
     stop_mpris = None
 
 
-MUSIC_FOLDER = Path.home() / "Music"
+MUSIC_FOLDER = MUSIC_DIR
 
 
 class MainWindow(QMainWindow):
+
+    _NORMAL_MARGINS = (0, 0, 0, 0)
 
     def __init__(self):
         super().__init__()
@@ -195,7 +198,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
         # Убираем стандартные отступы для безрамочного окна
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(*self._NORMAL_MARGINS)
+        self._root_layout = root
         root.setSpacing(0)
 
         root.addWidget(self.title_bar)
@@ -353,6 +357,18 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
         self._close_update_progress()
+
+    def changeEvent(self, event):
+        """Убирает внешние поля окна в развёрнутом состоянии."""
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            layout = getattr(self, "_root_layout", None)
+            if layout is not None:
+                margins = (
+                    (0, 0, 0, 0) if self.isMaximized()
+                    else self._NORMAL_MARGINS
+                )
+                layout.setContentsMargins(*margins)
 
     def resizeEvent(self, event):
         """Позиционирует QSizeGrip в правом нижнем углу при ресайзе."""

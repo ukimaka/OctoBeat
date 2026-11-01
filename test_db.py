@@ -14,59 +14,72 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Ручной тест db.py. Запускается из терминала: python test_db.py"""
+"""Ручной тест db.py. Запускается из терминала: python test_db.py
 
-# Чистим старую базу, если есть (полезно для повторных запусков)
-import os
+Тест работает только с временной базой и никогда не трогает music.db.
+"""
+
+import tempfile
+from pathlib import Path
 
 import db
 
-if os.path.exists(db.DB_FILE):
-    os.remove(db.DB_FILE)
 
-db.init_db()
-print("БД создана")
+def main():
+    with tempfile.TemporaryDirectory(prefix="octobeat-db-test-") as tmp:
+        db.DB_FILE = Path(tmp) / "test.db"
+        db.init_db()
+        print(f"БД создана во временной папке: {db.DB_FILE}")
 
-# --- Треки ---
-id1 = db.add_track("/home/baka/Music/song1.mp3")
-id2 = db.add_track("/home/baka/Music/song2.mp3")
-id3 = db.add_track("/home/baka/Music/song3.mp3")
-dup = db.add_track("/home/baka/Music/song1.mp3")   # дубликат
+        # --- Треки ---
+        id1 = db.add_track("/home/baka/Music/song1.mp3")
+        id2 = db.add_track("/home/baka/Music/song2.mp3")
+        id3 = db.add_track("/home/baka/Music/song3.mp3")
+        dup = db.add_track("/home/baka/Music/song1.mp3")   # дубликат
 
-print(f"Добавлены треки: {id1}, {id2}, {id3}")
-print(f"Дубликат вернул: {dup} (должно быть None)")
+        print(f"Добавлены треки: {id1}, {id2}, {id3}")
+        print(f"Дубликат вернул: {dup} (должно быть None)")
+        assert dup is None
 
-tracks = db.get_all_tracks()
-print(f"\nВсе треки ({len(tracks)}):")
-for t in tracks:
-    print(f"  id={t['id']}, path={t['file_path']}")
+        tracks = db.get_all_tracks()
+        print(f"\nВсе треки ({len(tracks)}):")
+        for t in tracks:
+            print(f"  id={t['id']}, path={t['file_path']}")
+        assert len(tracks) == 3
 
-# --- Плейлисты ---
-p1 = db.create_playlist("Rock")
-p2 = db.create_playlist("Jazz")
-pdup = db.create_playlist("Rock")   # дубликат имени
+        # --- Плейлисты ---
+        p1 = db.create_playlist("Rock")
+        p2 = db.create_playlist("Jazz")
+        pdup = db.create_playlist("Rock")   # дубликат имени
 
-print(f"\nСозданы плейлисты: {p1}, {p2}")
-print(f"Дубликат имени вернул: {pdup} (должно быть None)")
+        print(f"\nСозданы плейлисты: {p1}, {p2}")
+        print(f"Дубликат имени вернул: {pdup} (должно быть None)")
+        assert pdup is None
 
-# --- Добавление треков в плейлист ---
-db.add_track_to_playlist(p1, id1)
-db.add_track_to_playlist(p1, id2)
-db.add_track_to_playlist(p1, id1)   # дубликат — не должен добавиться
-db.add_track_to_playlist(p2, id3)
+        # --- Добавление треков в плейлист ---
+        db.add_track_to_playlist(p1, id1)
+        db.add_track_to_playlist(p1, id2)
+        db.add_track_to_playlist(p1, id1)   # дубликат — не должен добавиться
+        db.add_track_to_playlist(p2, id3)
 
-rock_tracks = db.get_tracks_in_playlist(p1)
-print(f"\nТреки в Rock ({len(rock_tracks)}, должно быть 2):")
-for t in rock_tracks:
-    print(f"  {t['file_path']}")
+        rock_tracks = db.get_tracks_in_playlist(p1)
+        print(f"\nТреки в Rock ({len(rock_tracks)}, должно быть 2):")
+        for t in rock_tracks:
+            print(f"  {t['file_path']}")
+        assert len(rock_tracks) == 2
 
-# --- Каскадное удаление ---
-print("\nУдаляем трек id=1...")
-db.delete_track(id1)
+        # --- Каскадное удаление ---
+        print("\nУдаляем трек id=1...")
+        db.delete_track(id1)
 
-rock_after = db.get_tracks_in_playlist(p1)
-print(f"Треки в Rock после удаления ({len(rock_after)}, должно быть 1):")
-for t in rock_after:
-    print(f"  {t['file_path']}")
+        rock_after = db.get_tracks_in_playlist(p1)
+        print(f"Треки в Rock после удаления ({len(rock_after)}, должно быть 1):")
+        for t in rock_after:
+            print(f"  {t['file_path']}")
+        assert len(rock_after) == 1
 
-print("\nВсё ок!")
+        print("\nВсё ок!")
+
+
+if __name__ == "__main__":
+    main()

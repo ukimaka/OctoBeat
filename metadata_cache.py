@@ -21,12 +21,11 @@ import os
 import tempfile
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from metadata_normalize import normalize_artist_name, normalize_track_query
+from paths import CACHE_DIR
 
-CACHE_DIR = Path.home() / ".cache" / "music_player"
 CACHE_FILE = CACHE_DIR / "metadata_cache.json"
 
 CACHE_TTL = 30 * 24 * 60 * 60          # успешный ответ — 30 дней

@@ -35,10 +35,18 @@ from musicbrainz_client import (
     get_track_metadata_with_fallback,
     metadata_needs_refresh,
 )
+from paths import MUSIC_DIR
+from path_utils import (
+    find_tool,
+    safe_replace,
+    subprocess_creationflags,
+    subprocess_env,
+    unique_path,
+)
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav"}
 
-MUSIC_FOLDER = Path.home() / "Music"
+MUSIC_FOLDER = MUSIC_DIR
 
 # Небезопасные для файловой системы символы (+ '%' — служебный в yt-dlp)
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|%\x00-\x1f]')
@@ -68,11 +76,22 @@ def find_sidecar_image(file_path):
 def get_mean_volume(path):
     """Запускает ffmpeg volumedetect и парсит mean_volume в dB.
     Возвращает float или None."""
+    exe = find_tool("ffmpeg")
+    if exe is None:
+        print("[loudness] ffmpeg not found")
+        return None
     try:
         result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-i", path,
+            [exe, "-hide_banner", "-i", path,
              "-af", "volumedetect", "-f", "null", "-"],
-            capture_output=True, text=True, timeout=120, check=False
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+            env=subprocess_env(),
+            creationflags=subprocess_creationflags(),
         )
     except FileNotFoundError:
         print("[loudness] ffmpeg not found")
@@ -197,6 +216,7 @@ class RescanWorker(QObject):
     """Перечитывает метаданные + измеряет громкость у треков без loudness."""
 
     progress = pyqtSignal(int, int)
+    release_requested = pyqtSignal()
     finished = pyqtSignal(int, int, int)
     #               metadata_updated, loudness_processed, loudness_failed
 
@@ -258,6 +278,19 @@ class RescanWorker(QObject):
                     ).strip()
                     candidate = str(Path(path).with_name(safe_name + ext))
                     if candidate != path:
+                        # os.rename молча перезаписывает файл на Linux,
+                        # поэтому сначала подбираем свободное имя. Проверяем
+                        # и диск, и БД: иначе UPDATE упрётся в UNIQUE.
+                        candidate = unique_path(
+                            candidate,
+                            current_path=path,
+                            is_taken=lambda value: (
+                                db.get_track_by_path(value) is not None
+                            ),
+                        )
+                        # QMediaPlayer живёт в главном потоке, поэтому
+                        # release вызывается через блокирующий сигнал.
+                        self.release_requested.emit()
                         try:
                             os.rename(path, candidate)
                             new_path = candidate
@@ -501,9 +534,9 @@ class CsvImportWorker(QObject):
     #  Скачивание
     # ------------------------------------------------------------------
     def _download(self, artist, track_name, output_base):
-        exe = shutil.which("yt-dlp")
+        exe = find_tool("yt-dlp")
         if exe is None:
-            raise RuntimeError("yt-dlp не найден в PATH")
+            raise RuntimeError("yt-dlp не найден")
 
         from youtube_worker import _find_cookies_file
 
@@ -532,7 +565,11 @@ class CsvImportWorker(QObject):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
+                env=subprocess_env(),
+                creationflags=subprocess_creationflags(),
             )
             if self._proc.stdout:
                 for line in self._proc.stdout:
@@ -805,7 +842,7 @@ class TrimWorker(QObject):
             return
 
         # WAV pydub умеет читать/писать без ffmpeg, остальные форматы — нет.
-        if ext != ".wav" and shutil.which("ffmpeg") is None:
+        if ext != ".wav" and find_tool("ffmpeg") is None:
             self.error.emit(
                 "FFmpeg is not installed. Install it with your package "
                 "manager (e.g. sudo apt install ffmpeg)."
@@ -881,7 +918,7 @@ class TrimWorker(QObject):
             except OSError:
                 pass
 
-            os.replace(temp_path, self.file_path)
+            safe_replace(temp_path, self.file_path)
             temp_path = None
             self.progress.emit(100)
             self.finished.emit(len(trimmed) / 1000.0)

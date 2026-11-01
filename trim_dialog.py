@@ -206,6 +206,24 @@ class AudioTrimDialog(_FramelessDialog):
         self.player.setPosition(0)
         self._update_labels()
 
+    def _dependency_error(self, message):
+        """Переводит ошибки отсутствующих pydub/numpy на текущий язык."""
+        text = str(message)
+        if "pydub" not in text and "numpy" not in text:
+            return text
+        parts = []
+        if "pydub" in text:
+            parts.append(tr(
+                "pydub is not installed. Install it with: pip install pydub",
+                self._lang(),
+            ))
+        if "numpy" in text:
+            parts.append(tr(
+                "numpy is not installed. Install it with: pip install numpy",
+                self._lang(),
+            ))
+        return "\n".join(parts)
+
     def _on_wave_error(self, message):
         if self._closing:
             return
@@ -214,7 +232,9 @@ class AudioTrimDialog(_FramelessDialog):
         CustomConfirmDialog.information(
             self,
             tr("Trim audio", self._lang),
-            tr("Could not load waveform:\n{e}", self._lang).format(e=message),
+            tr("Could not load waveform:\n{e}", self._lang).format(
+                e=self._dependency_error(message)
+            ),
         )
 
     def _on_wave_thread_finished(self):
@@ -352,6 +372,7 @@ class AudioTrimDialog(_FramelessDialog):
             return
 
         self.player.pause()
+        self._release_player()
         self._end_timer.stop()
         self._busy = True
         self._set_controls_enabled(False)
@@ -420,17 +441,22 @@ class AudioTrimDialog(_FramelessDialog):
         if self._progress is not None:
             self._progress.close()
         self._busy = False
+        self._release_player()
+        self._restore_player()
         self._set_controls_enabled(True)
         CustomConfirmDialog.information(
             self,
             tr("Trim audio", self._lang),
-            tr("Could not trim audio:\n{e}", self._lang).format(e=message),
+            tr("Could not trim audio:\n{e}", self._lang).format(
+                e=self._dependency_error(message)
+            ),
         )
 
     def _on_trim_cancelled(self):
         if self._progress is not None:
             self._progress.close()
         self._busy = False
+        self._restore_player()
         self._set_controls_enabled(True)
 
     def _on_trim_thread_finished(self):
@@ -442,10 +468,18 @@ class AudioTrimDialog(_FramelessDialog):
     # ------------------------------------------------------------------
     #  Завершение
     # ------------------------------------------------------------------
-    def _close_player(self):
-        self._end_timer.stop()
+    def _release_player(self):
+        """Отпускает файл, чтобы Windows разрешил его заменить."""
         self.player.stop()
         self.player.setMedia(QMediaContent())
+
+    def _restore_player(self):
+        """Возвращает файл в плеер после неудачной/отменённой обрезки."""
+        self.player.setMedia(QMediaContent(QUrl.fromLocalFile(self._file_path)))
+
+    def _close_player(self):
+        self._end_timer.stop()
+        self._release_player()
 
     def done(self, result):
         if self._busy and result == QDialog.Rejected:

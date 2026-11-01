@@ -16,6 +16,8 @@
 
 """Вкладка библиотеки: тулбар, поиск, сортировка, дерево и Next in queue."""
 
+import os
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -36,6 +38,8 @@ from dialogs import CustomConfirmDialog, CustomInputDialog
 from library_tree import LibraryTreeWidget
 from musicbrainz_client import get_cached_source_for_path
 from next_track_island import NextTrackIsland
+from path_utils import normalize_track_path
+from paths import MUSIC_DIR
 from translations import tr
 
 
@@ -223,12 +227,17 @@ class LibraryTab(QWidget):
         rows = db.get_all_tracks()
 
         # CHANGED: Filter tracks to only show those in the configured download_dir
-        from pathlib import Path
-
         from PyQt5.QtCore import QSettings
         settings = QSettings("MusicPlayer", "MusicPlayer")
-        download_dir = settings.value("download_dir", str(Path.home() / "Music"))
-        rows = [r for r in rows if r["file_path"].startswith(download_dir)]
+        download_dir = settings.value("download_dir", str(MUSIC_DIR))
+        download_root = normalize_track_path(download_dir)
+        prefix = download_root.rstrip(os.sep) + os.sep
+
+        def in_download_dir(row):
+            path = normalize_track_path(row["file_path"])
+            return path == download_root or path.startswith(prefix)
+
+        rows = [r for r in rows if in_download_dir(r)]
 
         text = self.search_edit.text().strip().lower()
         if text:

@@ -24,13 +24,14 @@
 
 import os
 import re
-from pathlib import Path
 
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
 
-THEMES_DIR = Path(__file__).resolve().parent / "themes"
-ICONS_DIR = Path(__file__).resolve().parent / "icons"
+from paths import RESOURCE_DIR
+
+THEMES_DIR = RESOURCE_DIR / "themes"
+ICONS_DIR = RESOURCE_DIR / "icons"
 DEFAULT_THEME = "dark"
 
 

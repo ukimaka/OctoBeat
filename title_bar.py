@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 
@@ -37,8 +37,6 @@ class CustomTitleBar(QWidget):
         self.close_button.clicked.connect(
             lambda checked=False: self.window().close()
         )  # pyright: ignore[reportArgumentType]
-        self.drag_pos = QPoint()
-
         self.apply_theme(True)
 
     def apply_theme(self, is_dark):
@@ -91,12 +89,37 @@ class CustomTitleBar(QWidget):
         else:
             self.window().showMaximized()
 
+    def _resize_edges(self, global_pos):
+        """Определяет края окна под курсором для системного resize."""
+        rect = self.window().frameGeometry()
+        margin = 6
+        edges = Qt.Edges()
+        if global_pos.x() - rect.left() <= margin:
+            edges |= Qt.LeftEdge
+        elif rect.right() - global_pos.x() <= margin:
+            edges |= Qt.RightEdge
+        if global_pos.y() - rect.top() <= margin:
+            edges |= Qt.TopEdge
+        elif rect.bottom() - global_pos.y() <= margin:
+            edges |= Qt.BottomEdge
+        return edges
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.drag_pos = event.globalPos() - self.window().frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton and hasattr(self, 'drag_pos'):
-            self.window().move(event.globalPos() - self.drag_pos)
-            event.accept()
+            handle = self.window().windowHandle()
+            if handle is not None:
+                edges = self._resize_edges(event.globalPos())
+                if (
+                    edges
+                    and hasattr(handle, "startSystemResize")
+                    and handle.startSystemResize(edges)
+                ):
+                    event.accept()
+                    return
+                if (
+                    hasattr(handle, "startSystemMove")
+                    and handle.startSystemMove()
+                ):
+                    event.accept()
+                    return
+        super().mousePressEvent(event)

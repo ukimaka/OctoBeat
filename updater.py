@@ -30,6 +30,7 @@ from urllib.parse import unquote, urlparse
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from path_utils import subprocess_creationflags, subprocess_env
 from version import __version__
 
 RELEASES_API = "https://api.github.com/repos/ukimaka/OctoBeat/releases/latest"
@@ -233,7 +234,10 @@ def _apply_windows(path):
     batch.write_text(script, encoding="utf-8")
     subprocess.Popen(
         ["cmd", "/c", str(batch)],
-        creationflags=0x00000008,  # DETACHED_PROCESS
+        creationflags=0x00000008 | subprocess_creationflags(),
         close_fds=True,
+        encoding="utf-8",
+        errors="replace",
+        env=subprocess_env(),
     )
     sys.exit(0)

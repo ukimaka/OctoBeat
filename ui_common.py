@@ -43,6 +43,7 @@ from PyQt5.QtWidgets import (
     QStyle,
 )
 
+from paths import RESOURCE_DIR
 from pixmap_utils import (
     draw_centered,
     draw_cover,
@@ -156,7 +157,7 @@ class IconProvider:
     def __init__(self, icons_dir=None, is_dark=True):
         self._icons_dir = (
             Path(icons_dir) if icons_dir is not None
-            else Path(__file__).resolve().parent / "icons"
+            else RESOURCE_DIR / "icons"
         )
         self._is_dark = bool(is_dark)
 
@@ -253,7 +254,7 @@ def _make_file_dialog(parent, caption, directory, file_filter, options=None):
 
 def _file_dialog_button_icon(filename, color):
     """Перекрашенная SVG-иконка для внутренних кнопок QFileDialog."""
-    path = Path(__file__).resolve().parent / "icons" / "black" / filename
+    path = RESOURCE_DIR / "icons" / "black" / filename
     if not path.is_file():
         return QIcon()
     pixmap = svg_file_pixmap(path, 32, color=color)

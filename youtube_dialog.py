@@ -22,7 +22,6 @@
 """
 
 import hashlib
-from pathlib import Path
 
 import requests
 from PyQt5.QtCore import (
@@ -67,12 +66,13 @@ from dialogs import (
     colored_icon,
     colored_pixmap,
 )
+from paths import CACHE_DIR
 from pixmap_utils import draw_centered, draw_cover, icon_pixmap_rect
 from styles import is_dark_theme
 from translations import tr
 from youtube_worker import YoutubeSearchWorker, YoutubeWorker
 
-THUMBS_DIR = Path.home() / ".cache" / "music_player" / "yt_thumbs"
+THUMBS_DIR = CACHE_DIR / "yt_thumbs"
 
 
 class SearchResultDelegate(QStyledItemDelegate):

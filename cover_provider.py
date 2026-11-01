@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -42,9 +41,16 @@ from metadata_normalize import (
     normalize_track_query,
     split_featured_artists,
 )
+from paths import CACHE_DIR
+from path_utils import (
+    find_tool,
+    safe_replace,
+    subprocess_creationflags,
+    subprocess_env,
+)
 
-COVER_DIR = Path.home() / ".cache" / "music_player" / "musicbrainz_covers"
-YOUTUBE_COVER_DIR = Path.home() / ".cache" / "music_player" / "youtube_covers"
+COVER_DIR = CACHE_DIR / "musicbrainz_covers"
+YOUTUBE_COVER_DIR = CACHE_DIR / "youtube_covers"
 
 REQUEST_TIMEOUT = 15
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -245,6 +251,7 @@ def _save_cover_bytes(
     target_dir = COVER_DIR if source == "musicbrainz" else YOUTUBE_COVER_DIR
     digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()
     target = target_dir / f"{digest}{ext}"
+    tmp_name = ""
 
     try:
         if target.is_file() and target.stat().st_size == len(data):
@@ -260,9 +267,14 @@ def _save_cover_bytes(
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_name, target)
+        safe_replace(tmp_name, target)
         return str(target)
     except Exception as exc:
+        if tmp_name:
+            try:
+                os.remove(tmp_name)
+            except OSError:
+                pass
         print(f"[cover-art] cannot save cover: {exc}")
         return None
 
@@ -308,7 +320,7 @@ def _youtube_first_result(query: str) -> dict[str, Any] | None:
     if not query:
         return None
 
-    exe = shutil.which("yt-dlp")
+    exe = find_tool("yt-dlp")
     if exe is None:
         return None
 
@@ -336,8 +348,12 @@ def _youtube_first_result(query: str) -> dict[str, Any] | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
-            check=False
+            check=False,
+            env=subprocess_env(),
+            creationflags=subprocess_creationflags(),
         )
     except Exception as exc:
         print(f"[youtube] search failed: {exc}")

@@ -16,9 +16,7 @@
 
 """Базовая обвязка безрамочных диалогов и общие иконки."""
 
-from pathlib import Path
-
-from PyQt5.QtCore import QSettings, QSize, Qt
+from PyQt5.QtCore import QEvent, QSettings, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QPalette, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -34,12 +32,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from paths import RESOURCE_DIR
 from pixmap_utils import svg_file_pixmap
 from styles import is_dark_theme
 from translations import tr
 
 
-ICONS_DIR = Path(__file__).parent / "icons"
+ICONS_DIR = RESOURCE_DIR / "icons"
 
 # Логический размер рендера SVG для QIcon. QStyle выберет из него
 # физический вариант под текущий DPR.
@@ -235,7 +234,6 @@ class _CustomTitleBar(QWidget):
     def __init__(self, dialog, title, parent=None):
         super().__init__(parent)
         self._dialog = dialog
-        self._drag_pos = None
         self.setFixedHeight(44)
         # Полируем до чтения палитры: QSS темы применяется при полировке,
         # иначе windowText остаётся системным (чёрным) в тёмной теме.
@@ -265,24 +263,46 @@ class _CustomTitleBar(QWidget):
         close_button.clicked.connect(dialog.reject)
         row.addWidget(close_button)
 
+    def _resize_edges(self, global_pos):
+        """Определяет края диалога под курсором для системного resize."""
+        rect = self._dialog.frameGeometry()
+        margin = 6
+        edges = Qt.Edges()
+        if global_pos.x() - rect.left() <= margin:
+            edges |= Qt.LeftEdge
+        elif rect.right() - global_pos.x() <= margin:
+            edges |= Qt.RightEdge
+        if global_pos.y() - rect.top() <= margin:
+            edges |= Qt.TopEdge
+        elif rect.bottom() - global_pos.y() <= margin:
+            edges |= Qt.BottomEdge
+        return edges
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self._drag_pos = (
-                event.globalPos() - self._dialog.frameGeometry().topLeft()
-            )
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
-            self._dialog.move(event.globalPos() - self._drag_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
+            handle = self._dialog.windowHandle()
+            if handle is not None:
+                edges = self._resize_edges(event.globalPos())
+                if (
+                    edges
+                    and hasattr(handle, "startSystemResize")
+                    and handle.startSystemResize(edges)
+                ):
+                    event.accept()
+                    return
+                if (
+                    hasattr(handle, "startSystemMove")
+                    and handle.startSystemMove()
+                ):
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
 
 
 class _FramelessDialog(QDialog):
     """Общая обвязка безрамочных диалогов: тёмный фон, скругления, тень."""
+
+    _NORMAL_MARGINS = (16, 16, 16, 16)
 
     def __init__(self, parent=None, title=""):
         super().__init__(parent)
@@ -296,7 +316,8 @@ class _FramelessDialog(QDialog):
         self.setModal(True)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        root.setContentsMargins(*self._NORMAL_MARGINS)
+        self._root_layout = root
 
         self._container = QFrame()
         self._container.setObjectName("cdRoot")
@@ -323,6 +344,18 @@ class _FramelessDialog(QDialog):
         # приложения), поэтому собираем стиль после ensurePolished().
         self.ensurePolished()
         self.setStyleSheet(_custom_dialog_qss(self.palette()))
+
+    def changeEvent(self, event):
+        """Убирает внешние поля диалога в развёрнутом состоянии."""
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            layout = getattr(self, "_root_layout", None)
+            if layout is not None:
+                margins = (
+                    (0, 0, 0, 0) if self.isMaximized()
+                    else self._NORMAL_MARGINS
+                )
+                layout.setContentsMargins(*margins)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

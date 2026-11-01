@@ -169,8 +169,13 @@ class ImportFlow(QObject):
         )
 
     def rescan(self) -> None:
+        worker = workers.RescanWorker()
+        worker.release_requested.connect(
+            self.parent_window.controller.media_player.release,
+            Qt.BlockingQueuedConnection,
+        )
         self._run_worker_with_progress(
-            workers.RescanWorker(),
+            worker,
             title=tr(
                 "Updating track info", self.settings.value("language", "en")
             ),

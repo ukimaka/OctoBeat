@@ -25,11 +25,12 @@ from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PyQt5.QtSvg import QSvgRenderer
 
 from dialogs import colored_pixmap
+from paths import CACHE_DIR, DATA_DIR
 from pixmap_utils import draw_centered, draw_cover, new_pixmap, render_svg
 from styles import is_dark_theme
 
-PROFILE_COVERS_DIR = Path.home() / ".cache" / "music_player" / "profile_covers"
-PROFILE_DIR = Path.home() / ".local" / "share" / "music_player" / "profile"
+PROFILE_COVERS_DIR = CACHE_DIR / "profile_covers"
+PROFILE_DIR = DATA_DIR / "profile"
 
 
 def _svg_pixmap(markup, color, size):

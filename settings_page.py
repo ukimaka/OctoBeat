@@ -44,14 +44,14 @@ from PyQt5.QtWidgets import (
 from api_client import ApiClient
 from auth_ui import AuthDialog
 from dialogs import CustomConfirmDialog, colored_icon
+from paths import CACHE_DIR, DATA_DIR, MUSIC_DIR
 from styles import available_themes, is_dark_theme
 from translations import tr
 from ui_common import get_existing_directory, get_open_file_name
 
-CACHE_DIR = Path.home() / ".cache" / "music_player"
 COVERS_DIR = CACHE_DIR / "covers"
-PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
-PROFILE_DATA_DIR = Path.home() / ".local" / "share" / "music_player" / "profile"
+PLAYLIST_COVERS_DIR = DATA_DIR / "playlist_covers"
+PROFILE_DATA_DIR = DATA_DIR / "profile"
 
 # Замени на ссылку своего репозитория.
 PROJECT_GITHUB_URL = "https://github.com/yourname/music_player"
@@ -384,13 +384,13 @@ class SettingsPage(QWidget):
 
         # --- Кнопка "Выбрать папку" (если LFM её не добавила, добавь сюда) ---
         # Сигнал подключаем ТОЛЬКО в _connect_signals() — здесь не делать.
-        self.browse_music_button = QPushButton(tr("Выбрать папку", self._lang()))
+        self.browse_music_button = QPushButton(tr("Select folder", self._lang()))
         control_row.addWidget(self.music_folder_edit)
         control_row.addWidget(self.browse_music_button)
 
         layout.addWidget(self._make_row(
-            tr("Папка для музыки", self._lang()),
-            tr("Путь, куда будут скачиваться треки.", self._lang()),
+            tr("Music folder", self._lang()),
+            tr("Folder where downloaded music is stored.", self._lang()),
             control_widget,
         ))
 
@@ -494,7 +494,7 @@ class SettingsPage(QWidget):
 
         self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
 
-        self.music_folder_edit.setText(self.settings.value("download_dir", str(Path.home() / "Music")))
+        self.music_folder_edit.setText(self.settings.value("download_dir", str(MUSIC_DIR)))
 
     # ------------------------------------------------------------------
     #  Аккаунт
@@ -699,7 +699,7 @@ class SettingsPage(QWidget):
         start_dir = self.music_folder_edit.text() or str(Path.home())
         path = get_existing_directory(
             self,
-            tr("Выберите папку", self._lang()),
+            tr("Choose folder", self._lang()),
             start_dir,
         )
         if path:

@@ -24,10 +24,12 @@ from PyQt5.QtWidgets import QApplication
 import db
 from main_window import MainWindow
 from musicbrainz_client import init_musicbrainz
+from paths import migrate_old_data
 from styles import ensure_preset_themes, load_theme
 
 
 def main():
+    migrate_old_data()
     # Масштаб читаем ДО создания QApplication: QT_SCALE_FACTOR применяется
     # Qt только на старте и масштабирует весь интерфейс — шрифты, иконки,
     # отступы и размеры окон, а не только текст.

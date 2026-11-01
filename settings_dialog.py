@@ -36,12 +36,13 @@ from PyQt5.QtWidgets import (
 )
 
 from dialogs import CustomConfirmDialog, colored_icon
+from paths import CACHE_DIR, DATA_DIR
 from styles import is_dark_theme
 from translations import tr
 from ui_common import get_open_file_name
 
-COVERS_DIR = Path.home() / ".cache" / "music_player" / "covers"
-PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
+COVERS_DIR = CACHE_DIR / "covers"
+PLAYLIST_COVERS_DIR = DATA_DIR / "playlist_covers"
 
 # Замени на ссылку своего репозитория.
 PROJECT_GITHUB_URL = "https://github.com/yourname/music_player"

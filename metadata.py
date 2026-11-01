@@ -21,7 +21,9 @@ from pathlib import Path
 
 from mutagen import File as MutagenFile
 
-COVERS_DIR = Path.home() / ".cache" / "music_player" / "covers"
+from paths import CACHE_DIR
+
+COVERS_DIR = CACHE_DIR / "covers"
 
 # Ведущие мусорные группы в скобках: [MV], [Official Video], [VOCALOID RUS] ...
 _PREFIX_BRACKETS_RE = re.compile(r"^(?:\[[^\]]*\]\s*)+")

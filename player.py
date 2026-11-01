@@ -18,7 +18,7 @@
 
 import math
 
-from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
 
 
@@ -240,6 +240,18 @@ class CrossfadePlayer(QObject):
         self._cancel_fade()
         for p in self._players:
             p.stop()
+
+    @pyqtSlot()
+    def release(self):
+        """Останавливает оба плеера и отпускает медиафайлы.
+
+        На Windows QMediaPlayer держит файл открытым, пока он загружен в
+        плеер. После release файл можно переименовать или заменить.
+        """
+        self._cancel_fade()
+        for p in self._players:
+            p.stop()
+            p.setMedia(QMediaContent())
 
     def volume(self):
         """Текущая пользовательская громкость (0..100)."""

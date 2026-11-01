@@ -64,6 +64,7 @@ from dialogs import (
     colored_pixmap,
 )
 from musicbrainz_client import get_cached_source_for_path
+from paths import DATA_DIR
 from pixmap_utils import draw_centered, draw_cover, pixmap_size
 from translations import tr
 from ui_common import get_open_file_name
@@ -81,7 +82,7 @@ from playlist_widgets import (
     _blend,
 )
 
-PLAYLIST_COVERS_DIR = Path.home() / ".local" / "share" / "music_player" / "playlist_covers"
+PLAYLIST_COVERS_DIR = DATA_DIR / "playlist_covers"
 
 
 class PlaylistsPage(QWidget):

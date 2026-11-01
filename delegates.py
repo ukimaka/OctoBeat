@@ -17,7 +17,6 @@
 """Кастомная отрисовка строк списка треков."""
 
 import os
-from pathlib import Path
 
 from PyQt5.QtCore import QEvent, QRect, QRectF, QSettings, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
@@ -39,9 +38,10 @@ from pixmap_utils import (
     draw_source_badge,
     svg_file_pixmap,
 )
+from paths import RESOURCE_DIR
 from styles import is_dark_theme
 
-ICONS_DIR = Path(__file__).parent / "icons"
+ICONS_DIR = RESOURCE_DIR / "icons"
 
 
 def _svg_pixmap(filename, size=24, color="#888888"):

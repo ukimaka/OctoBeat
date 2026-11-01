@@ -2,6 +2,9 @@ PyQt5
 mutagen
 requests
 yt-dlp
-mpris-server
+mpris-server; sys_platform == "linux"
 syncedlyrics
 musicbrainzngs
+pydub
+numpy
+audioop-lts; python_version >= "3.13"

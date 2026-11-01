@@ -14,13 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Слой данных: работа с SQLite. Никакого PyQt здесь нет."""
+"""Слой данных: работа с SQLite. Пути и каталоги — из paths.py."""
 
 import sqlite3
 from contextlib import closing
-from pathlib import Path
 
-DB_FILE = Path(__file__).parent / "music.db"
+from paths import DB_FILE
+from path_utils import normalize_track_path
 
 
 def get_connection():
@@ -197,6 +197,7 @@ def init_db():
 # ---------------------------------------------------------------------------
 
 def add_track(file_path):
+    file_path = normalize_track_path(file_path)
     try:
         with get_connection() as conn:
             cur = conn.execute(
@@ -217,7 +218,10 @@ def add_tracks_with_metadata(entries):
     Возвращает ``(added, duplicates)``. Дубликаты определяются по
     уникальному ``file_path`` и не считаются добавленными.
     """
-    rows = [tuple(entry) for entry in entries]
+    rows = [
+        (normalize_track_path(entry[0]), *entry[1:])
+        for entry in entries
+    ]
     if not rows:
         return 0, 0
 
@@ -263,7 +267,7 @@ def get_track_by_path(file_path):
         return conn.execute(
             "SELECT id, file_path, title, artist, album, duration, loudness "
             "FROM tracks WHERE file_path = ?",
-            (file_path,),
+            (normalize_track_path(file_path),),
         ).fetchone()
 
 
@@ -273,6 +277,7 @@ def delete_track(track_id):
 
 
 def update_track_path(track_id, new_path):
+    new_path = normalize_track_path(new_path)
     with get_connection() as conn:
         conn.execute(
             "UPDATE tracks SET file_path = ? WHERE id = ?",

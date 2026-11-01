@@ -17,7 +17,6 @@
 """Виджеты профиля: About Me, баннер, аватарка и BBCode-редактор."""
 
 import re
-from pathlib import Path
 
 import requests
 import urllib3
@@ -51,6 +50,7 @@ from PyQt5.QtWidgets import (
 )
 
 from dialogs import CustomInputDialog, colored_icon
+from paths import RESOURCE_DIR
 from pixmap_utils import draw_centered, draw_cover, new_pixmap, svg_file_pixmap
 from profile_assets import _lang, _svg_icon
 from translations import tr
@@ -445,7 +445,7 @@ class HoverImageLabel(QLabel):
         self._hovered = False
         self._editable = True
         self.setCursor(Qt.PointingHandCursor)
-        icons_dir = Path(__file__).parent / "icons" / "black"
+        icons_dir = RESOURCE_DIR / "icons" / "black"
         self._pencil = svg_file_pixmap(icons_dir / "pencil.svg", 32)
 
     def set_editable(self, editable: bool) -> None:

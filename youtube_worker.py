@@ -19,7 +19,6 @@
 import json
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -29,9 +28,15 @@ from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 
 from metadata import clean_youtube_title
 from musicbrainz_client import get_track_metadata_with_fallback
+from paths import MUSIC_DIR
+from path_utils import (
+    find_tool,
+    subprocess_creationflags,
+    subprocess_env,
+)
 
 # MUSIC_FOLDER is now read from settings.
-MUSIC_FOLDER = Path.home() / "Music"
+MUSIC_FOLDER = MUSIC_DIR
 
 # Пример строки: "[download]  45.3% of 3.42MiB at 1.20MiB/s ETA 00:02"
 PROGRESS_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
@@ -97,7 +102,7 @@ class YoutubeWorker(QObject):
         super().__init__()
         self.query = (query or "").strip()
         settings = QSettings("MusicPlayer", "MusicPlayer")
-        default_dir = Path.home() / "Music"
+        default_dir = MUSIC_DIR
         self.target_folder = Path(settings.value("download_dir", str(default_dir)))
         self._proc = None
         self._stopped = False
@@ -107,9 +112,9 @@ class YoutubeWorker(QObject):
             self.error.emit("Пустой запрос")
             return
 
-        exe = shutil.which("yt-dlp")
+        exe = find_tool("yt-dlp")
         if exe is None:
-            self.error.emit("yt-dlp не найден в PATH")
+            self.error.emit("yt-dlp не найден")
             return
 
         try:
@@ -149,7 +154,11 @@ class YoutubeWorker(QObject):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
+                env=subprocess_env(),
+                creationflags=subprocess_creationflags(),
             )
             if self._proc.stdout:
                 for line in self._proc.stdout:
@@ -390,9 +399,9 @@ class YoutubeSearchWorker(QObject):
             self.error.emit("Пустой запрос")
             return
 
-        exe = shutil.which("yt-dlp")
+        exe = find_tool("yt-dlp")
         if exe is None:
-            self.error.emit("yt-dlp не найден в PATH")
+            self.error.emit("yt-dlp не найден")
             return
 
         cmd = [
@@ -414,7 +423,11 @@ class YoutubeSearchWorker(QObject):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
+                env=subprocess_env(),
+                creationflags=subprocess_creationflags(),
             )
 
             if self._proc.stdout:

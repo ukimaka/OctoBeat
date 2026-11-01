@@ -23,7 +23,6 @@
 import importlib.util
 import os
 import re
-import shutil
 from pathlib import Path
 
 from mutagen.easyid3 import EasyID3
@@ -32,6 +31,8 @@ from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 from PyQt5.QtWidgets import QDialog
 
 from dialogs import CustomConfirmDialog, CustomInputDialog
+from paths import CACHE_DIR
+from path_utils import find_tool, paths_equal
 from translations import tr
 from ui_common import get_open_file_name
 
@@ -77,11 +78,9 @@ class TrackActions(QObject):
         self.controller.remove_from_context(track_id)
         self.db.delete_track(track_id)
 
-        cover_cache = os.path.expanduser(
-            f"~/.cache/music_player/covers/{track_id}.jpg"
-        )
-        if os.path.exists(cover_cache):
-            os.remove(cover_cache)
+        cover_cache = CACHE_DIR / "covers" / f"{track_id}.jpg"
+        if cover_cache.exists():
+            cover_cache.unlink()
 
         self.changed.emit()
 
@@ -173,7 +172,8 @@ class TrackActions(QObject):
         if new_path != old_path:
             # Новый путь может быть уже занят другим треком в БД. Без этой
             # проверки UPDATE упрётся в UNIQUE constraint на tracks.file_path.
-            if self.db.get_track_by_path(new_path) is not None:
+            existing = self.db.get_track_by_path(new_path)
+            if existing is not None and existing["id"] != track_id:
                 CustomConfirmDialog.information(
                     self.parent_widget, tr("Fix metadata", lang),
                     tr(
@@ -182,9 +182,24 @@ class TrackActions(QObject):
                     ),
                 )
                 return
+            # На Linux os.rename молча перезаписывает существующий файл,
+            # даже если его нет в БД. Такой файл не трогаем.
+            if (
+                not paths_equal(new_path, old_path)
+                and os.path.exists(new_path)
+            ):
+                CustomConfirmDialog.information(
+                    self.parent_widget, tr("Fix metadata", lang),
+                    tr(
+                        "A file with this name already exists on disk",
+                        lang,
+                    ),
+                )
+                return
             if is_current:
-                # Останавливаем плеер, чтобы отпустить файл перед переименованием
-                media_player.stop()
+                # Windows не даст переименовать файл, пока QMediaPlayer
+                # держит его открытым. release очищает оба плеера.
+                media_player.release()
                 stopped = True
             try:
                 # Сначала файл на диске, и только потом запись в БД: если
@@ -274,11 +289,9 @@ class TrackActions(QObject):
                 audio.save(file_path, v2_version=3)
 
             # Сбрасываем кэш обложки, чтобы UI перечитал её из файла
-            cover_cache = os.path.expanduser(
-                f"~/.cache/music_player/covers/{track_id}.jpg"
-            )
-            if os.path.exists(cover_cache):
-                os.remove(cover_cache)
+            cover_cache = CACHE_DIR / "covers" / f"{track_id}.jpg"
+            if cover_cache.exists():
+                cover_cache.unlink()
 
             # Сообщаем UI, что трек изменился
             self.changed.emit()
@@ -333,7 +346,7 @@ class TrackActions(QObject):
                 ),
             )
             return
-        if shutil.which("ffmpeg") is None:
+        if find_tool("ffmpeg") is None:
             CustomConfirmDialog.information(
                 self.parent_widget,
                 tr("Trim audio", lang),
