@@ -23,6 +23,7 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 
 from paths import CACHE_DIR
+import playback_trace
 
 COVERS_DIR = CACHE_DIR / "covers"
 
@@ -135,24 +136,33 @@ def _cached_musicbrainz_cover(file_path):
 def extract_cover(file_path, track_id):
     """Кэширует встроенную обложку трека в COVERS_DIR/{track_id}.jpg.
     Возвращает путь к файлу обложки или None, если обложки нет."""
+    playback_trace.log("cover.extract.start", track=track_id, path=file_path)
     cover_file = COVERS_DIR / f"{track_id}.jpg"
     if cover_file.exists() and cover_file.stat().st_size > 0:
+        playback_trace.log("cover.extract.done", track=track_id, source="cache", path=cover_file)
         return str(cover_file)
 
     # Удалённый/перемещённый файл не должен доходить до mutagen: он
     # печатает ошибку на каждый вызов при перерисовке списка. None —
     # делегат нарисует placeholder без чтения с диска.
     if not file_path or not os.path.isfile(file_path):
+        playback_trace.log("cover.extract.skip", track=track_id, reason="missing_path", path=file_path)
         return None
 
     try:
         audio = MutagenFile(file_path)
     except Exception as e:
         print(f"[metadata] cover read failed for {file_path}: {e}")
-        return _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.fallback", track=track_id, reason="mutagen_error", error=e)
+        cover = _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.done", track=track_id, source="musicbrainz_cache", path=cover)
+        return cover
 
     if audio is None or audio.tags is None:
-        return _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.fallback", track=track_id, reason="no_tags")
+        cover = _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.done", track=track_id, source="musicbrainz_cache", path=cover)
+        return cover
 
     data = None
 
@@ -169,15 +179,22 @@ def extract_cover(file_path, track_id):
             data = bytes(covr[0])
 
     if not data:
-        return _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.fallback", track=track_id, reason="no_embedded_cover")
+        cover = _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.done", track=track_id, source="musicbrainz_cache", path=cover)
+        return cover
 
     try:
         COVERS_DIR.mkdir(parents=True, exist_ok=True)
         cover_file.write_bytes(data)
+        playback_trace.log("cover.extract.done", track=track_id, source="embedded", bytes=len(data), path=cover_file)
         return str(cover_file)
     except Exception as e:
         print(f"[metadata] cover save failed for {file_path}: {e}")
-        return _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.error", track=track_id, reason="save_failed", error=e)
+        cover = _cached_musicbrainz_cover(file_path)
+        playback_trace.log("cover.extract.done", track=track_id, source="musicbrainz_cache", path=cover)
+        return cover
 
 
 def format_track(track, fallback_path=None, with_duration=True):

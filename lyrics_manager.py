@@ -22,13 +22,19 @@
 получает готовые данные через сигналы и ничего не знает о воркере.
 """
 
+import os
 import re
+import time
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
 import db
+import playback_trace
 from lyrics_api import LyricsWorker
 from qt_lifecycle import retire_thread
+
+# Отключение текста для A/B теста: OCTOBEAT_DISABLE_LYRICS=1
+_DISABLE_LYRICS = os.environ.get("OCTOBEAT_DISABLE_LYRICS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 # Таймкод LRC: [mm:ss.xx], [mm:ss.xxx] или [mm:ss:xx]
 _LRC_TIME_RE = re.compile(r"\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]")
@@ -59,6 +65,7 @@ def _parse_lrc_words(content):
 
     count = (len(parts) - 1) // 3
     for k in range(count):
+        time.sleep(0)  # отдаём GIL на больших текстах
         minutes = parts[1 + 3 * k]
         seconds = parts[2 + 3 * k]
         word = parts[3 + 3 * k].strip()
@@ -80,6 +87,7 @@ def parse_lrc(text):
     if not text:
         return lines
     for raw in text.splitlines():
+        time.sleep(0)  # отдаём GIL на больших текстах
         matches = list(_LRC_TIME_RE.finditer(raw))
         if not matches:
             continue
@@ -139,6 +147,23 @@ class LyricsManager(QObject):
             track_id = int(track_id)
         except (TypeError, ValueError):
             track_id = None
+        playback_trace.log("lyrics.set_track", track=track_id, previous=self._current_track_id, worker_active=self._lyrics_worker is not None, disabled=_DISABLE_LYRICS)
+
+        # A/B: полное отключение загрузки текста.
+        if _DISABLE_LYRICS:
+            self._cancel_lyrics_worker()
+            self._current_track_id = track_id
+            self._lyrics_lines = []
+            self._lyrics_plain = ""
+            self._lyrics_index = -1
+            self._lyrics_word_index = -1
+            self._sync_overlay_lines()
+            if track_id is None or track_id < 0:
+                self._render_lyrics(None)
+                return
+            synced, plain, checked = self.db.get_track_lyrics(track_id)
+            self._render_lyrics(synced, plain)
+            return
 
         # Повторный сигнал для того же трека (например, при crossfade) не
         # должен отменять уже идущую загрузку и заново её запускать.
@@ -162,6 +187,7 @@ class LyricsManager(QObject):
             return
 
         synced, plain, checked = self.db.get_track_lyrics(track_id)
+        playback_trace.log("lyrics.checked", track=track_id, lyrics_checked=int(bool(checked)), has_synced=bool(synced), has_plain=bool(plain), synced_len=len(synced or ""), plain_len=len(plain or ""), already_attempted=(track_id in self._lyrics_attempted))
         if not checked:
             # Результата ещё нет либо прошлая попытка сорвалась (например,
             # сеть). Показываем сохранённое (если есть) и пробуем загрузить.
@@ -172,6 +198,8 @@ class LyricsManager(QObject):
             self._render_lyrics(
                 synced, plain, loading=not (synced or plain)
             )
+            # Загрузка стартует сразу: сетевой запрос идёт в отдельном
+            # QThread и не блокирует аудиопоток.
             self._start_lyrics_worker(track_id)
             return
         self._render_lyrics(synced, plain)
@@ -182,6 +210,7 @@ class LyricsManager(QObject):
             # Трека нет в БД — не оставляем панель навсегда в «Loading...».
             self._render_lyrics(None)
             return
+        playback_trace.log("lyrics.worker.start", track=track_id, artist=row["artist"], title=row["title"], duration=row["duration"])
         worker = LyricsWorker(
             track_id, row["artist"], row["title"], row["duration"]
         )
@@ -193,10 +222,12 @@ class LyricsManager(QObject):
         self._lyrics_worker = worker
         self._lyrics_workers.add(worker)
         worker.start()
+        playback_trace.log("lyrics.worker.started", track=track_id)
 
     def _on_lyrics_worker_finished(self):
         """Воркер завершился: забываем его и планируем удаление."""
         worker = self.sender()
+        playback_trace.log("lyrics.worker.finished", track=getattr(worker, "track_id", None))
         if worker is self._lyrics_worker:
             self._lyrics_worker = None
         if worker is not None:
@@ -215,6 +246,7 @@ class LyricsManager(QObject):
         Воркер сам проверит флаг отмены и не запишет/не отдаст результат.
         """
         worker = self._lyrics_worker
+        playback_trace.log("lyrics.worker.cancel", track=getattr(worker, "track_id", None))
         if worker is None:
             return
         self._lyrics_worker = None
@@ -225,6 +257,7 @@ class LyricsManager(QObject):
             pass
 
     def _on_lyrics_loaded(self, track_id, synced, plain):
+        playback_trace.log("lyrics.loaded", track=track_id, current=self._current_track_id, synced_len=len(synced or ""), plain_len=len(plain or ""))
         self._lyrics_attempted.add(track_id)
         if track_id != self._current_track_id:
             return
@@ -235,6 +268,7 @@ class LyricsManager(QObject):
         self._render_lyrics(synced, plain)
 
     def _on_lyrics_failed(self, track_id, error):
+        playback_trace.log("lyrics.failed", track=track_id, current=self._current_track_id, error=error)
         print(f"[lyrics] failed for track {track_id}: {error}")
         self._lyrics_attempted.add(track_id)
         if track_id != self._current_track_id:
@@ -264,6 +298,7 @@ class LyricsManager(QObject):
             mode = "empty"
 
         self.content_changed.emit(mode, list(self._lyrics_lines), self._lyrics_plain)
+        playback_trace.log("lyrics.render", track=self._current_track_id, mode=mode, lines=len(self._lyrics_lines), plain_len=len(self._lyrics_plain or ""), loading=loading)
 
         if mode == "synced":
             # Сразу подсвечиваем актуальную строку/слово для текущей позиции.

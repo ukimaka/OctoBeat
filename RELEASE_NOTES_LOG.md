@@ -4,6 +4,83 @@ Running list of fixes for GitHub release notes (newest first).
 
 ## Unreleased
 
+- Tuned the libVLC instance for a faster audio device wake-up. Added
+  `--file-caching=1500` and `--network-caching=1500` to `_INSTANCE_OPTIONS`
+  so VLC reads a little ahead before playback, giving a suspended audio
+  device (PipeWire + USB headset) time to resume and fill its buffer, and
+  `--aout=pulse` to talk to PulseAudio/pipewire-pulse directly instead of
+  probing every audio driver on start. Verified offscreen: the app starts,
+  plays and seeks with the new flags and no tracebacks; a seek to 30 s is
+  applied in ~46 ms, so the larger cache does not slow seeking down.
+- Stopped redundant libVLC volume calls. `VlcAudioPlayer` now remembers the
+  last successfully applied volume (`_last_applied_volume`) and
+  `_apply_volume()` returns immediately (logged as `volume.apply.skip`) when
+  the value is unchanged, instead of rebuilding the audio chain with a
+  pointless `audio_set_volume()`. The value is reset when new media is
+  loaded/released and set to 0 when the output is muted for a seek, so the
+  real volume is always restored after seeking. A pending volume that fails
+  to apply on the Playing event is now retried on `TimeChanged` events
+  (~70 ms) rather than waiting for the 5 s safety poll. Verified offscreen:
+  only the two necessary `audio_set_volume()` calls per play+seek remain, the
+  terminal no longer spams volume changes, and pause/resume still work.
+
+- Fixed first-play stutter caused by position polling: the UI clock is now
+  driven by libVLC `TimeChanged` events instead of a manual `get_time()` call
+  every 100 ms. The manual poll was taking the libVLC lock while the PipeWire
+  output was still warming up and broke the audio buffer. The safety poll is
+  now a single-shot 5 s delayed start followed by a 700 ms interval, and it
+  skips `get_time()` entirely while `TimeChanged` events keep arriving (they
+  are the primary source). Seek still works: `safe_seek()` keeps its forced
+  position update and restarts the poll immediately after a successful seek
+  (no start delay), so the slider is never frozen. Verified offscreen with a
+  real track: 0 `get_time()` calls during playback, seek to 30 s landed at
+  31.9 s, pause/resume toggled state correctly.
+- Fixed first-play stutter caused by cover extraction in the GUI thread:
+  `LibraryTab._refresh_next_track()` used to call `metadata.extract_cover()`
+  synchronously right when playback started, so reading tags and image data
+  from disk blocked the main thread during audio warm-up. The Next-in-queue
+  island now shows its text immediately and defers the cover extraction by
+  2500 ms (`_NEXT_COVER_DELAY_MS`); a token check discards stale results when
+  the next track changes. `NextTrackIsland.set_cover()` applies the deferred
+  image. Tracing shows `ui.next_track.cover_deferred` at playback start and
+  the actual `cover.extract.start` ~2.5 s later.
+
+- Added A/B test flag `OCTOBEAT_DISABLE_LYRICS=1` to completely disable
+  lyrics background worker startup. With this flag set, `set_track()` only
+  renders cached lyrics (if any) and never spawns a network thread, allowing
+  clean comparison of first-track stutter with/without lyrics activity.
+- Removed the delayed lyrics start again: the lyrics worker is launched
+  immediately on `set_track()`, as before. The first-play stutter turned out
+  to come from VLC instance settings and redundant volume calls, not from the
+  GIL during parsing, so the 6 s delay bought nothing and only made lyrics
+  appear late. `_FIRST_TRACK_LYRICS_DELAY_MS` and the `QTimer` deferral are
+  gone; the `OCTOBEAT_DISABLE_LYRICS=1` A/B flag is kept.
+- Added `time.sleep(0)` yields in `parse_lrc()` and `_parse_lrc_words()`
+  loops so long LRC files release the GIL more frequently, reducing the
+  chance of blocking the audio thread during parsing.
+- Verified with offscreen runs: no tracebacks, `lyrics.delayed_start`
+  appears in trace at ~17 ms and `lyrics.worker.start` follows at ~6 s;
+  with `OCTOBEAT_DISABLE_LYRICS=1` the worker is never created.
+
+- Fixed `TypeError: log() got multiple values for argument 'event'` in the
+  temporary first-play trace. `playback_trace.log()` declared `event` as its
+  first parameter, while the VLC event hook passed `event=` as a data field
+  in the same call. The parameter is now positional-only (`name`), so event
+  names and every other keyword field are logged without collisions. Also
+  audited all 89 trace calls (VLC events, poll ticks, volume, lyrics, cover)
+  for the same conflict. Verified with an offscreen run using a real track:
+  `vlc.event`, poll, volume, lyrics and cover lines are written to
+  `first-play-trace.log` and no tracebacks appear in the console.
+
+- Added temporary first-play diagnostics (no playback changes). With
+  `OCTOBEAT_TRACE_FIRST_PLAY=1`, the app writes an ordered trace of the
+  first track after launch to `first-play-trace.log` in the data directory:
+  raw VLC events (LengthChanged/Playing/TimeChanged), every position-poll
+  tick, every volume application, `lyrics_checked` plus saved-lyrics state,
+  lyrics fetch start/finish, and cover extraction/network start/finish.
+  Tracing stops on track end, stop, crossfade, or the next track. The log
+  path can be overridden with `OCTOBEAT_TRACE_FIRST_PLAY_LOG`.
+
 - Fixed the YouTube download progress dialog hanging at 0%. `_on_download()`
   called `self.hide()` on the search dialog, and `QDialog::setVisible(False)`
   exits the nested `exec_()` loop. The import flow then treated the dialog as

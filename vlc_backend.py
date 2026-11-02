@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 from collections import deque
 from enum import IntEnum
 from pathlib import Path
@@ -35,6 +36,7 @@ from pathlib import Path
 from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal, pyqtSlot
 
 import paths
+import playback_trace
 
 
 class PlaybackState(IntEnum):
@@ -61,6 +63,13 @@ _INSTANCE_OPTIONS = (
     "--no-video-title-show",
     "--no-stats",
     "--quiet",
+    # Read a little ahead before playback starts: this gives a suspended
+    # audio device (PipeWire/USB) time to wake up and fill its buffer.
+    "--file-caching=1500",
+    "--network-caching=1500",
+    # Skip the audio-driver autodetection at start and talk to PulseAudio /
+    # pipewire-pulse directly.
+    "--aout=pulse",
 )
 
 
@@ -290,6 +299,7 @@ class VlcAudioPlayer(QObject):
             raise VlcUnavailable("Could not attach libVLC event handlers.")
 
         self._alive = True
+        self._trace_name = "?"
         self._generation = 0
         self._callbacks = []
         self._media = None
@@ -311,6 +321,7 @@ class VlcAudioPlayer(QObject):
         self._length_known = False
         self._volume_ready = False
         self._last_logged_volume = None
+        self._last_applied_volume = None
         self._event_queue = deque()
 
         self._ev_time = int(self._vlc.EventType.MediaPlayerTimeChanged.value)
@@ -321,9 +332,23 @@ class VlcAudioPlayer(QObject):
         self._ev_end = int(self._vlc.EventType.MediaPlayerEndReached.value)
         self._ev_error = int(self._vlc.EventType.MediaPlayerEncounteredError.value)
 
+        # Safety-net only: the UI clock is driven by VLC TimeChanged events.
+        # Polling get_time() every 100 ms took the libVLC lock while the
+        # audio output was still warming up and caused first-play stutter.
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(100)
+        self._poll_timer.setInterval(700)
         self._poll_timer.timeout.connect(self._poll_position)
+
+        # First poll is deferred so the output buffer stabilises before any
+        # get_time()/get_length() call.
+        self._poll_start_timer = QTimer(self)
+        self._poll_start_timer.setSingleShot(True)
+        self._poll_start_timer.setInterval(5000)
+        self._poll_start_timer.timeout.connect(self._start_poll_timer)
+
+        # Monotonic timestamp of the last TimeChanged event; while these
+        # arrive the safety poll skips get_time() entirely.
+        self._last_time_event_at = 0.0
 
         # libVLC needs a moment to flush the old audio buffer after a seek.
         # Keep the output muted, resume shortly afterwards and let the
@@ -422,11 +447,32 @@ class VlcAudioPlayer(QObject):
     def _handle_event(self, event_type, payload):
         if not self._alive:
             return
+        if playback_trace.active():
+            event_names = {
+                self._ev_time: "TimeChanged",
+                self._ev_length: "LengthChanged",
+                self._ev_playing: "Playing",
+                self._ev_paused: "Paused",
+                self._ev_stopped: "Stopped",
+                self._ev_end: "EndReached",
+                self._ev_error: "EncounteredError",
+            }
+            playback_trace.log("vlc.event", player=self._trace_name, event=event_names.get(event_type, event_type), payload=payload, state=int(self._state), length_known=self._length_known, volume_ready=self._volume_ready, requested_play=self._requested_play)
         if event_type == self._ev_time:
+            # VLC is the primary clock: the UI follows this event and the
+            # safety poll stays quiet while events keep arriving.
+            self._last_time_event_at = time.monotonic()
             if self._seeking or not self._length_known:
                 return
             if self._media is not None:
                 self._set_position(payload)
+            # Piggyback prompt retries on the event stream instead of the
+            # slow safety poll: a pending volume/seek is usually resolved by
+            # the first event after Playing, without a dedicated timer.
+            if self._pending_volume is not None:
+                self._apply_volume()
+            if self._pending_seek is not None:
+                self._apply_pending_seek()
             return
         if event_type == self._ev_length:
             if self._media is not None:
@@ -434,6 +480,7 @@ class VlcAudioPlayer(QObject):
                 # it safe to poll get_time() without causing first-play
                 # decoder stutter.
                 self._length_known = True
+                playback_trace.log("vlc.length_ready", player=self._trace_name, length=payload)
                 self._set_duration(payload)
                 if (
                     self._alive
@@ -441,7 +488,7 @@ class VlcAudioPlayer(QObject):
                     and not self._seeking
                     and not self._poll_timer.isActive()
                 ):
-                    self._poll_timer.start()
+                    self._schedule_poll_start()
             return
         if event_type == self._ev_playing:
             # Ignore a stale Playing event left over from a pause/stop.
@@ -454,6 +501,7 @@ class VlcAudioPlayer(QObject):
             # The output now exists: this is the only place where the
             # initial gain-adjusted volume is pushed to libVLC.
             self._volume_ready = True
+            playback_trace.log("vlc.playing_ready", player=self._trace_name, state=int(self._state))
             self._apply_volume()
             self._set_state(PlaybackState.PLAYING)
             if self._pending_seek is not None:
@@ -498,12 +546,44 @@ class VlcAudioPlayer(QObject):
             self._restore_seek_audio()
             self.errorOccurred.emit("VLC could not play this file")
 
+    def _stop_polling(self):
+        """Останавливает страховочный опрос позиции и отложенный старт."""
+        self._poll_start_timer.stop()
+        self._poll_timer.stop()
+
+    def _schedule_poll_start(self):
+        """Планирует первый страховочный опрос с задержкой после старта.
+
+        Основной источник времени — событие VLC TimeChanged. Ручной get_time()
+        нужен только как страховка, поэтому первый опрос откладывается на
+        несколько секунд, пока аудиовыход прогревается.
+        """
+        if not self._alive or self._seeking:
+            return
+        if self._poll_timer.isActive() or self._poll_start_timer.isActive():
+            return
+        self._poll_start_timer.start()
+
+    @pyqtSlot()
+    def _start_poll_timer(self):
+        """Запускает страховочный таймер, если воспроизведение идёт."""
+        if (
+            self._alive
+            and self._player is not None
+            and self._media is not None
+            and self._length_known
+            and self._state == PlaybackState.PLAYING
+            and not self._seeking
+        ):
+            self._poll_timer.start()
+
     @pyqtSlot()
     def _poll_position(self):
         # safe_seek() can be triggered from this slot via a pending seek.
         # Guard against re-entry so the timer cannot recursively seek.
         if self._polling:
             return
+        playback_trace.log("poll.tick.start", player=self._trace_name, state=int(self._state), length_known=self._length_known, volume_ready=self._volume_ready)
         self._polling = True
         try:
             if self._seeking:
@@ -514,21 +594,32 @@ class VlcAudioPlayer(QObject):
                 or self._media is None
                 or self._state != PlaybackState.PLAYING
             ):
-                self._poll_timer.stop()
+                self._stop_polling()
+                playback_trace.log("poll.tick.skip", player=self._trace_name, reason="not_playing")
                 return
-            try:
-                position = self._player.get_time()
-            except Exception:
-                return
-            if self._duration_ms <= 0:
+            # While TimeChanged events flow, VLC already drives the clock:
+            # do not touch get_time()/get_length() and their internal locks.
+            events_fresh = (
+                time.monotonic() - self._last_time_event_at
+            ) < 1.5
+            if not events_fresh:
                 try:
-                    length = self._player.get_length()
+                    position = self._player.get_time()
                 except Exception:
-                    length = 0
-                if length and length > 0:
-                    self._set_duration(length)
-            if position is not None and position >= 0:
-                self._set_position(position)
+                    playback_trace.log("poll.tick.error", player=self._trace_name, reason="get_time")
+                    return
+                if self._duration_ms <= 0:
+                    try:
+                        length = self._player.get_length()
+                    except Exception:
+                        length = 0
+                    if length and length > 0:
+                        self._set_duration(length)
+                playback_trace.log("poll.tick", player=self._trace_name, position=position, duration=self._duration_ms, state=int(self._state), pending_volume=self._pending_volume)
+                if position is not None and position >= 0:
+                    self._set_position(position)
+            else:
+                playback_trace.log("poll.tick.skip", player=self._trace_name, reason="time_events_fresh")
             if self._pending_volume is not None:
                 self._apply_volume()
             if self._pending_seek is not None:
@@ -550,15 +641,15 @@ class VlcAudioPlayer(QObject):
         if state == self._state:
             if state == PlaybackState.PLAYING:
                 if can_poll and not self._poll_timer.isActive():
-                    self._poll_timer.start()
+                    self._schedule_poll_start()
             else:
-                self._poll_timer.stop()
+                self._stop_polling()
             return
         self._state = state
         if can_poll:
-            self._poll_timer.start()
+            self._schedule_poll_start()
         else:
-            self._poll_timer.stop()
+            self._stop_polling()
         self.stateChanged.emit(int(state))
 
     def _set_position(self, value, force=False):
@@ -588,6 +679,7 @@ class VlcAudioPlayer(QObject):
     def _apply_volume(self):
         if not self._alive or self._player is None:
             return
+        playback_trace.log("volume.apply.request", player=self._trace_name, requested=self._volume, muted=self._seek_muted, ready=self._volume_ready, pending=self._pending_volume)
         volume = (
             0 if self._seek_muted
             else max(0, min(200, int(self._volume)))
@@ -597,6 +689,16 @@ class VlcAudioPlayer(QObject):
         # first-play stutter, so just remember the request.
         if not self._volume_ready:
             self._pending_volume = volume
+            playback_trace.log("volume.pending", player=self._trace_name, volume=volume)
+            return
+        # Hard guard: every audio_set_volume() call makes libVLC rebuild part
+        # of the audio chain and audibly stutters. If the value is already
+        # applied, do not touch VLC at all.
+        if (
+            volume == self._last_applied_volume
+            and self._pending_volume is None
+        ):
+            playback_trace.log("volume.apply.skip", player=self._trace_name, volume=volume, reason="unchanged")
             return
         try:
             result = self._player.audio_set_volume(volume)
@@ -604,12 +706,15 @@ class VlcAudioPlayer(QObject):
             result = -1
         if result == 0:
             self._pending_volume = None
+            self._last_applied_volume = volume
             if volume != self._last_logged_volume:
                 print(f"[vlc] actual volume set: {volume}")
                 self._last_logged_volume = volume
         else:
             self._pending_volume = volume
+            playback_trace.log("volume.pending", player=self._trace_name, volume=volume)
 
+        playback_trace.log("volume.apply.result", player=self._trace_name, volume=volume, result=result, pending=self._pending_volume)
     def _apply_pending_seek(self):
         if (
             not self._alive
@@ -632,6 +737,7 @@ class VlcAudioPlayer(QObject):
         # Volume 0 is the reliable fallback when aout muting is unavailable.
         try:
             self._player.audio_set_volume(0)
+            self._last_applied_volume = 0
         except Exception:
             pass
 
@@ -689,6 +795,9 @@ class VlcAudioPlayer(QObject):
         # snapshot is authoritative here, otherwise the poll timer never
         # restarts and the UI looks frozen.
         self._set_state(PlaybackState.PLAYING)
+        # A seek is an explicit user action: the output is already warm, so
+        # restart the safety poll immediately (no 5 s start delay).
+        self._poll_start_timer.stop()
         self._poll_timer.start()
         # Normally the Playing event restores the sound; this only protects
         # against a backend that does not emit it after a seek.
@@ -702,10 +811,11 @@ class VlcAudioPlayer(QObject):
         if not self._alive or self._player is None:
             return False
 
+        playback_trace.log("vlc.set_media.start", player=self._trace_name, path=path)
         self._generation += 1
         self._cancel_seek_wait()
         self._detach_events()
-        self._poll_timer.stop()
+        self._stop_polling()
 
         try:
             self._player.stop()
@@ -731,6 +841,7 @@ class VlcAudioPlayer(QObject):
         self._length_known = False
         self._volume_ready = False
         self._last_logged_volume = None
+        self._last_applied_volume = None
         self._event_queue.clear()
         self._set_state(PlaybackState.STOPPED)
         self._set_position(0, force=True)
@@ -756,6 +867,7 @@ class VlcAudioPlayer(QObject):
         self._media_path = os.fspath(path)
         self._attach_events()
         # Volume is applied from the Playing event, once VLC is ready.
+        playback_trace.log("vlc.set_media.done", player=self._trace_name, path=self._media_path, generation=self._generation)
         return True
 
     def play(self):
@@ -763,6 +875,7 @@ class VlcAudioPlayer(QObject):
         if not self._alive or self._player is None or self._media is None:
             return False
 
+        playback_trace.log("vlc.play.start", player=self._trace_name, state=int(self._state), length_known=self._length_known, volume_ready=self._volume_ready, pending_seek=self._pending_seek)
         was_paused = self._state == PlaybackState.PAUSED
         self._requested_play = True
         self._end_emitted = False
@@ -788,6 +901,7 @@ class VlcAudioPlayer(QObject):
                 self._apply_pending_seek()
             else:
                 self._restore_seek_audio()
+        playback_trace.log("vlc.play.result", player=self._trace_name, result=result, state=int(self._state))
         return True
 
     def pause(self):
@@ -844,6 +958,7 @@ class VlcAudioPlayer(QObject):
     def stop(self):
         if not self._alive or self._player is None:
             return
+        playback_trace.log("vlc.stop", player=self._trace_name, state=int(self._state), length_known=self._length_known, volume_ready=self._volume_ready)
         self._cancel_seek_wait()
         self._requested_play = False
         self._end_emitted = False
@@ -889,7 +1004,7 @@ class VlcAudioPlayer(QObject):
         self._seek_was_playing = was_playing
         self._seek_resume_generation = -1
         self._seeking = True
-        self._poll_timer.stop()
+        self._stop_polling()
         seek_ok = False
         resume_scheduled = False
         try:
@@ -964,8 +1079,10 @@ class VlcAudioPlayer(QObject):
         except (TypeError, ValueError):
             return
         if volume == self._volume and self._pending_volume is None:
+            playback_trace.log("volume.set.skip", player=self._trace_name, volume=volume, current=self._volume, pending=self._pending_volume)
             return
         self._volume = volume
+        playback_trace.log("volume.set", player=self._trace_name, volume=volume, pending=self._pending_volume)
         self._apply_volume()
 
     def volume(self):
@@ -975,10 +1092,11 @@ class VlcAudioPlayer(QObject):
         """Drop the current file but keep this VLC player reusable."""
         if not self._alive or self._player is None:
             return
+        playback_trace.log("vlc.release_media", player=self._trace_name, path=self._media_path)
         self._generation += 1
         self._cancel_seek_wait()
         self._detach_events()
-        self._poll_timer.stop()
+        self._stop_polling()
         self._requested_play = False
         self._end_emitted = False
         self._pending_seek = None
@@ -987,6 +1105,7 @@ class VlcAudioPlayer(QObject):
         self._length_known = False
         self._volume_ready = False
         self._last_logged_volume = None
+        self._last_applied_volume = None
         self._event_queue.clear()
 
         try:
@@ -1016,7 +1135,7 @@ class VlcAudioPlayer(QObject):
         self._cancel_seek_wait()
         self._restore_seek_audio()
         self._alive = False
-        self._poll_timer.stop()
+        self._stop_polling()
         self._event_timer.stop()
         self._event_queue.clear()
         self._detach_events()

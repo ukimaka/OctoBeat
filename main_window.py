@@ -37,6 +37,7 @@ import workers
 from account_menu import AccountMenu
 from appearance import AppearanceManager
 from controller import PlayerController
+import playback_trace
 from dialogs import CustomConfirmDialog, DimmedProgressDialog
 from friends_ui import FriendsPage
 from hotkeys import AppEventFilter
@@ -596,6 +597,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _on_track_changed(self, track_id, title):
+        playback_trace.log("ui.track_changed.start", track=track_id, title=title)
         self.player_bar.set_current_track(track_id, title)
         self.playlists_page.set_current_track(track_id)
         self.library_tab.set_current_track(track_id)
@@ -608,6 +610,7 @@ class MainWindow(QMainWindow):
             self.playlists_page.tracks_list.viewport().update()
 
         self.lyrics_manager.set_track(track_id)
+        playback_trace.log("ui.track_changed.done", track=track_id)
 
     def _on_lyrics_offset(self, delta_ms):
         self.lyrics_manager.adjust_offset(delta_ms)
@@ -627,7 +630,9 @@ class MainWindow(QMainWindow):
         self.lyrics_manager.show_karaoke()
 
     def _on_next_track_changed(self, track_id, title=""):
+        playback_trace.log("ui.next_track_changed.start", track=track_id, title=title)
         self.library_tab.set_next_track(track_id, title)
+        playback_trace.log("ui.next_track_changed.done", track=track_id)
 
     def _on_context_changed(self, name):
         self.player_bar.set_context(name)

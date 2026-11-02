@@ -100,6 +100,16 @@ class NextTrackIsland(QWidget):
         )
         self.show()
 
+    def set_cover(self, cover_path):
+        """Обновляет только обложку (текст уже показан).
+
+        Нужно для отложенной загрузки: островок появляется сразу с текстом,
+        а картинка подставляется позже, когда её извлекут с диска.
+        """
+        self.next_cover_label.setPixmap(
+            self.icons.cover_pixmap(cover_path, 28)
+        )
+
     def clear(self):
         self.hide()
 

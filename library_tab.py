@@ -18,7 +18,7 @@
 
 import os
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -41,7 +41,14 @@ from next_track_island import NextTrackIsland
 from path_utils import normalize_track_path
 from paths import MUSIC_DIR
 from pixmap_utils import cover_cache_version
+import playback_trace
 from translations import tr
+
+
+# Обложка следующего трека грузится с задержкой, чтобы чтение тегов с
+# диска не блокировало GUI при старте воспроизведения (аудиовыход VLC
+# ещё прогревается). Значение в миллисекундах.
+_NEXT_COVER_DELAY_MS = 2500
 
 
 class LibraryTab(QWidget):
@@ -73,6 +80,8 @@ class LibraryTab(QWidget):
         self.sort_ascending = False
         self._sort_index = 0
         self._next_track_id = None
+        # Токен отложенной загрузки обложки: старые таймеры игнорируются.
+        self._next_cover_token = 0
 
         lang = self.settings.value("language", "en")
 
@@ -533,6 +542,7 @@ class LibraryTab(QWidget):
 
     def set_current_track(self, track_id):
         """Обновляет маркер играющего трека и раскрывает его папку."""
+        playback_trace.log("ui.current_track.start", track=track_id)
         delegate = self.tracks_list.itemDelegate()
         if hasattr(delegate, "set_current_playing"):
             delegate.set_current_playing(track_id)
@@ -540,6 +550,7 @@ class LibraryTab(QWidget):
         self.tracks_list.viewport().update()    # Заставляем перерисовать всё
 
         item = self.find_track_item(track_id)
+        playback_trace.log("ui.current_track.done", track=track_id, found=(item is not None))
         if item is not None:
             parent = item.parent()
             if parent is not None:
@@ -547,21 +558,29 @@ class LibraryTab(QWidget):
 
     def set_next_track(self, track_id, title=""):
         """Показывает следующий трек; id = -1 (пустая очередь) скрывает островок."""
+        playback_trace.log("ui.next_track.start", track=track_id, title=title)
         if track_id is None or track_id < 0:
             self._next_track_id = None
+            self._next_cover_token += 1  # отменяем отложенную загрузку обложки
             self.next_island.clear()
             return
         self._next_track_id = track_id
         self._refresh_next_track(title)
 
     def _refresh_next_track(self, title=""):
-        """Перечитывает данные следующего трека (также при смене темы)."""
+        """Перечитывает данные следующего трека (также при смене темы).
+
+        Текст показывается сразу, а обложка грузится с задержкой: чтение
+        тегов и картинки с диска не должно блокировать GUI в момент старта
+        воспроизведения, пока аудиовыход VLC ещё прогревается.
+        """
         track_id = self._next_track_id
         if track_id is None:
             self.next_island.clear()
             return
 
         row = db.get_track_by_id(track_id)
+        playback_trace.log("ui.next_track.refresh", track=track_id, title=(row["title"] if row else None))
         if row is None:
             self.next_island.clear()
             return
@@ -569,8 +588,31 @@ class LibraryTab(QWidget):
         lang = self.settings.value("language", "en")
         track_title = row["title"] or title or "—"
         artist = row["artist"] or tr("(unknown)", lang)
+        self._next_cover_token += 1
+        token = self._next_cover_token
+        self.next_island.set_track(track_title, artist, None)
+        playback_trace.log("ui.next_track.cover_deferred", track=track_id, delay_ms=_NEXT_COVER_DELAY_MS)
+        QTimer.singleShot(
+            _NEXT_COVER_DELAY_MS,
+            lambda tid=track_id, tok=token: self._load_next_cover(tid, tok),
+        )
+
+    def _load_next_cover(self, track_id, token):
+        """Извлекает обложку следующего трека после задержки.
+
+        Повторная проверка токена отбрасывает результат, если за время
+        ожидания очередной трек сменился.
+        """
+        if token != self._next_cover_token or track_id != self._next_track_id:
+            return
+        row = db.get_track_by_id(track_id)
+        if row is None:
+            return
         cover_path = metadata.extract_cover(row["file_path"], track_id)
-        self.next_island.set_track(track_title, artist, cover_path)
+        if token != self._next_cover_token or track_id != self._next_track_id:
+            return
+        self.next_island.set_cover(cover_path)
+        playback_trace.log("ui.next_track.done", track=track_id, cover_path=cover_path)
 
     def _icon_button(self, icon_name, tooltip, size=22, event_filter=None):
         """Плоская кнопка-иконка (фон и hover задаются темой)."""

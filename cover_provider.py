@@ -41,6 +41,7 @@ from metadata_normalize import (
 )
 from paths import CACHE_DIR
 from path_utils import safe_replace
+import playback_trace
 from ytdlp_support import format_error, search_videos
 
 COVER_DIR = CACHE_DIR / "musicbrainz_covers"
@@ -134,8 +135,10 @@ def _detect_image_ext(data: bytes) -> str:
 
 def _download_image(url: str) -> bytes | None:
     if not url:
+        playback_trace.log("cover.download.skip", url=url, reason="empty_url")
         return None
 
+    playback_trace.log("cover.download.start", url=url)
     try:
         response = requests.get(
             url,
@@ -146,12 +149,16 @@ def _download_image(url: str) -> bytes | None:
         data = response.content
     except Exception as exc:
         print(f"[cover-art] download failed {url!r}: {exc}")
+        playback_trace.log("cover.download.error", url=url, error=exc)
         return None
 
     if not data or len(data) > MAX_IMAGE_BYTES:
+        playback_trace.log("cover.download.skip", url=url, reason="empty_or_too_large", bytes=(len(data) if data else 0))
         return None
     if not _detect_image_ext(data):
+        playback_trace.log("cover.download.skip", url=url, reason="unknown_image_format")
         return None
+    playback_trace.log("cover.download.done", url=url, bytes=len(data))
     return data
 
 
@@ -170,6 +177,7 @@ def get_cover_art(
 
     Любая сетевая ошибка приводит к ``None``, а не к исключению.
     """
+    playback_trace.log("cover.art.start", release=release_id, release_group=release_group_id)
     if musicbrainzngs is None or not _MUSICBRAINZ_READY:
         return None
 
@@ -226,6 +234,7 @@ def get_cover_art(
         if data:
             return data
 
+    playback_trace.log("cover.art.done", release=release_id, release_group=release_group_id, found=False)
     return None
 
 

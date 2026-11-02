@@ -31,6 +31,7 @@ import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from qt_diagnostics import note, track_thread
+import playback_trace
 
 import db
 
@@ -166,19 +167,26 @@ class LyricsWorker(QThread):
 
     def run(self):
         if self._cancelled or self.isInterruptionRequested():
+            playback_trace.log("lyrics.fetch.cancelled", track=self.track_id)
             return
         note(f"lyrics fetch start track={self.track_id}")
+        playback_trace.log("lyrics.fetch.start", track=self.track_id, artist=self.artist, title=self.title, duration=self.duration)
         try:
+            playback_trace.log("lyrics.fetch.request", track=self.track_id)
             result = fetch_lyrics(self.artist, self.title, self.duration)
+            playback_trace.log("lyrics.fetch.response", track=self.track_id, found=bool(result), synced_len=len((result or {}).get("synced") or ""), plain_len=len((result or {}).get("plain") or ""))
         except Exception as e:  # noqa: BLE001 — воркер не должен ронять поток
             if not self._cancelled:
+                playback_trace.log("lyrics.fetch.failed", track=self.track_id, error=str(e))
                 self.failed.emit(self.track_id, str(e))
             return
 
         if self._cancelled or self.isInterruptionRequested():
+            playback_trace.log("lyrics.fetch.cancelled", track=self.track_id)
             return
 
         if result is None:
+            playback_trace.log("lyrics.fetch.none", track=self.track_id)
             # Источники иногда молча возвращают None и при сетевом сбое, и
             # когда текста действительно нет. Не пишем это в БД как
             # окончательный ответ: иначе «пусто» закешируется навсегда.
@@ -188,12 +196,15 @@ class LyricsWorker(QThread):
 
         synced = result.get("synced") or ""
         plain = result.get("plain") or ""
+        playback_trace.log("lyrics.fetch.saving", track=self.track_id, synced_len=len(synced), plain_len=len(plain))
         self._save(synced, plain)
         note(f"lyrics fetch done track={self.track_id}")
+        playback_trace.log("lyrics.fetch.done", track=self.track_id)
         self.loaded.emit(self.track_id, synced, plain)
 
     def _save(self, synced, plain):
         if self._cancelled or self.isInterruptionRequested():
+            playback_trace.log("lyrics.fetch.cancelled", track=self.track_id)
             return
         try:
             db.update_track_lyrics(self.track_id, synced, plain)

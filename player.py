@@ -22,6 +22,7 @@ from functools import partial
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
 from vlc_backend import PlaybackState, VlcAudioPlayer
+import playback_trace
 
 
 class CrossfadePlayer(QObject):
@@ -36,6 +37,8 @@ class CrossfadePlayer(QObject):
     def __init__(self):
         super().__init__()
         self._players = [VlcAudioPlayer(self), VlcAudioPlayer(self)]
+        self._players[0]._trace_name = "A"
+        self._players[1]._trace_name = "B"
         self._active_index = 0
         self._shutdown = False
 
@@ -115,6 +118,7 @@ class CrossfadePlayer(QObject):
     def _on_state_changed(self, player, state):
         if self._shutdown:
             return
+        playback_trace.log("player.state", player=getattr(player, "_trace_name", "?"), state=state, active=(player is self._active()))
         if player is self._active():
             if state == int(PlaybackState.PLAYING):
                 # VLC is ready: apply user volume * loudness gain exactly
@@ -125,6 +129,7 @@ class CrossfadePlayer(QObject):
     def _on_position_changed(self, player, pos):
         if self._shutdown or player is not self._active():
             return
+        playback_trace.log("player.position", player=getattr(player, "_trace_name", "?"), pos=pos, duration=self._active().duration())
         self.positionChanged.emit(int(pos))
 
         if (
@@ -150,6 +155,7 @@ class CrossfadePlayer(QObject):
     def _on_duration_changed(self, player, dur):
         if self._shutdown or player is not self._active():
             return
+        playback_trace.log("player.duration", player=getattr(player, "_trace_name", "?"), duration=dur)
         self.durationChanged.emit(int(dur))
 
     def _on_end_reached(self, player):
@@ -158,11 +164,14 @@ class CrossfadePlayer(QObject):
         # Если crossfade уже обработал переход — игнорируем.
         if self._crossfade_started or self._in_crossfade:
             return
+        playback_trace.log("player.end_reached", player=getattr(player, "_trace_name", "?"), duration=self._active().duration(), position=self._active().position())
+        playback_trace.end("track_finished")
         self.trackFinished.emit()
 
     def _on_error(self, player, message):
         if self._shutdown or player is not self._active():
             return
+        playback_trace.log("player.error", player=getattr(player, "_trace_name", "?"), message=message)
         print(f"[player] {message}")
 
     @staticmethod
@@ -184,19 +193,23 @@ class CrossfadePlayer(QObject):
             return
         # Cancel a fade while the old track is still the active one, then
         # switch the loudness to the new track before applying its gain.
+        playback_trace.log("player.play.start", path=path, loudness=loudness, active=self._active_index, state=int(self._active().state()))
         self._cancel_fade()
         self._track_loudness = self._as_loudness(loudness)
         self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
 
+        playback_trace.log("player.set_media.start", path=path, active=self._active_index)
         active = self._active()
         if not active.set_media(path):
             print(f"[player] could not load {path}")
             return
         gain = self._compute_gain()
         actual = max(0, min(200, int(self._user_volume * gain)))
+        playback_trace.log("player.set_media_volume", path=path, user=self._user_volume, gain=gain, actual=actual)
         active.set_volume(actual)
+        playback_trace.log("player.vlc_play.start", path=path, volume=actual)
         if not active.play():
             print(f"[player] could not start {path}")
 
@@ -211,12 +224,14 @@ class CrossfadePlayer(QObject):
         for p in self._players:
             p.stop()
 
+        playback_trace.log("player.set_media.start", path=path, active=self._active_index)
         active = self._active()
         if not active.set_media(path):
             print(f"[player] could not load {path}")
             return
         gain = self._compute_gain()
         actual = max(0, min(200, int(self._user_volume * gain)))
+        playback_trace.log("player.set_media_volume", path=path, user=self._user_volume, gain=gain, actual=actual)
         active.set_volume(actual)
 
     def crossfade_to(self, path, loudness=None):
@@ -225,6 +240,8 @@ class CrossfadePlayer(QObject):
             return
         # Crossfade выключен в настройках (или звук полностью убран) —
         # переключаемся мгновенно, без затухания и наложения.
+        playback_trace.log("player.crossfade.start", path=path, loudness=loudness)
+        playback_trace.end("crossfade_to next track")
         if not self._crossfade_enabled or self._user_volume == 0:
             self.play(path, loudness=loudness)
             return
@@ -306,6 +323,7 @@ class CrossfadePlayer(QObject):
 
     def stop(self):
         self._cancel_fade()
+        playback_trace.end("player.stop")
         for p in self._players:
             p.stop()
 
@@ -319,6 +337,7 @@ class CrossfadePlayer(QObject):
         if self._shutdown:
             return
         self._cancel_fade()
+        playback_trace.end("player.release")
         self._about_to_finish_sent = False
         self._crossfade_started = False
         self._in_crossfade = False
@@ -329,6 +348,7 @@ class CrossfadePlayer(QObject):
         """Release VLC players and detach all event callbacks."""
         if self._shutdown:
             return
+        playback_trace.end("player.shutdown")
         self._shutdown = True
         self._fade_timer.stop()
         self._about_to_finish_sent = False
@@ -346,6 +366,7 @@ class CrossfadePlayer(QObject):
         if volume == self._user_volume:
             return   # ничего не поменялось — не трогаем VLC
         self._user_volume = volume
+        playback_trace.log("player.user_volume", volume=volume)
         self._apply_current_volume()
 
     def _apply_current_volume(self):
@@ -354,6 +375,7 @@ class CrossfadePlayer(QObject):
             return
         gain = self._compute_gain()
         actual = max(0, min(200, int(self._user_volume * gain)))
+        playback_trace.log("player.volume.apply", user=self._user_volume, gain=gain, actual=actual, active=self._active_index)
         self._active().set_volume(actual)
 
     def _compute_gain(self):

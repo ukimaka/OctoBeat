@@ -26,6 +26,7 @@ from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 
 import db
 import metadata
+import playback_trace
 from player import CrossfadePlayer
 
 
@@ -171,14 +172,22 @@ class PlayerController(QObject):
             print(f"[play] no path for track_id={track_id}")
             return
         self.current_track_id = track_id
+        if playback_trace.active() and playback_trace.track_id() != track_id:
+            playback_trace.end("next track requested")
+        playback_trace.begin(track_id, path, source="controller._play_current")
+        playback_trace.log("controller.log_play.start", track=track_id)
         self.db.log_play(track_id)
+        playback_trace.log("controller.log_play.done", track=track_id)
         # пишем в историю (стек) — нужно для корректного Prev в shuffle
         self.play_history.append(track_id)
         self.play_history = self.play_history[-50:]
         # передаём loudness прямо в play, чтобы громкость была сразу правильной
         row = self.db.get_track_by_id(track_id)
         loudness = row["loudness"] if row else None
+        playback_trace.log("controller.track_meta", track=track_id, title=(row["title"] if row else None), artist=(row["artist"] if row else None), duration=(row["duration"] if row else None), loudness=loudness)
+        playback_trace.log("controller.media_play.start", track=track_id, path=path)
         self.media_player.play(path, loudness=loudness)
+        playback_trace.log("controller.media_play.returned", track=track_id)
         self._show_current_from_context()
         self.playback_state_changed.emit(True)
         self._emit_next_track()
@@ -317,7 +326,13 @@ class PlayerController(QObject):
         row = self.db.get_track_by_id(track_id)
         loudness = row["loudness"] if row else None
         self.current_track_id = track_id
+        if playback_trace.active() and playback_trace.track_id() != track_id:
+            playback_trace.end("next track requested")
+        playback_trace.begin(track_id, path, source="controller._play_from_queue")
+        playback_trace.log("controller.track_meta", track=track_id, title=(row["title"] if row else None), artist=(row["artist"] if row else None), duration=(row["duration"] if row else None), loudness=loudness)
+        playback_trace.log("controller.media_play.start", track=track_id, path=path)
         self.media_player.play(path, loudness=loudness)
+        playback_trace.log("controller.media_play.returned", track=track_id)
         self._show_current_from_context()
         self.playback_state_changed.emit(True)
         self.queue_changed.emit(len(self.manual_queue))
