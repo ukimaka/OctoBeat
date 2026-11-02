@@ -30,16 +30,16 @@ from PyQt5.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QColor, QIcon, QPainter
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +48,8 @@ from api_client import ApiClient, ApiError
 from dialogs import colored_icon
 from profile_ui import _round_avatar_pixmap
 from styles import is_dark_theme
+from qt_diagnostics import track_thread
+from qt_lifecycle import retire_thread
 from translations import tr
 
 
@@ -61,6 +63,14 @@ def _icon_color() -> str:
     return "#ffffff" if is_dark_theme(settings.value("theme", "dark")) else "#000000"
 
 
+def _user_is_online(user: dict[str, Any]) -> bool:
+    """Presence из API; сервер может не отдавать поле — тогда offline."""
+    for key in ("is_online", "online"):
+        if key in user:
+            return bool(user.get(key))
+    return str(user.get("status") or "").lower() == "online"
+
+
 class _RequestWorker(QThread):
     """Выполняет один сетевой запрос вне главного потока."""
 
@@ -69,6 +79,7 @@ class _RequestWorker(QThread):
 
     def __init__(self, func: Callable[[], Any], parent=None):
         super().__init__(parent)
+        track_thread(self, "friends-request")
         self._func = func
         self._cancelled = False
 
@@ -95,47 +106,69 @@ class _RequestWorker(QThread):
 
 
 class FriendListItemWidget(QWidget):
-    """Строка друга: аватарка, никнейм с @username и кнопка профиля."""
+    """osu!-карточка друга: аватар, статус, ник и кнопка профиля."""
 
     profile_requested = pyqtSignal(int)
 
     def __init__(self, user: dict[str, Any], parent=None):
         super().__init__(parent)
         self._user_id = int(user.get("id") or 0)
-        self.setStyleSheet("background: transparent;")
+        self._hovered = False
+        self._dark = _icon_color() == "#ffffff"
+        self.setMouseTracking(True)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 8, 6)
-        row.setSpacing(10)
+        row.setContentsMargins(10, 7, 10, 7)
+        row.setSpacing(12)
 
         avatar = QLabel()
-        avatar.setFixedSize(32, 32)
+        avatar.setFixedSize(48, 48)
         avatar.setPixmap(
-            _round_avatar_pixmap(user.get("avatar_path"), 32)
+            _round_avatar_pixmap(user.get("avatar_path"), 48)
         )
         row.addWidget(avatar)
 
         username = str(user.get("username") or "")
         nickname = str(user.get("nickname") or username)
+        lang = _lang()
+        online = _user_is_online(user)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
+
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(7)
+
         nickname_label = QLabel(nickname)
         nickname_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        name_row.addWidget(nickname_label)
+
+        status_dot = QLabel()
+        status_dot.setFixedSize(8, 8)
+        status_color = "#1db954" if online else "#8a8a8a"
+        status_dot.setStyleSheet(
+            f"background-color: {status_color}; border-radius: 4px;"
+        )
+        status_dot.setToolTip(
+            tr("Online" if online else "Offline", lang)
+        )
+        name_row.addWidget(status_dot)
+        name_row.addStretch(1)
+        text_col.addLayout(name_row)
+
         username_label = QLabel(f"@{username}")
         username_label.setStyleSheet("color: #9a9a9a;")
-        text_col.addWidget(nickname_label)
         text_col.addWidget(username_label)
         row.addLayout(text_col, 1)
 
-        color = _icon_color()
+        color = "#ffffff" if self._dark else "#000000"
         hover = (
             "rgba(255, 255, 255, 0.12)"
-            if color == "#ffffff"
+            if self._dark
             else "rgba(0, 0, 0, 0.08)"
         )
-        # CHANGED: кнопка «Профиль» с текстом и иконкой user.svg.
-        self.profile_button = QPushButton(tr("Profile", _lang()))
+        self.profile_button = QPushButton(tr("View Profile", lang))
         self.profile_button.setCursor(Qt.PointingHandCursor)
         self.profile_button.setToolTip(tr("View Profile", _lang()))
         self.profile_button.setIconSize(QSize(14, 14))
@@ -153,6 +186,28 @@ class FriendListItemWidget(QWidget):
         )
         self.profile_button.clicked.connect(self._on_profile_clicked)
         row.addWidget(self.profile_button)
+
+    def paintEvent(self, event) -> None:
+        """Лёгкий rounded-card фон без QSS и без переполировки палитры."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        if self._dark:
+            color = QColor(255, 255, 255, 30 if self._hovered else 16)
+        else:
+            color = QColor(0, 0, 0, 16 if self._hovered else 8)
+        painter.setBrush(color)
+        painter.drawRoundedRect(self.rect().adjusted(0, 1, -1, -1), 10, 10)
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
 
     def _on_profile_clicked(self) -> None:
         if self._user_id:
@@ -222,42 +277,35 @@ class FriendsPage(QWidget):
             colored_icon("search.svg", _icon_color()), QLineEdit.LeadingPosition
         )
         self.search_edit.returnPressed.connect(self._on_search_now)
-        self.my_friends_button = QPushButton(tr("My Friends", lang))
-        self.my_friends_button.setObjectName("friendsMyFriendsButton")
-        self.my_friends_button.setCursor(Qt.PointingHandCursor)
-        self.my_friends_button.clicked.connect(self._show_friends)
-
-        self.requests_button = QPushButton(tr("Requests", lang))
-        self.requests_button.setObjectName("friendsRequestsButton")
-        self.requests_button.setCursor(Qt.PointingHandCursor)
-        self.requests_button.clicked.connect(self._show_requests)
-
         top.addWidget(self.search_edit, 1)
-        top.addSpacing(8)
-        top.addWidget(self.my_friends_button)
-        top.addWidget(self.requests_button)
         body_layout.addLayout(top)
-
-        # CHANGED: отдельной страницы результатов поиска больше нет —
-        # остались только друзья и входящие заявки.
-        self.pages = QStackedWidget()
-        self.pages.setObjectName("friendsPages")
-
-        self.friends_list = self._make_list("friendsList")
-        self.requests_list = self._make_list("friendsRequestsList")
-
-        self.friends_page = self._make_page(self.friends_list)
-        self.requests_page = self._make_page(self.requests_list)
-
-        self.pages.addWidget(self.friends_page)
-        self.pages.addWidget(self.requests_page)
-        self.pages.setCurrentIndex(0)
-        body_layout.addWidget(self.pages, 1)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("friendsStatusLabel")
         self.status_label.setWordWrap(True)
         body_layout.addWidget(self.status_label)
+
+        # Variant A: друзья сверху, заявки — отдельной секцией снизу.
+        self.friends_list = self._make_list("friendsList")
+        self.friends_list.setMinimumHeight(160)
+        body_layout.addWidget(self.friends_list, 1)
+
+        self.requests_separator = QFrame()
+        self.requests_separator.setObjectName("friendsRequestsSeparator")
+        self.requests_separator.setFrameShape(QFrame.NoFrame)
+        self.requests_separator.setFixedHeight(1)
+        self.requests_separator.setAttribute(Qt.WA_StyledBackground, True)
+        self.requests_separator.setStyleSheet(
+            "background-color: #5151ab; border: none;"
+        )
+        self.requests_separator.setVisible(False)
+        body_layout.addWidget(self.requests_separator)
+
+        self.requests_list = self._make_list("friendsRequestsList")
+        self.requests_list.setMinimumHeight(92)
+        self.requests_list.setMaximumHeight(190)
+        self.requests_list.setVisible(False)
+        body_layout.addWidget(self.requests_list, 0)
 
         root.addWidget(self.body, 1)
 
@@ -286,14 +334,6 @@ class FriendsPage(QWidget):
         widget.setSelectionMode(QAbstractItemView.NoSelection)
         widget.setSpacing(4)
         return widget
-
-    @staticmethod
-    def _make_page(list_widget: QListWidget) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(list_widget)
-        return page
 
     def refresh_icons(self) -> None:
         """Перекрашивает иконку поиска и строки друзей под текущую тему."""
@@ -355,6 +395,7 @@ class FriendsPage(QWidget):
             self._hide_search_popup()
             self.friends_list.clear()
             self.requests_list.clear()
+            self._update_requests_visibility()
             self._set_status("")
             self.incoming_requests_changed.emit(0)
         return authenticated
@@ -438,16 +479,20 @@ class FriendsPage(QWidget):
 
             widget = FriendListItemWidget(user, self.friends_list)
             widget.profile_requested.connect(self.profile_requested.emit)
-            item.setSizeHint(QSize(0, 52))
+            item.setSizeHint(QSize(0, 62))
             self.friends_list.setItemWidget(item, widget)
+
+    def _update_requests_visibility(self) -> None:
+        visible = bool(self._incoming)
+        self.requests_separator.setVisible(visible)
+        self.requests_list.setVisible(visible)
 
     def _populate_requests(self) -> None:
         lang = _lang()
         self.requests_list.clear()
         if not self._incoming:
-            self._add_placeholder(
-                self.requests_list, tr("No incoming requests", lang)
-            )
+            # Нет заявок — секция и линия полностью исчезают.
+            self._update_requests_visibility()
             return
         for user in self._incoming:
             self._add_user_row(
@@ -458,6 +503,7 @@ class FriendsPage(QWidget):
                     (tr("Reject", lang), self._reject_request, False),
                 ],
             )
+        self._update_requests_visibility()
 
     # CHANGED: результаты поиска теперь живут во всплывающем списке.
     def _populate_search_popup(self) -> None:
@@ -580,23 +626,6 @@ class FriendsPage(QWidget):
     # ------------------------------------------------------------------
     #  Действия
     # ------------------------------------------------------------------
-    def _show_friends(self) -> None:
-        if not self._ensure_auth():
-            return
-        self._search_timer.stop()
-        # CHANGED: друзья теперь первая страница.
-        self._hide_search_popup()
-        self.pages.setCurrentIndex(0)
-        self.refresh()
-
-    def _show_requests(self) -> None:
-        if not self._ensure_auth():
-            return
-        self._search_timer.stop()
-        # CHANGED: заявки теперь вторая страница.
-        self._hide_search_popup()
-        self.pages.setCurrentIndex(1)
-        self.refresh()
 
     # CHANGED: дебаунс 500 мс + выпадающий список вместо страницы.
     def _on_search_text_changed(self, text: str) -> None:
@@ -729,7 +758,7 @@ class FriendsPage(QWidget):
         func: Callable[[], Any],
         on_success: Callable[[Any], None],
     ) -> _RequestWorker:
-        worker = _RequestWorker(func, self)
+        worker = _RequestWorker(func)
         self._workers.add(worker)
         worker.succeeded.connect(on_success)
         worker.failed.connect(self._on_request_error)
@@ -785,10 +814,7 @@ class FriendsPage(QWidget):
         for worker in workers:
             try:
                 worker.cancel()
-                worker.quit()
-                if worker.isRunning():
-                    worker.wait(2000)
-                worker.deleteLater()
             except RuntimeError:
                 # C++-объект уже удалён обработчиком finished.
-                pass
+                continue
+            retire_thread(worker, 2000)

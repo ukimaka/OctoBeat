@@ -24,6 +24,8 @@ import db
 from api_client import ApiClient, ApiError
 from pixmap_utils import new_pixmap
 from profile_ui import _round_avatar_pixmap
+from qt_diagnostics import track_thread
+from qt_lifecycle import retire_thread
 from translations import tr
 from ui_common import apply_menu_depth
 
@@ -35,6 +37,7 @@ class _TokenCheckWorker(QThread):
 
     def __init__(self, token: str, parent=None):
         super().__init__(parent)
+        track_thread(self, "token-check")
         self.token = token
         self._cancelled = False
 
@@ -118,7 +121,7 @@ class AccountMenu(QObject):
         if not isinstance(token, str) or not token.strip():
             return
 
-        self._token_worker = _TokenCheckWorker(token, self)
+        self._token_worker = _TokenCheckWorker(token)
         self._token_worker.checked.connect(self._on_stored_token_checked)
         self._token_worker.finished.connect(self._on_token_worker_finished)
         self._token_worker.start()
@@ -165,13 +168,10 @@ class AccountMenu(QObject):
             return
         try:
             worker.cancel()
-            worker.quit()
-            if worker.isRunning():
-                worker.wait(2000)
-            worker.deleteLater()
         except RuntimeError:
             # C++-объект уже удалён.
-            pass
+            return
+        retire_thread(worker, 2000)
 
     # ------------------------------------------------------------------
     #  Аватарка
@@ -241,6 +241,9 @@ class AccountMenu(QObject):
         friends_action = menu.addAction(
             self._friends_menu_icon(), self._friends_menu_text()
         )
+        settings_action = menu.addAction(
+            self.icons.icon("settings.svg"), tr("Settings", lang)
+        )
 
         logout_action = None
         if self.token() is not None:
@@ -266,6 +269,9 @@ class AccountMenu(QObject):
         elif chosen is friends_action:
             self.show_user_page(self.friends_page)
             self.friends_page.refresh()
+        elif chosen is settings_action:
+            self.show_user_page(self.settings_page)
+            self.settings_page.refresh_auth_state()
         elif logout_action is not None and chosen is logout_action:
             self.logout()
 

@@ -24,11 +24,14 @@ from mutagen.easyid3 import EasyID3
 from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 
-from metadata import clean_youtube_title
+import db
+from metadata import clean_youtube_title, read_metadata
 from musicbrainz_client import get_track_metadata_with_fallback
 from paths import MUSIC_DIR
+from qt_diagnostics import note
 from ytdlp_support import (
     DownloadCancelled,
+    cookies_from_browser_option,
     download_audio,
     format_error,
     search_videos,
@@ -78,6 +81,14 @@ def _find_cookies_file(extra_folder=None):
     return None
 
 
+def _cookies_from_browser():
+    """Браузер из настроек → tuple для yt-dlp cookiesfrombrowser."""
+    settings = QSettings("MusicPlayer", "MusicPlayer")
+    browser = str(settings.value("youtube_browser", "") or "")
+    profile = str(settings.value("youtube_browser_profile", "") or "")
+    return cookies_from_browser_option(browser, profile)
+
+
 class YoutubeWorker(QObject):
     """Качает аудио через yt-dlp. Живёт в отдельном QThread."""
 
@@ -87,6 +98,7 @@ class YoutubeWorker(QObject):
 
     def __init__(self, query, target_folder=None):
         super().__init__()
+        self.setObjectName("yt-download-worker")
         self.query = (query or "").strip()
         settings = QSettings("MusicPlayer", "MusicPlayer")
         default_dir = MUSIC_DIR
@@ -101,6 +113,7 @@ class YoutubeWorker(QObject):
             return
         except Exception as exc:
             if not self._stopped:
+                note(f"yt-download error: {exc}")
                 self.error.emit(
                     f"Ошибка загрузки YouTube:\n{format_error(exc)}"
                 )
@@ -109,6 +122,7 @@ class YoutubeWorker(QObject):
         if not self.query:
             self.error.emit("Пустой запрос")
             return
+        note(f"yt-download start: {self.query[:120]!r}")
 
         try:
             self.target_folder.mkdir(parents=True, exist_ok=True)
@@ -122,11 +136,18 @@ class YoutubeWorker(QObject):
             else f"ytsearch1:{self.query}"
         )
         cookies_path = _find_cookies_file(self.target_folder)
+        cookies_browser = _cookies_from_browser()
+        note(
+            "yt-download cookies: "
+            f"browser={cookies_browser or 'none'} "
+            f"file={cookies_path or 'none'}"
+        )
 
         final_path = download_audio(
             source,
             str(self.target_folder / "%(title)s.%(ext)s"),
             cookies_path=cookies_path,
+            cookies_from_browser=cookies_browser,
             progress_callback=self._on_progress,
             cancel_check=lambda: self._stopped,
         )
@@ -140,6 +161,7 @@ class YoutubeWorker(QObject):
             return
 
         # --- Метаданные: MusicBrainz → YouTube → имя файла ---
+        note("yt-download metadata fetch start")
         raw_title = Path(final_path).stem
         fallback_artist, fallback_title = clean_youtube_title(raw_title)
 
@@ -168,6 +190,10 @@ class YoutubeWorker(QObject):
                 "source": "filename",
             }
 
+        note(
+            "yt-download metadata fetch done "
+            f"source={info.get('source', 'unknown')}"
+        )
         artist = info.get("artist") or fallback_artist
         clean_title = info.get("title") or fallback_title
         album = info.get("album")
@@ -250,6 +276,30 @@ class YoutubeWorker(QObject):
             except Exception as e:
                 print(f"[rename] Failed to rename: {e}")
 
+        # --- БД: сразу читаем теги уже переименованного файла ---
+        # Без этого ImportFlow.sync_library() добавлял строку только с
+        # путём, и UI показывал "Unknown Title" до следующего рескана.
+        try:
+            existing = db.get_track_by_path(final_path)
+            track_id = (
+                existing["id"] if existing is not None
+                else db.add_track(final_path)
+            )
+            if track_id is not None:
+                md = read_metadata(final_path)
+                db.update_track_metadata(
+                    track_id,
+                    title=md["title"] or clean_title,
+                    artist=md["artist"] or artist,
+                    album=md["album"] or album,
+                    duration=md["duration"],
+                )
+        except Exception as e:
+            print(f"[youtube] DB metadata update failed for {final_path}: {e}")
+
+        if self._stopped:
+            return
+        note(f"yt-download finished: {final_path}")
         self.progress.emit(100)
         self.finished.emit(final_path)
 
@@ -348,6 +398,7 @@ class YoutubeSearchWorker(QObject):
 
     def __init__(self, query, parent=None):
         super().__init__(parent)
+        self.setObjectName("yt-search-worker")
         self.query = (query or "").strip()
         self._stopped = False
 
@@ -367,12 +418,20 @@ class YoutubeSearchWorker(QObject):
         if not self.query:
             self.error.emit("Пустой запрос")
             return
+        note(f"yt-search start: {self.query[:120]!r}")
 
         cookies_path = _find_cookies_file()
+        cookies_browser = _cookies_from_browser()
+        note(
+            "yt-search cookies: "
+            f"browser={cookies_browser or 'none'} "
+            f"file={cookies_path or 'none'}"
+        )
         entries = search_videos(
             self.query,
             limit=self.RESULT_LIMIT,
             cookies_path=cookies_path,
+            cookies_from_browser=cookies_browser,
         )
         if self._stopped:
             return
@@ -386,6 +445,7 @@ class YoutubeSearchWorker(QObject):
             self.error.emit("Ничего не найдено")
             return
 
+        note(f"yt-search finished: {len(results)} results")
         self.finished.emit(results)
 
     def stop(self):

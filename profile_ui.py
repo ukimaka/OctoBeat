@@ -61,6 +61,8 @@ from profile_widgets import (
     _description_html,
 )
 from translations import tr
+from qt_diagnostics import note, track_thread
+from qt_lifecycle import retire_thread
 from ui_common import get_open_file_name
 
 # Достижения: (ключ, иконка, пороги уровней, подпись для тултипа)
@@ -127,7 +129,8 @@ class _ClickableCard(QFrame):
 class CoverLoader(QThread):
     """Ищет обложку: MusicBrainz/Cover Art Archive → YouTube (fallback)."""
 
-    loaded = pyqtSignal(int, QPixmap)   # track_id, обложка
+    # QImage можно создавать в фоновом потоке, QPixmap — только в GUI.
+    loaded = pyqtSignal(int, QImage)   # track_id, обложка
 
     def __init__(
         self,
@@ -138,6 +141,7 @@ class CoverLoader(QThread):
         title=None,
     ):
         super().__init__(parent)
+        track_thread(self, "cover-loader")
         self.track_id = track_id
         self.query = (query or "").strip()
         self.artist = (artist or "").strip()
@@ -155,6 +159,7 @@ class CoverLoader(QThread):
     def run(self):
         if self._is_cancelled():
             return
+        note(f"cover-loader start track={self.track_id}")
         cover_file = PROFILE_COVERS_DIR / f"{self.track_id}.jpg"
         if not (cover_file.exists() and cover_file.stat().st_size > 0):
             source = self._find_cover()
@@ -167,9 +172,10 @@ class CoverLoader(QThread):
                 print(f"[cover] cannot cache cover: {exc}")
                 return
 
-        # Полноразмерная обложка в сигнале QPixmap — лишние мегабайты:
-        # в профиле она показывается всего 36×36. Уменьшаем до 144 px
-        # (запас под High-DPI) до передачи в GUI-поток.
+        # Полноразмерная обложка — лишние мегабайты: в профиле она
+        # показывается всего 36×36. Уменьшаем до 144 px (запас под
+        # High-DPI). QImage безопасен в фоновом потоке; QPixmap создаст
+        # GUI-поток в слоте _on_cover_loaded().
         image = QImage(str(cover_file))
         if image.isNull():
             return
@@ -179,7 +185,8 @@ class CoverLoader(QThread):
             )
         if self._is_cancelled():
             return
-        self.loaded.emit(self.track_id, QPixmap.fromImage(image))
+        self.loaded.emit(self.track_id, image)
+        note(f"cover-loader done track={self.track_id}")
 
     def _find_cover(self):
         """MusicBrainz → YouTube через общий пайплайн метаданных."""
@@ -188,6 +195,7 @@ class CoverLoader(QThread):
         title = self.title or self.query
         if not title:
             return ""
+        note(f"cover-loader metadata fetch track={self.track_id}")
         try:
             info = get_track_metadata_with_fallback(
                 self.artist,
@@ -211,6 +219,7 @@ class _FriendProfileWorker(QThread):
 
     def __init__(self, user_id: int, token: str | None, parent=None):
         super().__init__(parent)
+        track_thread(self, "friend-profile")
         self.user_id = user_id
         self.token = token
 
@@ -250,6 +259,7 @@ class _ProfileSyncWorker(QThread):
         parent=None,
     ):
         super().__init__(parent)
+        track_thread(self, "profile-sync")
         self.token = token
         self.payload = dict(payload)
         self.avatar_path = avatar_path
@@ -618,7 +628,7 @@ class ProfilePage(QWidget):
         loading.setStyleSheet("color: #8a8a8a;")
         self.public_playlists_grid.addWidget(loading, 0, 0)
 
-        worker = _FriendProfileWorker(self._friend_user_id, token, self)
+        worker = _FriendProfileWorker(self._friend_user_id, token)
         worker.loaded.connect(self._on_friend_profile_loaded)
         worker.failed.connect(
             lambda message, code, uid=self._friend_user_id: (
@@ -910,7 +920,6 @@ class ProfilePage(QWidget):
         loader = CoverLoader(
             track_id,
             query,
-            self,
             artist=artist,
             title=title,
         )
@@ -932,7 +941,9 @@ class ProfilePage(QWidget):
         except RuntimeError:
             pass
 
-    def _on_cover_loaded(self, track_id, pixmap):
+    def _on_cover_loaded(self, track_id, image):
+        # QPixmap создаётся здесь, в GUI-потоке, а не в CoverLoader.run().
+        pixmap = QPixmap.fromImage(image)
         # Ссылки на QLabel больше не нужны после первой установки обложки.
         labels = self._cover_labels.pop(track_id, [])
         for label in labels:
@@ -1173,13 +1184,10 @@ class ProfilePage(QWidget):
                     cancel()
                 else:
                     worker.requestInterruption()
-                worker.quit()
-                if worker.isRunning():
-                    worker.wait(2000)
-                worker.deleteLater()
             except RuntimeError:
-                # Воркер уже удалён своим finished-обработчиком.
-                pass
+                # C++-объект уже удалён своим finished-обработчиком.
+                continue
+            retire_thread(worker, 2000)
 
     # ------------------------------------------------------------------
     #  Синхронизация с сервером
@@ -1269,7 +1277,6 @@ class ProfilePage(QWidget):
             payload,
             avatar_path=str(avatar_path) if avatar_path else None,
             banner_path=str(banner_path) if banner_path else None,
-            parent=self,
         )
         if not silent:
             worker.failed.connect(self._on_profile_sync_failed)

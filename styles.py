@@ -55,6 +55,15 @@ _THEME_BG_RE = re.compile(
     r"background-color:\s*(#[0-9a-fA-F]{3,8})",
     re.S,
 )
+_THEME_TEXT_RE = re.compile(
+    r"\*\s*\{[^}]*?\bcolor:\s*(#[0-9a-fA-F]{3,8})",
+    re.S,
+)
+_THEME_FIELD_RE = re.compile(
+    r"QLineEdit\s*,\s*QComboBox\s*\{[^}]*?"
+    r"background-color:\s*(#[0-9a-fA-F]{3,8})",
+    re.S,
+)
 
 
 def theme_background(theme_name):
@@ -71,6 +80,48 @@ def theme_background(theme_name):
     if match:
         return match.group(1)
     return "#121212" if is_dark_theme(name) else "#F4F6F8"
+
+
+def theme_text(theme_name):
+    """Основной цвет текста темы (из правила ``* { color: ... }``)."""
+    name = str(theme_name or DEFAULT_THEME)
+    path = THEMES_DIR / f"{name}.qss"
+    if not path.is_file():
+        path = THEMES_DIR / f"{DEFAULT_THEME}.qss"
+    try:
+        qss = path.read_text(encoding="utf-8")
+    except OSError:
+        return "#ffffff" if is_dark_theme(name) else "#000000"
+    match = _THEME_TEXT_RE.search(qss)
+    if match:
+        return match.group(1)
+    return "#ffffff" if is_dark_theme(name) else "#000000"
+
+
+def theme_field(theme_name):
+    """Фон полей ввода/редакторов темы (для QPalette.Base)."""
+    name = str(theme_name or DEFAULT_THEME)
+    path = THEMES_DIR / f"{name}.qss"
+    if not path.is_file():
+        path = THEMES_DIR / f"{DEFAULT_THEME}.qss"
+    try:
+        qss = path.read_text(encoding="utf-8")
+    except OSError:
+        return "#181818" if is_dark_theme(name) else "#ffffff"
+    match = _THEME_FIELD_RE.search(qss)
+    if match:
+        return match.group(1)
+    return "#181818" if is_dark_theme(name) else "#ffffff"
+
+
+def _mix_color(first, second, ratio):
+    """Смешивает два QColor: ``ratio`` — доля второго цвета."""
+    ratio = max(0.0, min(1.0, ratio))
+    return QColor(
+        round(first.red() * (1 - ratio) + second.red() * ratio),
+        round(first.green() * (1 - ratio) + second.green() * ratio),
+        round(first.blue() * (1 - ratio) + second.blue() * ratio),
+    )
 
 
 def theme_accent(theme_name):
@@ -222,12 +273,18 @@ QSlider::sub-page:vertical {
    вкладки даже при наведении. Hover меняет только фон, без border. */
 QTabBar {
     qproperty-drawBase: 0;
+    qproperty-expanding: 0;
+    /* Шрифт задаём и самому QTabBar, а не только subcontrol: иначе
+       sizeHint вкладки считается по 13px, а рисуется текст 14px —
+       буквы обрезаются слева и справа. */
+    font-size: 14px;
     border: none;
 }
 QTabBar::tab {
     background: transparent;
     border: none;
-    padding: 6px 14px;
+    padding: 6px 16px;
+    font-size: 14px;
 }
 QTabBar::tab:hover {
     background: rgba(127, 127, 127, 0.12);
@@ -235,14 +292,14 @@ QTabBar::tab:hover {
 }
 QTabBar::tab:selected {
     border-top: 2px solid palette(highlight);
-    color: #ffffff;
+    color: palette(window-text);
 }
 QTabBar::tab:selected:hover {
     border-top: 2px solid palette(highlight);
     border-bottom: none;
     border-left: none;
     border-right: none;
-    color: #ffffff;
+    color: palette(window-text);
 }
 
 /* Settings navigation — цвета берутся из каждой темы (.qss).
@@ -265,6 +322,15 @@ QTabBar::tab:selected:hover {
 QTreeView, QListView {
     border: none;
     outline: none;
+}
+
+/* Редакторы диалогов (BBCode, About Me и т.п.) наследуют палитру темы,
+   а не системный белый Base / чёрный Text. */
+QTextEdit, QTextBrowser {
+    background-color: palette(base);
+    color: palette(text);
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
 }
 
 /* ------------------------------------------------------------------
@@ -425,10 +491,38 @@ def load_theme(theme_name, app=None):
             accent = QColor(DEFAULT_ACCENT)
         palette = app.palette()
         background = QColor(theme_background(theme_name))
-        if background.isValid():
-            palette.setColor(QPalette.Window, background)
+        text = QColor(theme_text(theme_name))
+        base = QColor(theme_field(theme_name))
+        if not background.isValid():
+            background = QColor("#121212")
+        if not text.isValid():
+            text = QColor("#ffffff")
+        if not base.isValid():
+            base = _mix_color(background, text, 0.07)
+
+        # Populate every text/base role.  Only setting Window left the
+        # default system palette (black text, white Base) in place, which
+        # made palette(windowText)/palette(text) render black on dark
+        # dialogs and gave QTextEdit a white background.
+        palette.setColor(QPalette.Window, background)
+        palette.setColor(QPalette.Base, base)
+        palette.setColor(QPalette.AlternateBase, _mix_color(base, text, 0.05))
+        palette.setColor(QPalette.Text, text)
+        palette.setColor(QPalette.WindowText, text)
+        palette.setColor(QPalette.Button, background)
+        palette.setColor(QPalette.ButtonText, text)
+        palette.setColor(QPalette.ToolTipBase, base)
+        palette.setColor(QPalette.ToolTipText, text)
+        palette.setColor(QPalette.Mid, _mix_color(background, text, 0.28))
+        palette.setColor(QPalette.Midlight, _mix_color(background, text, 0.14))
+        palette.setColor(QPalette.Dark, _mix_color(background, QColor("#000000"), 0.25))
+        palette.setColor(QPalette.Light, _mix_color(background, QColor("#ffffff"), 0.20))
         palette.setColor(QPalette.Highlight, accent)
         palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        if hasattr(QPalette, "PlaceholderText"):
+            placeholder = QColor(text)
+            placeholder.setAlpha(140)
+            palette.setColor(QPalette.PlaceholderText, placeholder)
         app.setPalette(palette)
         app.setStyleSheet(qss)
     return qss

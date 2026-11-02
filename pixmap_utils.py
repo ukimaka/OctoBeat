@@ -220,6 +220,11 @@ def cached_cover(path, width, height, version=0):
     if isinstance(cached, QPixmap) and not cached.isNull():
         return cached
 
+    # Файл мог быть удалён после построения списка — не читаем
+    # несуществующий путь, возвращаем placeholder.
+    if not os.path.exists(path):
+        return QPixmap()
+
     # Декодируем и уменьшаем в QImage, а не в QPixmap. Загрузка
     # QPixmap(path) в Qt подмешивает полноразмерный растр в тот же
     # QPixmapCache и вытесняет готовые миниатюры: при прокрутке каждая

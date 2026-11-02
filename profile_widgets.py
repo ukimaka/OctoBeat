@@ -34,7 +34,6 @@ from PyQt5.QtGui import (
     QTextDocument,
 )
 from PyQt5.QtWidgets import (
-    QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -49,7 +48,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from dialogs import CustomInputDialog, colored_icon
+from dialogs import CustomInputDialog, _DimmedDialog, colored_icon
 from paths import RESOURCE_DIR
 from pixmap_utils import draw_centered, draw_cover, new_pixmap, svg_file_pixmap
 from profile_assets import _lang, _svg_icon
@@ -103,6 +102,7 @@ _FORMAT_ICONS = {
 _BBCODE_DIALOG_QSS = """
 QDialog {
     background-color: palette(window);
+    color: palette(window-text);
 }
 #bbRoot {
     background-color: palette(window);
@@ -139,6 +139,12 @@ QPushButton#bbClose {
 }
 QPushButton#bbClose:hover {
     background: rgba(127, 127, 127, 0.22);
+}
+QTextEdit, QTextBrowser {
+    background-color: palette(base);
+    color: palette(text);
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
 }
 QTextEdit {
     border: 1px solid palette(mid);
@@ -537,7 +543,7 @@ class BannerLabel(HoverImageLabel):
         super().paintEvent(event)
 
 
-class BBCodeEditorDialog(QDialog):
+class BBCodeEditorDialog(_DimmedDialog):
     """Современный редактор BBCode: панель форматирования, сплит-предпросмотр."""
 
     def __init__(self, text, parent=None):
@@ -674,6 +680,9 @@ class BBCodeEditorDialog(QDialog):
         self.editor.textChanged.connect(self._update_preview)
         self._update_preview()
 
+        # Polishing applies the application palette first, so palette(...)
+        # tokens resolve to the active theme instead of Qt's light defaults.
+        self.ensurePolished()
         self.setStyleSheet(_BBCODE_DIALOG_QSS)
         self.editor.setFocus()
 

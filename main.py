@@ -15,9 +15,19 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
+import signal
 import sys
+import threading
+import time
 
-from PyQt5.QtCore import QLibraryInfo, QLocale, QSettings, Qt, QTranslator
+from PyQt5.QtCore import (
+    QLibraryInfo,
+    QLocale,
+    QSettings,
+    Qt,
+    QTimer,
+    QTranslator,
+)
 from PyQt5.QtGui import QPixmapCache
 from PyQt5.QtWidgets import QApplication
 
@@ -25,10 +35,85 @@ import db
 from main_window import MainWindow
 from musicbrainz_client import init_musicbrainz
 from paths import migrate_old_data
+from qt_diagnostics import (
+    background_left_running,
+    install_diagnostics,
+    log_warning,
+    note,
+    shutdown_diagnostics,
+    wait_for_background,
+)
 from styles import ensure_preset_themes, load_theme
+
+_interrupted = False
+
+
+def _install_signal_handlers(app, window):
+    """Делает Ctrl+C завершающим приложение, а не вечным ожиданием.
+
+    Qt-цикл не возвращает управление Python без вызова Python-кода,
+    поэтому лёгкий таймер регулярно даёт интерпретатору обработать
+    SIGINT. Если штатное закрытие зависло на фоновом потоке, отдельный
+    watchdog завершает процесс через os._exit() с записью в лог.
+    """
+    global _interrupted
+
+    ticker = QTimer(app)
+    ticker.timeout.connect(lambda: None)
+    ticker.start(200)
+
+    def _force_exit():
+        time.sleep(6.0)
+        try:
+            note("signal watchdog: forcing process exit")
+            log_warning(
+                "signal watchdog: shutdown did not finish in 6s; "
+                "forcing process exit"
+            )
+        finally:
+            os._exit(130)
+
+    def _request_shutdown():
+        # Закрываем модальные диалоги (YouTube, прогресс и т.п.), затем
+        # главное окно: его closeEvent делает ограниченное ожидание.
+        for widget in QApplication.topLevelWidgets():
+            if widget is window:
+                continue
+            try:
+                widget.close()
+            except RuntimeError:
+                pass
+        try:
+            window.close()
+        except RuntimeError:
+            pass
+        app.quit()
+
+    def _handler(signum, _frame):
+        global _interrupted
+        if _interrupted:
+            return
+        _interrupted = True
+        note(f"signal {signum} received; requesting shutdown")
+        log_warning(f"signal {signum} received; requesting shutdown")
+        threading.Thread(
+            target=_force_exit,
+            name="signal-watchdog",
+            daemon=True,
+        ).start()
+        QTimer.singleShot(0, _request_shutdown)
+
+    signal.signal(signal.SIGINT, _handler)
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (ValueError, OSError):
+        pass
+    return ticker
 
 
 def main():
+    global _interrupted
+    install_diagnostics()
     migrate_old_data()
     # Масштаб читаем ДО создания QApplication: QT_SCALE_FACTOR применяется
     # Qt только на старте и масштабирует весь интерфейс — шрифты, иконки,
@@ -90,7 +175,31 @@ def main():
 
     window = MainWindow()
     window.show()
-    sys.exit(app.exec_())
+    signal_ticker = _install_signal_handlers(app, window)
+    try:
+        exit_code = app.exec_()
+    except KeyboardInterrupt:
+        _interrupted = True
+        note("KeyboardInterrupt during event loop")
+        log_warning("KeyboardInterrupt during event loop; shutting down")
+        exit_code = 130
+    if _interrupted and not exit_code:
+        exit_code = 130
+
+    # closeEvent уже ждал потоки, но при Ctrl+C окно могло не закрыться
+    # (например, из-за модального диалога). Повторное ожидание ограничено
+    # по времени и не даёт приложению зависнуть навсегда. При обычном
+    # закрытии даём только короткий второй шанс уже отвязанным потокам.
+    wait_for_background(timeout=None if _interrupted else 2.0)
+    left_running = background_left_running()
+    shutdown_diagnostics()
+    if left_running:
+        log_warning(
+            "process exit: background threads still running after bounded "
+            "wait; using os._exit to avoid QThread abort"
+        )
+        os._exit(exit_code or 130)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

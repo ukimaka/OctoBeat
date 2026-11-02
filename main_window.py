@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import os
 import random
 from pathlib import Path
 
@@ -23,8 +24,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
     QMenu,
-    QProgressDialog,
-    QSizeGrip,
     QTabBar,
     QTabWidget,
     QTreeWidgetItem,
@@ -38,7 +37,7 @@ import workers
 from account_menu import AccountMenu
 from appearance import AppearanceManager
 from controller import PlayerController
-from dialogs import CustomConfirmDialog
+from dialogs import CustomConfirmDialog, DimmedProgressDialog
 from friends_ui import FriendsPage
 from hotkeys import AppEventFilter
 from import_flow import ImportFlow
@@ -47,6 +46,7 @@ from lyrics_manager import LyricsManager
 from lyrics_panel import LyricsPanel
 from player_bar import PlayerBar
 from paths import MUSIC_DIR
+from path_utils import normalize_track_path
 from playlists_ui import PlaylistsPage
 from profile_ui import ProfilePage
 from settings_page import SettingsPage
@@ -54,6 +54,8 @@ from title_bar import CustomTitleBar
 from track_actions import TrackActions
 from track_menu import TrackContextMenu
 from translations import tr
+from qt_diagnostics import note, wait_for_background
+from qt_lifecycle import retire_thread, widget_alive
 from ui_common import IconProvider, apply_menu_depth
 from updater import UpdateChecker, UpdateDownloader, apply_update
 from vlc_backend import PlaybackState
@@ -110,6 +112,8 @@ class MainWindow(QMainWindow):
         self._update_checker = None
         self._update_downloader = None
         self._update_progress = None
+        self._update_progress_depth = 0
+        self._update_finished_pending = None
         self._shutting_down = False
 
         self.lyrics_manager = LyricsManager(
@@ -141,7 +145,7 @@ class MainWindow(QMainWindow):
         self.profile_page = ProfilePage(self)
         self.tabs.addTab(self.profile_page, tr("Profile", lang))
         self.settings_page = SettingsPage(self)
-        self.tabs.addTab(self.settings_page, tr("Settings", lang))
+        # Settings не показывается в tab bar: доступ только из меню аватарки.
         self.track_actions = TrackActions(
             db=db,
             controller=self.controller,
@@ -213,11 +217,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        # Ручка изменения размера (в правом нижнем углу)
-        self.size_grip = QSizeGrip(self)
-        self.size_grip.setFixedSize(16, 16)
-        self.size_grip.raise_()
-
         self._connect_signals()
 
         app = QApplication.instance()
@@ -249,7 +248,7 @@ class MainWindow(QMainWindow):
     def _check_for_updates(self):
         if self._update_checker is not None:
             return
-        self._update_checker = UpdateChecker(self)
+        self._update_checker = UpdateChecker()
         self._update_checker.update_available.connect(self._on_update_available)
         self._update_checker.no_update.connect(self._on_no_update)
         self._update_checker.finished.connect(self._on_update_check_finished)
@@ -259,9 +258,9 @@ class MainWindow(QMainWindow):
         pass
 
     def _on_update_check_finished(self):
-        if self._update_checker is not None:
-            self._update_checker.deleteLater()
-            self._update_checker = None
+        checker = self._update_checker
+        self._update_checker = None
+        retire_thread(checker, 0)
 
     def _on_update_available(self, version, url):
         lang = self.settings.value("language", "en")
@@ -278,43 +277,83 @@ class MainWindow(QMainWindow):
 
     def _start_update_download(self, url):
         lang = self.settings.value("language", "en")
-        self._update_progress = QProgressDialog(
+        dialog = DimmedProgressDialog(
             tr("Downloading update...", lang),
             tr("Cancel", lang),
             0, 100, self,
         )
-        self._update_progress.setWindowTitle(tr("Update", lang))
-        self._update_progress.setWindowModality(Qt.WindowModal)
-        self._update_progress.setMinimumDuration(0)
-        self._update_progress.setAutoClose(False)
-        self._update_progress.setAutoReset(False)
-        self._update_progress.setValue(0)
+        self._update_progress = dialog
+        dialog.setWindowTitle(tr("Update", lang))
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setValue(0)
 
-        self._update_downloader = UpdateDownloader(url, self)
-        self._update_downloader.progress.connect(
-            self._update_progress.setValue
-        )
-        self._update_downloader.finished.connect(self._on_update_downloaded)
-        self._update_downloader.error.connect(self._on_update_error)
-        self._update_progress.canceled.connect(self._on_update_cancelled)
-        self._update_downloader.start()
+        downloader = UpdateDownloader(url)
+        self._update_downloader = downloader
+        downloader.progress.connect(self._on_update_progress)
+        downloader.finished.connect(self._on_update_downloaded)
+        downloader.error.connect(self._on_update_error)
+        dialog.canceled.connect(self._on_update_cancelled)
+        downloader.start()
+
+    def _on_update_progress(self, value):
+        dialog = self._update_progress
+        if not widget_alive(dialog):
+            return
+        # QProgressDialog::setValue() сам крутит processEvents(); не входим
+        # в него повторно из следующего progress-события.
+        if self._update_progress_depth:
+            return
+        self._update_progress_depth += 1
+        try:
+            dialog.setValue(int(value))
+        except (RuntimeError, TypeError, ValueError):
+            pass
+        finally:
+            self._update_progress_depth -= 1
+            if self._update_progress_depth == 0:
+                pending = self._update_finished_pending
+                self._update_finished_pending = None
+                if pending is not None:
+                    pending()
 
     def _on_update_cancelled(self):
         if self._update_downloader is not None:
             self._update_downloader.cancel()
 
     def _close_update_progress(self):
-        if self._update_progress is not None:
-            self._update_progress.close()
-            self._update_progress.deleteLater()
-            self._update_progress = None
+        if self._update_progress_depth:
+            self._update_finished_pending = self._close_update_progress
+            return
+        dialog = self._update_progress
+        self._update_progress = None
+        downloader = self._update_downloader
+        if downloader is not None:
+            try:
+                downloader.progress.disconnect(self._on_update_progress)
+            except (TypeError, RuntimeError):
+                pass
+        if not widget_alive(dialog):
+            return
+        try:
+            dialog.close()
+            dialog.deleteLater()
+        except RuntimeError:
+            pass
 
     def _on_update_downloaded(self, filepath):
-        self._close_update_progress()
+        # finished может прийти внутри QProgressDialog::setValue().
+        if self._update_progress_depth:
+            self._update_finished_pending = (
+                lambda: self._on_update_downloaded(filepath)
+            )
+            return
         downloader = self._update_downloader
+        self._close_update_progress()
         self._update_downloader = None
-        if downloader is not None:
-            downloader.deleteLater()
+        retire_thread(downloader, 2000)
         if not apply_update(filepath):
             lang = self.settings.value("language", "en")
             CustomConfirmDialog.information(
@@ -324,11 +363,15 @@ class MainWindow(QMainWindow):
             )
 
     def _on_update_error(self, message):
-        self._close_update_progress()
+        if self._update_progress_depth:
+            self._update_finished_pending = (
+                lambda: self._on_update_error(message)
+            )
+            return
         downloader = self._update_downloader
+        self._close_update_progress()
         self._update_downloader = None
-        if downloader is not None:
-            downloader.deleteLater()
+        retire_thread(downloader, 2000)
         if message:
             lang = self.settings.value("language", "en")
             CustomConfirmDialog.information(
@@ -342,34 +385,19 @@ class MainWindow(QMainWindow):
         if checker is not None:
             try:
                 checker.cancel()
-                checker.quit()
-                if checker.isRunning():
-                    checker.wait(2000)
-                checker.deleteLater()
             except RuntimeError:
                 pass
+            retire_thread(checker, 2000)
 
         downloader = self._update_downloader
         self._update_downloader = None
         if downloader is not None:
             try:
                 downloader.cancel()
-                downloader.quit()
-                if downloader.isRunning():
-                    downloader.wait(2000)
-                downloader.deleteLater()
             except RuntimeError:
                 pass
+            retire_thread(downloader, 2000)
         self._close_update_progress()
-
-    def resizeEvent(self, event):
-        """Позиционирует QSizeGrip в правом нижнем углу при ресайзе."""
-        super().resizeEvent(event)
-        if hasattr(self, 'size_grip'):
-            self.size_grip.move(
-                self.width() - self.size_grip.width() - 2,
-                self.height() - self.size_grip.height() - 2
-            )
 
     def _token(self) -> str | None:
         return self.account_menu.token()
@@ -539,6 +567,7 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         self._shutting_down = True
+        note("main window close: shutdown begin")
 
         c = self.controller
         self._listening_timer.stop()
@@ -561,6 +590,9 @@ class MainWindow(QMainWindow):
         if stop_mpris is not None:
             stop_mpris(c)
         self.media_player.shutdown()
+        note("main window close: waiting for background threads")
+        wait_for_background()
+        note("main window close: shutdown end")
         super().closeEvent(event)
 
     def _on_track_changed(self, track_id, title):
@@ -631,7 +663,20 @@ class MainWindow(QMainWindow):
         self.track_actions.remove(track_id, "playlist")
 
     def _sync_library_on_startup(self):
-        download_dir = Path(self.settings.value("download_dir", str(MUSIC_FOLDER)))
+        # Сначала убираем из БД треки, чьи файлы были удалены/перемещены:
+        # иначе библиотека и плейлисты показывают фантомные строки.
+        removed = 0
+        for row in db.get_all_tracks():
+            path = row["file_path"]
+            if not path or not Path(path).is_file():
+                db.delete_track(row["id"])
+                removed += 1
+        if removed:
+            print(f"[startup] missing tracks removed: {removed}")
+
+        download_dir = Path(
+            self.settings.value("download_dir", str(MUSIC_FOLDER))
+        )
         if not download_dir.exists():
             return
         files = workers.find_audio_files(download_dir)
@@ -659,12 +704,26 @@ class MainWindow(QMainWindow):
         self.controller.play_from_list(ids, clicked_id, "library", tr("Library", lang), None)
 
     def _on_random_play(self):
-        ids = [row["id"] for row in db.get_all_tracks()]
+        # Random работает только по текущей папке загрузок — так же, как
+        # библиотека фильтрует треки в reload().
+        download_dir = Path(
+            self.settings.value("download_dir", str(MUSIC_FOLDER))
+        )
+        download_root = normalize_track_path(download_dir)
+        prefix = download_root.rstrip(os.sep) + os.sep
+
+        ids = []
+        for row in db.get_all_tracks():
+            path = normalize_track_path(row["file_path"])
+            if path == download_root or path.startswith(prefix):
+                ids.append(row["id"])
         if not ids:
             return
         chosen_id = random.choice(ids)
         lang = self.settings.value("language", "en")
-        self.controller.play_from_list(ids, chosen_id, "library", tr("Library", lang), None)
+        self.controller.play_from_list(
+            ids, chosen_id, "library", tr("Library", lang), None
+        )
 
     def _on_library_changed(self):
         self.library_tab.update_track_count()
@@ -765,7 +824,8 @@ class MainWindow(QMainWindow):
         menu.exec_at(pos)
 
     def _on_settings_clicked(self):
-        self.tabs.setCurrentWidget(self.settings_page)
+        self.account_menu.show_user_page(self.settings_page)
+        self.settings_page.refresh_auth_state()
 
     def _on_profile_playlist_clicked(self, playlist_id):
         self.tabs.setCurrentWidget(self.playlists_page)

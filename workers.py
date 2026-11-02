@@ -36,6 +36,7 @@ from musicbrainz_client import (
     metadata_needs_refresh,
 )
 from paths import MUSIC_DIR
+from qt_diagnostics import note
 from path_utils import (
     find_tool,
     safe_replace,
@@ -127,6 +128,7 @@ class ImportWorker(QObject):
 
     def __init__(self, files, target_folder):
         super().__init__()
+        self.setObjectName("import-files-worker")
         self.files = files
         self.target_folder = Path(target_folder)
         self._stopped = False
@@ -223,12 +225,12 @@ class RescanWorker(QObject):
     """Перечитывает метаданные + измеряет громкость у треков без loudness."""
 
     progress = pyqtSignal(int, int)
-    release_requested = pyqtSignal()
     finished = pyqtSignal(int, int, int)
     #               metadata_updated, loudness_processed, loudness_failed
 
     def __init__(self):
         super().__init__()
+        self.setObjectName("rescan-worker")
         self._stopped = False
 
     def stop(self):
@@ -244,6 +246,7 @@ class RescanWorker(QObject):
         # Шаг 1: метаданные (быстро)
         meta_rows = db.get_all_tracks()
         meta_total = len(meta_rows)
+        note(f"rescan start: {meta_total} tracks")
         for row in meta_rows:
             if self._interrupted():
                 break
@@ -295,9 +298,9 @@ class RescanWorker(QObject):
                                 db.get_track_by_path(value) is not None
                             ),
                         )
-                        # libVLC живёт в главном потоке, поэтому
-                        # release вызывается через блокирующий сигнал.
-                        self.release_requested.emit()
+                        # Плеер уже освобождён в главном потоке перед
+                        # запуском воркера (ImportFlow.rescan), поэтому
+                        # переименование безопасно и не трогает libVLC.
                         try:
                             os.rename(path, candidate)
                             new_path = candidate
@@ -385,6 +388,10 @@ class RescanWorker(QObject):
             if i % 2 == 0 or i == loud_total:
                 self.progress.emit(meta_total + i, grand_total)
 
+        note(
+            f"rescan finished: meta={meta_total} "
+            f"loudness={processed} failed={failed}"
+        )
         self.finished.emit(meta_total, processed, failed)
 
 
@@ -404,6 +411,7 @@ class CsvImportWorker(QObject):
 
     def __init__(self, csv_path, target_folder=MUSIC_FOLDER):
         super().__init__()
+        self.setObjectName("import-csv-worker")
         self.csv_path = Path(csv_path)
         self.target_folder = Path(target_folder)
         self._stopped = False
@@ -550,16 +558,18 @@ class CsvImportWorker(QObject):
     # ------------------------------------------------------------------
     def _download(self, artist, track_name, output_base):
         """Download one search result through the yt-dlp Python API."""
-        from youtube_worker import _find_cookies_file
+        from youtube_worker import _cookies_from_browser, _find_cookies_file
 
         query = f"{artist} - {track_name}"
         cookies_path = _find_cookies_file(self.target_folder)
+        cookies_browser = _cookies_from_browser()
 
         try:
             final_path = download_audio(
                 f"ytsearch1:{query}",
                 str(self.target_folder / (output_base + ".%(ext)s")),
                 cookies_path=cookies_path,
+                cookies_from_browser=cookies_browser,
                 cancel_check=lambda: self._stopped,
             )
         except DownloadCancelled:
@@ -708,6 +718,7 @@ class TrimWorker(QObject):
 
     def __init__(self, file_path, start_ms, end_ms):
         super().__init__()
+        self.setObjectName("trim-audio-worker")
         self.file_path = file_path
         self.start_ms = int(start_ms)
         self.end_ms = int(end_ms)

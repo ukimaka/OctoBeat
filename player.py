@@ -116,6 +116,10 @@ class CrossfadePlayer(QObject):
         if self._shutdown:
             return
         if player is self._active():
+            if state == int(PlaybackState.PLAYING):
+                # VLC is ready: apply user volume * loudness gain exactly
+                # once the MediaPlayerPlaying event arrives.
+                self._apply_current_volume()
             self.stateChanged.emit(int(state))
 
     def _on_position_changed(self, player, pos):
@@ -161,6 +165,16 @@ class CrossfadePlayer(QObject):
             return
         print(f"[player] {message}")
 
+    @staticmethod
+    def _as_loudness(value):
+        """Нормализует loudness из БД к float (или None)."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     # ------------------------------------------------------------------
     #  Публичный API
     # ------------------------------------------------------------------
@@ -171,7 +185,7 @@ class CrossfadePlayer(QObject):
         # Cancel a fade while the old track is still the active one, then
         # switch the loudness to the new track before applying its gain.
         self._cancel_fade()
-        self._track_loudness = loudness
+        self._track_loudness = self._as_loudness(loudness)
         self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
@@ -192,7 +206,7 @@ class CrossfadePlayer(QObject):
         if self._shutdown:
             return
         self._cancel_fade()
-        self._track_loudness = loudness
+        self._track_loudness = self._as_loudness(loudness)
         self._about_to_finish_sent = False
         for p in self._players:
             p.stop()
@@ -221,7 +235,7 @@ class CrossfadePlayer(QObject):
         if self._in_crossfade:
             self._complete_swap_now()
 
-        self._track_loudness = loudness
+        self._track_loudness = self._as_loudness(loudness)
 
         # Ставим флаг ЗДЕСЬ — раз UI реально решил делать fade
         self._crossfade_started = True
@@ -344,7 +358,10 @@ class CrossfadePlayer(QObject):
 
     def _compute_gain(self):
         """Множитель громкости: тихие треки — громче, громкие — тише.
-        Ограничение ±12 dB (0.25x .. 4x)."""
+
+        Расчёт ограничен 0.25x..4x, но фактический выход VLC — 0..200,
+        то есть усиление выше 2x упирается в аппаратный cap.
+        """
         if self._track_loudness is None:
             return 1.0
         diff_db = self._reference_db - self._track_loudness
@@ -353,7 +370,7 @@ class CrossfadePlayer(QObject):
 
     def set_track_loudness(self, loudness_db):
         """Устанавливает loudness текущего трека (или None для отключения)."""
-        self._track_loudness = loudness_db
+        self._track_loudness = self._as_loudness(loudness_db)
         self._apply_current_volume()
 
     def safe_seek(self, pos):

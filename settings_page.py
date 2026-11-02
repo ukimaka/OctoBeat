@@ -24,18 +24,20 @@ Data / About), справа — содержимое выбранного раз
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, QSize, Qt, QUrl, pyqtSignal
+from PyQt5.QtCore import QSettings, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -56,6 +58,49 @@ PROFILE_DATA_DIR = DATA_DIR / "profile"
 
 # Замени на ссылку своего репозитория.
 PROJECT_GITHUB_URL = "https://github.com/yourname/music_player"
+
+
+class SettingsComboBox(QComboBox):
+    """Комбобокс, который открывает список после отпускания кнопки мыши.
+
+    На части Linux-композиторов стандартный popup QComboBox получает
+    mouse release сразу после открытия и закрывается. Открытие по
+    release гарантирует, что список останется на экране, пока
+    пользователь не выберет пункт или не кликнет мимо.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._press_pos = None
+        self._popup_was_visible = False
+
+    def mousePressEvent(self, event):
+        if event.button() in (Qt.LeftButton, Qt.RightButton):
+            self._press_pos = event.pos()
+            self._popup_was_visible = self.view().isVisible()
+            # Повторный клик по комбобоксу при открытом списке должен
+            # закрыть его, а не оставить висеть.
+            if self._popup_was_visible:
+                self.hidePopup()
+            self.setFocus(Qt.MouseFocusReason)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() in (Qt.LeftButton, Qt.RightButton):
+            press_pos = self._press_pos
+            popup_was_visible = self._popup_was_visible
+            self._press_pos = None
+            self._popup_was_visible = False
+            if press_pos is not None and self.rect().contains(event.pos()):
+                event.accept()
+                if not popup_was_visible:
+                    # Нулевой таймер — показать popup уже после того, как
+                    # этот mouse release полностью обработан.
+                    QTimer.singleShot(0, self.showPopup)
+                return
+        super().mouseReleaseEvent(event)
 
 
 class SettingsPage(QWidget):
@@ -92,7 +137,21 @@ class SettingsPage(QWidget):
         self.nav.setMinimumWidth(150)
         self.nav.setMaximumWidth(220)
         self.nav.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.nav.setFocusPolicy(Qt.NoFocus)
+        # Стандартный клик сразу активирует список и выбранную строку;
+        # NoFocus на некоторых платформах откладывал выбор до release.
+        self.nav.setFocusPolicy(Qt.StrongFocus)
+        # Обычный список без контекстного меню, drag-ghost и прочих
+        # обработчиков мыши: выбор срабатывает сразу по нажатию LMB.
+        # Навигацию переключает только currentRowChanged -> stack.
+        self.nav.setContextMenuPolicy(Qt.NoContextMenu)
+        self.nav.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.nav.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.nav.setMouseTracking(True)
+        self.nav.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.nav.setDragEnabled(False)
+        self.nav.setAcceptDrops(False)
+        self.nav.setDragDropMode(QAbstractItemView.NoDragDrop)
+        self.nav.setDropIndicatorShown(False)
 
         # --- Правая колонка: контент ---
         self.stack = QStackedWidget()
@@ -133,8 +192,9 @@ class SettingsPage(QWidget):
         self.stack.addWidget(widget)
 
     def _new_page(self, heading):
-        """Создаёт страницу с заголовком и возвращает (page, layout)."""
+        """Создаёт прокручиваемую страницу и возвращает (page, layout)."""
         page = QWidget()
+        page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(0)
@@ -144,7 +204,16 @@ class SettingsPage(QWidget):
         layout.addWidget(heading_label)
         layout.addSpacing(16)
 
-        return page, layout
+        # При 125–150% масштабе контент выше окна; прокрутка сохраняет
+        # доступ к нижним строкам. Горизонтальную прокрутку отключаем —
+        # строки ниже ужимаются под ширину вьюпорта.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll.setWidget(page)
+        return scroll, layout
 
     def _make_row(self, title, description, control=None):
         """Строка настройки: заголовок + серое описание слева, контрол справа."""
@@ -153,32 +222,53 @@ class SettingsPage(QWidget):
         row.setContentsMargins(0, 10, 0, 10)
         row.setSpacing(16)
 
-        text_col = QVBoxLayout()
+        text_wrap = QWidget()
+        text_wrap.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        text_wrap.setMinimumWidth(0)
+        text_col = QVBoxLayout(text_wrap)
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
 
         title_label = QLabel(title)
         title_label.setStyleSheet("font-size: 14px; font-weight: 600;")
+        title_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        title_label.setMinimumWidth(0)
         text_col.addWidget(title_label)
 
         if description:
             desc_label = QLabel(description)
             desc_label.setWordWrap(True)
+            desc_label.setSizePolicy(
+                QSizePolicy.Ignored, QSizePolicy.Preferred
+            )
+            desc_label.setMinimumWidth(0)
             # Цвет описания зависит от темы — задаётся в apply_theme().
             self._description_labels.append(desc_label)
             text_col.addWidget(desc_label)
 
-        row.addLayout(text_col, 1)
+        # Текстовая колонка забирает остаток ширины, контрол всегда
+        # остаётся у правого края и не уезжает за вьюпорт при масштабе.
+        row.addWidget(text_wrap, 1)
         if control is not None:
-            row.addWidget(control, 0, Qt.AlignVCenter)
+            control.setSizePolicy(
+                QSizePolicy.Maximum, QSizePolicy.Fixed
+            )
+            row.addWidget(
+                control, 0, Qt.AlignRight | Qt.AlignVCenter
+            )
 
         return container
 
     def _build_general_page(self):
         page, layout = self._new_page(tr("General", self._lang()))
 
-        self.language_combo = QComboBox()
-        self.language_combo.setMinimumWidth(160)
+        self.language_combo = SettingsComboBox()
+        self.language_combo.setMinimumWidth(120)
+        self.language_combo.setMaximumWidth(220)
+        self.language_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.language_combo.setMinimumContentsLength(6)
         self.language_combo.addItem("English", "en")
         self.language_combo.addItem("Русский", "ru")
         layout.addWidget(self._make_row(
@@ -285,8 +375,13 @@ class SettingsPage(QWidget):
     def _build_appearance_page(self):
         page, layout = self._new_page(tr("Appearance", self._lang()))
 
-        self.zoom_combo = QComboBox()
-        self.zoom_combo.setMinimumWidth(160)
+        self.zoom_combo = SettingsComboBox()
+        self.zoom_combo.setMinimumWidth(120)
+        self.zoom_combo.setMaximumWidth(220)
+        self.zoom_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.zoom_combo.setMinimumContentsLength(6)
         # Qt5 не поддерживает QT_SCALE_FACTOR < 1 (UI обрезается), поэтому
         # минимальный безопасный масштаб — 100%.
         for value in (100, 125, 150):
@@ -314,8 +409,13 @@ class SettingsPage(QWidget):
             self.reset_zoom_button,
         ))
 
-        self.theme_combo = QComboBox()
-        self.theme_combo.setMinimumWidth(160)
+        self.theme_combo = SettingsComboBox()
+        self.theme_combo.setMinimumWidth(120)
+        self.theme_combo.setMaximumWidth(220)
+        self.theme_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.theme_combo.setMinimumContentsLength(6)
         themes = available_themes() or ["dark", "light"]
         for name in themes:
             label = name.replace("_", " ").replace("-", " ").title()
@@ -334,7 +434,8 @@ class SettingsPage(QWidget):
 
         self.cookies_edit = QLineEdit()
         self.cookies_edit.setReadOnly(True)
-        self.cookies_edit.setMinimumWidth(240)
+        self.cookies_edit.setMinimumWidth(140)
+        self.cookies_edit.setMaximumWidth(260)
         self.cookies_edit.setPlaceholderText(tr("No file selected", self._lang()))
 
         self.browse_button = QPushButton(tr("Browse...", self._lang()))
@@ -353,7 +454,31 @@ class SettingsPage(QWidget):
             control,
         ))
 
+        self.browser_combo = SettingsComboBox()
+        self.browser_combo.setMinimumWidth(180)
+        self.browser_combo.setMaximumWidth(260)
+        for label, value in (
+            (tr("Do not use browser cookies", self._lang()), ""),
+            ("Firefox", "firefox"),
+            ("Google Chrome", "chrome"),
+            ("Chromium", "chromium"),
+            ("Brave", "brave"),
+            ("Microsoft Edge", "edge"),
+            ("Opera", "opera"),
+            ("Vivaldi", "vivaldi"),
+            ("Safari", "safari"),
+        ):
+            self.browser_combo.addItem(label, value)
 
+        layout.addWidget(self._make_row(
+            tr("Cookies from browser", self._lang()),
+            tr(
+                "Read YouTube cookies from the selected browser. "
+                "Use it if YouTube asks you to sign in.",
+                self._lang(),
+            ),
+            self.browser_combo,
+        ))
 
         layout.addStretch(1)
         return page
@@ -380,8 +505,8 @@ class SettingsPage(QWidget):
         self.music_folder_edit = QLineEdit()
         self.music_folder_edit.setReadOnly(True)
         self.music_folder_edit.setPlaceholderText(tr("Folder where downloaded music is stored.", self._lang()))
-        self.music_folder_edit.setMinimumWidth(200)
-        self.music_folder_edit.setMaximumWidth(400)
+        self.music_folder_edit.setMinimumWidth(140)
+        self.music_folder_edit.setMaximumWidth(260)
         self.music_folder_edit.setToolTip(tr("Select the folder for downloaded music.", self._lang()))
 
         # --- Кнопка "Выбрать папку" (если LFM её не добавила, добавь сюда) ---
@@ -496,6 +621,10 @@ class SettingsPage(QWidget):
 
         self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
 
+        browser = self.settings.value("youtube_browser", "") or ""
+        index = self.browser_combo.findData(browser)
+        self.browser_combo.setCurrentIndex(max(index, 0))
+
         self.music_folder_edit.setText(self.settings.value("download_dir", str(MUSIC_DIR)))
 
     # ------------------------------------------------------------------
@@ -551,6 +680,7 @@ class SettingsPage(QWidget):
         self.clear_covers_button.clicked.connect(self._on_clear_covers)
         self.clear_all_cache_button.clicked.connect(self._on_clear_all_cache)
         self.browse_button.clicked.connect(self._on_browse_cookies)
+        self.browser_combo.currentIndexChanged.connect(self._on_browser_changed)
         self.browse_music_button.clicked.connect(self._on_browse_music_folder)
         self.csv_import_button.clicked.connect(self.csv_import_requested.emit)
         self.report_bug_button.clicked.connect(self._on_report_bug)
@@ -696,6 +826,12 @@ class SettingsPage(QWidget):
             self.cookies_edit.setText(path)
             self.settings.setValue("youtube_cookies", path)
             self.settings.sync()
+
+    def _on_browser_changed(self):
+        """Сохраняет выбранный браузер для cookies yt-dlp."""
+        browser = self.browser_combo.currentData() or ""
+        self.settings.setValue("youtube_browser", browser)
+        self.settings.sync()
 
     def _on_browse_music_folder(self):
         start_dir = self.music_folder_edit.text() or str(Path.home())

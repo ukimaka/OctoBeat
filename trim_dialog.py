@@ -23,7 +23,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QProgressDialog,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -33,18 +32,16 @@ from PyQt5.QtWidgets import (
 import workers
 from dialogs import (
     CustomConfirmDialog,
+    DimmedProgressDialog,
     _dialog_lang,
     _FramelessDialog,
     colored_icon,
 )
 from trim_waveform import WaveformLoader, WaveformWidget, _format_time
+from qt_diagnostics import hold_worker, track_thread
+from qt_lifecycle import retire_thread, widget_alive
 from translations import tr
 from vlc_backend import PlaybackState, VlcAudioPlayer
-
-# QThread нельзя удалять, пока он работает. Если диалог закрыли во время
-# загрузки волны, поток живёт до завершения; этот словарь не даёт Python
-# собрать его wrapper раньше времени.
-_WAVE_JOBS = {}
 
 
 class AudioTrimDialog(_FramelessDialog):
@@ -68,6 +65,9 @@ class AudioTrimDialog(_FramelessDialog):
         self._trim_thread = None
         self._trim_worker = None
         self._progress = None
+        self._progress_depth = 0
+        self._trim_finish_pending = None
+        self._trim_accept_pending = False
 
         self.setMinimumSize(780, 470)
         self.resize(900, 520)
@@ -179,9 +179,12 @@ class AudioTrimDialog(_FramelessDialog):
     # ------------------------------------------------------------------
     def _start_waveform_loading(self):
         self._wave_thread = QThread()
+        track_thread(self._wave_thread, "trim-waveform")
         self._wave_loader = WaveformLoader(self._file_path)
         self._wave_loader.moveToThread(self._wave_thread)
-        _WAVE_JOBS[self._wave_thread] = self._wave_loader
+        hold_worker(
+            self._wave_thread, self._wave_loader, "trim-waveform-loader"
+        )
 
         self._wave_thread.started.connect(self._wave_loader.run)
         self._wave_loader.ready.connect(self._on_wave_ready)
@@ -191,9 +194,6 @@ class AudioTrimDialog(_FramelessDialog):
         self._wave_thread.finished.connect(self._on_wave_thread_finished)
         self._wave_thread.finished.connect(self._wave_loader.deleteLater)
         self._wave_thread.finished.connect(self._wave_thread.deleteLater)
-        self._wave_thread.finished.connect(
-            lambda t=self._wave_thread: _WAVE_JOBS.pop(t, None)
-        )
         self._wave_thread.start()
 
     def _on_wave_ready(self, peaks, duration_ms):
@@ -244,11 +244,15 @@ class AudioTrimDialog(_FramelessDialog):
 
     def _stop_waveform_loading(self):
         thread = self._wave_thread
-        if thread is not None and thread.isRunning():
+        if thread is None:
+            return
+        if thread.isRunning():
             thread.requestInterruption()
-            thread.quit()
-            # Не даём приложению уничтожить ещё работающий QThread.
-            thread.wait(2000)
+        # Если поток не успел за wait(), retire_thread удержит ссылку до
+        # фактического завершения и только потом удалит объект.
+        retire_thread(thread, 2000)
+        self._wave_thread = None
+        self._wave_loader = None
 
     # ------------------------------------------------------------------
     #  Плеер
@@ -377,7 +381,7 @@ class AudioTrimDialog(_FramelessDialog):
         self._busy = True
         self._set_controls_enabled(False)
 
-        self._progress = QProgressDialog(
+        self._progress = DimmedProgressDialog(
             tr("Trimming audio...", self._lang),
             tr("Cancel", self._lang),
             0, 100, self,
@@ -391,12 +395,14 @@ class AudioTrimDialog(_FramelessDialog):
         self._progress.show()
 
         thread = QThread()
+        track_thread(thread, "trim-audio")
         worker = workers.TrimWorker(self._file_path, start, end)
         worker.moveToThread(thread)
+        hold_worker(thread, worker, "trim-audio-worker")
         self._trim_thread = thread
         self._trim_worker = worker
 
-        worker.progress.connect(self._progress.setValue)
+        worker.progress.connect(self._on_trim_progress)
         worker.finished.connect(self._on_trim_finished)
         worker.error.connect(self._on_trim_error)
         worker.cancelled.connect(self._on_trim_cancelled)
@@ -422,24 +428,77 @@ class AudioTrimDialog(_FramelessDialog):
     def _on_trim_warning(self, message):
         self._pending_warning = tr(message, self._lang)
 
+    def _close_trim_progress(self):
+        dialog = self._progress
+        self._progress = None
+        if not widget_alive(dialog):
+            return
+        try:
+            dialog.setAutoClose(False)
+            dialog.setAutoReset(False)
+            dialog.close()
+            dialog.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _on_trim_progress(self, value):
+        dialog = self._progress
+        if not widget_alive(dialog):
+            return
+        if self._progress_depth:
+            return
+        self._progress_depth += 1
+        try:
+            dialog.setValue(int(value))
+        except (RuntimeError, TypeError, ValueError):
+            pass
+        finally:
+            self._progress_depth -= 1
+            if self._progress_depth == 0:
+                pending = self._trim_finish_pending
+                self._trim_finish_pending = None
+                if pending is not None:
+                    pending()
+
     def _on_trim_finished(self, duration):
+        # finished может прийти внутри QProgressDialog::setValue().
+        if self._progress_depth:
+            self._trim_finish_pending = (
+                lambda: self._on_trim_finished(duration)
+            )
+            return
         self._trimmed_duration = float(duration)
-        if self._progress is not None:
-            self._progress.setValue(100)
-            self._progress.close()
         self._busy = False
         self._set_controls_enabled(True)
         self._close_player()
+        self._close_trim_progress()
+        self._trim_accept_pending = True
 
         if self._pending_warning:
             CustomConfirmDialog.information(
                 self, tr("Trim audio", self._lang), self._pending_warning
             )
-        self.accept()
+        # Не закрываем диалог, пока QThread действительно не завершился:
+        # иначе его атрибут с работающим потоком может быть уничтожен.
+        if self._trim_thread is None:
+            self._trim_accept_pending = False
+            self.accept()
+
+    def _detach_trim_thread(self):
+        thread = self._trim_thread
+        self._trim_thread = None
+        self._trim_worker = None
+        if thread is not None:
+            retire_thread(thread, 0)
 
     def _on_trim_error(self, message):
-        if self._progress is not None:
-            self._progress.close()
+        if self._progress_depth:
+            self._trim_finish_pending = (
+                lambda: self._on_trim_error(message)
+            )
+            return
+        self._close_trim_progress()
+        self._detach_trim_thread()
         self._busy = False
         self._release_player()
         self._restore_player()
@@ -453,8 +512,11 @@ class AudioTrimDialog(_FramelessDialog):
         )
 
     def _on_trim_cancelled(self):
-        if self._progress is not None:
-            self._progress.close()
+        if self._progress_depth:
+            self._trim_finish_pending = self._on_trim_cancelled
+            return
+        self._close_trim_progress()
+        self._detach_trim_thread()
         self._busy = False
         self._restore_player()
         self._set_controls_enabled(True)
@@ -463,7 +525,10 @@ class AudioTrimDialog(_FramelessDialog):
         if self.sender() is self._trim_thread:
             self._trim_thread = None
             self._trim_worker = None
-            self._progress = None
+            self._close_trim_progress()
+            if self._trim_accept_pending:
+                self._trim_accept_pending = False
+                self.accept()
 
     # ------------------------------------------------------------------
     #  Завершение

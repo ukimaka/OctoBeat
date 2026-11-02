@@ -22,6 +22,7 @@
 """
 
 import hashlib
+import time
 
 import requests
 from PyQt5.QtCore import (
@@ -48,6 +49,8 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -63,6 +66,7 @@ from PyQt5.QtWidgets import (
 
 from dialogs import (
     CustomConfirmDialog,
+    _DimmedDialog,
     _FramelessDialog,
     colored_icon,
     colored_pixmap,
@@ -70,26 +74,19 @@ from dialogs import (
 from paths import CACHE_DIR
 from pixmap_utils import draw_centered, draw_cover, icon_pixmap_rect
 from styles import is_dark_theme
+from qt_diagnostics import (
+    hold_worker,
+    log_warning,
+    note,
+    track_pool,
+    track_thread,
+    untrack_pool,
+)
+from qt_lifecycle import retire_thread
 from translations import tr
 from youtube_worker import YoutubeSearchWorker, YoutubeWorker
 
 THUMBS_DIR = CACHE_DIR / "yt_thumbs"
-
-# QThread, который не успел остановиться за 2 секунды, нельзя уничтожать.
-# Держим ссылку до его сигнала finished, иначе Qt пишет
-# "QThread: Destroyed while thread is still running" и завершает процесс.
-_LINGERING_THREADS = []
-
-
-def _release_lingering_thread(thread):
-    try:
-        _LINGERING_THREADS.remove(thread)
-    except ValueError:
-        pass
-    try:
-        thread.deleteLater()
-    except RuntimeError:
-        pass
 
 
 class SearchResultDelegate(QStyledItemDelegate):
@@ -258,15 +255,24 @@ class _ThumbnailSignals(QObject):
 class _ThumbnailTask(QRunnable):
     """Скачивает превью (с запасным URL) в фоновом потоке."""
 
-    def __init__(self, urls, key, dest, signals):
+    def __init__(self, urls, key, dest, signals, cancel_check=None):
         super().__init__()
         self.urls = urls
         self.key = key
         self.dest = dest
         self.signals = signals
+        self.cancel_check = cancel_check
+
+    def _cancelled(self):
+        try:
+            return bool(self.cancel_check and self.cancel_check())
+        except Exception:
+            return False
 
     def run(self):
         try:
+            if self._cancelled():
+                return
             if self.dest.is_file():
                 data = self.dest.read_bytes()
                 if data:
@@ -274,6 +280,8 @@ class _ThumbnailTask(QRunnable):
                     return
 
             for url in self.urls:
+                if self._cancelled():
+                    return
                 try:
                     response = requests.get(
                         url, timeout=10,
@@ -283,6 +291,8 @@ class _ThumbnailTask(QRunnable):
                     content = response.content
                     if not content:
                         continue
+                    if self._cancelled():
+                        return
                     self.dest.parent.mkdir(parents=True, exist_ok=True)
                     self.dest.write_bytes(content)
                     self.signals.loaded.emit(self.key, content)
@@ -292,6 +302,124 @@ class _ThumbnailTask(QRunnable):
         except Exception:
             # Превью не критично — при ошибке останется заглушка.
             pass
+
+
+class DownloadProgressDialog(_DimmedDialog):
+    """Маленькое окно прогресса, отдельное от поиска YouTube."""
+
+    cancelled = pyqtSignal()
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self._finished = False
+        lang = QSettings("MusicPlayer", "MusicPlayer").value(
+            "language", "en"
+        )
+        self.setObjectName("downloadProgressDialog")
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setFixedSize(250, 150)
+        # Безрамочное окно, как остальные кастомные диалоги: без системного
+        # заголовка, белой рамки и кнопок ОС.
+        self.setWindowFlags(
+            Qt.Dialog
+            | Qt.FramelessWindowHint
+            | Qt.NoDropShadowWindowHint
+        )
+        # Окно и его содержимое должны быть полностью непрозрачными.
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WA_NoSystemBackground, False)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.setAutoFillBackground(True)
+
+        background = self.palette().window().color().name()
+        text = self.palette().windowText().color().name()
+        border = self.palette().mid().color().name()
+
+        # Сплошная непрозрачная подложка внутри окна. Даже если родитель
+        # передал прозрачность на уровне нативного окна, этот QFrame
+        # закрашивает всю клиентскую область.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._container = QFrame()
+        self._container.setObjectName("downloadProgressRoot")
+        self._container.setAttribute(Qt.WA_StyledBackground, True)
+        outer.addWidget(self._container)
+
+        layout = QVBoxLayout(self._container)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        self.title_label = QLabel(title)
+        font = self.title_label.font()
+        font.setBold(True)
+        self.title_label.setFont(font)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title_label)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
+        self.progress.setFixedHeight(10)
+
+        self.cancel_button = QPushButton(tr("Cancel", lang))
+        self.cancel_button.setObjectName("downloadProgressCancel")
+        self.cancel_button.setCursor(Qt.PointingHandCursor)
+        self.cancel_button.clicked.connect(self._on_cancel)
+        layout.addWidget(self.cancel_button, 0, Qt.AlignCenter)
+
+        self.setStyleSheet(
+            "QDialog#downloadProgressDialog {"
+            f" background-color: {background};"
+            "}"
+            "QFrame#downloadProgressRoot {"
+            f" background-color: {background};"
+            f" border: 1px solid {border};"
+            "}"
+            f"QLabel {{ color: {text}; }}"
+            "QProgressBar {"
+            " background-color: rgba(127, 127, 127, 0.22);"
+            " border: none;"
+            " border-radius: 4px;"
+            " text-align: center;"
+            f" color: {text};"
+            "}"
+            "QProgressBar::chunk {"
+            " background-color: palette(highlight);"
+            " border-radius: 4px;"
+            "}"
+            "QPushButton#downloadProgressCancel {"
+            " background-color: rgba(127, 127, 127, 0.18);"
+            f" color: {text};"
+            " border: none;"
+            " border-radius: 6px;"
+            " padding: 6px 18px;"
+            "}"
+            "QPushButton#downloadProgressCancel:hover {"
+            " background-color: rgba(127, 127, 127, 0.28);"
+            "}"
+        )
+
+    def setValue(self, value):
+        self.progress.setValue(max(0, min(100, int(value))))
+
+    def finish(self):
+        """Close without emitting cancelled (download completed)."""
+        self._finished = True
+        self.hide()
+
+    def _on_cancel(self):
+        self.cancel_button.setEnabled(False)
+        self.reject()
+
+    def reject(self):
+        if not self._finished:
+            self._finished = True
+            self.cancelled.emit()
+        super().reject()
 
 
 class YoutubeDialog(_FramelessDialog):
@@ -305,15 +433,23 @@ class YoutubeDialog(_FramelessDialog):
         self._search_worker = None
         self._download_thread = None
         self._download_worker = None
+        self._progress_dialog = None
+        self._shutting_down = False
 
         self._thumb_dir = THUMBS_DIR
         self._thumb_signals = _ThumbnailSignals()
         self._thumb_signals.loaded.connect(self._on_thumbnail_loaded)
-        self._thumb_pool = QThreadPool(self)
+        self._thumb_pool = track_pool(QThreadPool(), "yt-thumb-pool")
 
-        self.setMinimumSize(600, 460)
+        # Это полноценное окно поиска, а не маленький прогресс-диалог.
+        self.setMinimumSize(600, 420)
+        self.resize(640, 480)
 
         self._build_ui()
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown)
+        note("youtube dialog created")
 
     def _lang(self):
         return self.settings.value("language", "en")
@@ -332,8 +468,8 @@ class YoutubeDialog(_FramelessDialog):
         lang = self._lang()
         content = QWidget()
         root = QVBoxLayout(content)
-        root.setContentsMargins(16, 12, 16, 8)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 8, 16, 6)
+        root.setSpacing(8)
         self.body.addWidget(content, 1)
 
         # --- Верх: поиск ---
@@ -362,6 +498,7 @@ class YoutubeDialog(_FramelessDialog):
         self.list.setItemDelegate(SearchResultDelegate(self.list))
         self.list.setUniformItemSizes(True)
         self.list.setMouseTracking(True)
+        self.list.setMinimumHeight(120)
         self.list.setIconSize(QSize(
             SearchResultDelegate.THUMB_WIDTH,
             SearchResultDelegate.THUMB_HEIGHT,
@@ -369,25 +506,6 @@ class YoutubeDialog(_FramelessDialog):
         self.list.itemSelectionChanged.connect(self._on_selection_changed)
         self.list.itemDoubleClicked.connect(lambda _item: self._on_download())
         root.addWidget(self.list, 1)
-
-        # --- Прогресс ---
-        self.progress = QProgressBar(self)
-        self.progress.setRange(0, 100)
-        self.progress.setVisible(False)
-        self.progress.setStyleSheet(f"""
-            QProgressBar {{
-                border: none;
-                border-radius: 4px;
-                background: rgba(128, 128, 128, 0.25);
-                height: 8px;
-                text-align: center;
-            }}
-            QProgressBar::chunk {{
-                background: palette(highlight);
-                border-radius: 4px;
-            }}
-        """)
-        root.addWidget(self.progress)
 
         self.status = QLabel("", self)
         root.addWidget(self.status)
@@ -445,16 +563,22 @@ class YoutubeDialog(_FramelessDialog):
         self._set_searching(True)
         self.status.setText(tr("Searching...", lang))
 
-        self._search_thread = QThread(self)
+        self._search_thread = track_thread(QThread(), "yt-search")
         self._search_worker = YoutubeSearchWorker(query)
+        self._search_worker.setObjectName("yt-search-worker")
+        note(f"youtube search started: {query[:80]!r}")
         self._search_worker.moveToThread(self._search_thread)
+        hold_worker(self._search_thread, self._search_worker, "yt-search-worker")
 
         self._search_thread.started.connect(self._search_worker.run)
+        self._search_thread.finished.connect(self._search_worker.deleteLater)
         self._search_worker.finished.connect(self._on_search_finished)
         self._search_worker.error.connect(self._on_search_error)
         self._search_thread.start()
 
     def _on_search_finished(self, results):
+        if self._shutting_down:
+            return
         lang = self._lang()
         self._cleanup_search_thread()
         self._set_searching(False)
@@ -475,6 +599,8 @@ class YoutubeDialog(_FramelessDialog):
             self.status.setText(tr("Nothing found", lang))
 
     def _on_search_error(self, message):
+        if self._shutting_down:
+            return
         self._cleanup_search_thread()
         self._set_searching(False)
         self.status.setText(tr("Error", self._lang()))
@@ -490,6 +616,8 @@ class YoutubeDialog(_FramelessDialog):
     #  Превью
     # ------------------------------------------------------------------
     def _queue_thumbnail(self, result):
+        if self._shutting_down or self._thumb_pool is None:
+            return
         video_id = result.get("video_id") or ""
         direct = (
             f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
@@ -510,10 +638,15 @@ class YoutubeDialog(_FramelessDialog):
 
         result["thumb_url"] = key
         self._thumb_pool.start(
-            _ThumbnailTask(urls, key, dest, self._thumb_signals)
+            _ThumbnailTask(
+                urls, key, dest, self._thumb_signals,
+                cancel_check=lambda: self._shutting_down,
+            )
         )
 
     def _on_thumbnail_loaded(self, key, data):
+        if self._shutting_down:
+            return
         image = QImage()
         if not image.loadFromData(data):
             return
@@ -553,71 +686,107 @@ class YoutubeDialog(_FramelessDialog):
         if not url:
             return
 
-        self._show_download_mode(True)
-        self.progress.setValue(0)
-        self.status.setText(tr("Downloading...", self._lang()))
+        lang = self._lang()
+        # Не вызываем self.hide(): QDialog::setVisible(False) завершает
+        # вложенный event loop exec_(), и импорт-флоу сразу решает, что
+        # диалог отменён. Из-за этого окно поиска теряло ссылку, а сигналы
+        # progress/finished от воркера больше не доходили до прогресс-бара.
+        # Окно поиска остаётся под модальным прогресс-диалогом.
+        # Родитель — главное окно, а не безрамочный поиск:
+        # иначе дочерний диалог наследует прозрачность/стили поисковика.
+        progress_parent = self.parentWidget()
+        self._progress_dialog = DownloadProgressDialog(
+            tr("Downloading...", lang), progress_parent
+        )
+        self._progress_dialog.cancelled.connect(
+            self._on_download_cancelled
+        )
+        self._progress_dialog.show()
+        self._progress_dialog.raise_()
 
-        self._download_thread = QThread(self)
+        self._download_thread = track_thread(QThread(), "yt-download")
         self._download_worker = YoutubeWorker(url, self.target_folder)
+        self._download_worker.setObjectName("yt-download-worker")
+        note(f"youtube download started: {url[:120]!r}")
         self._download_worker.moveToThread(self._download_thread)
+        hold_worker(
+            self._download_thread, self._download_worker,
+            "yt-download-worker",
+        )
 
         self._download_thread.started.connect(self._download_worker.run)
-        self._download_worker.progress.connect(self.progress.setValue)
+        self._download_thread.finished.connect(
+            self._download_worker.deleteLater
+        )
+        self._download_worker.progress.connect(self._on_download_progress)
         self._download_worker.finished.connect(self._on_download_finished)
         self._download_worker.error.connect(self._on_download_error)
         self._download_thread.start()
 
+    def _on_download_progress(self, value):
+        if self._shutting_down:
+            return
+        dialog = self._progress_dialog
+        if dialog is not None:
+            dialog.setValue(value)
+
     def _on_download_finished(self, path):
+        if self._shutting_down or self._download_thread is None:
+            note(f"youtube download finished after cancel/shutdown: {path}")
+            return
+        note(f"youtube download finished: {path}")
         self.downloaded_path = path
         self._cleanup_download_thread()
+        self._close_progress_dialog()
         self.accept()
 
     def _on_download_error(self, message):
+        if self._shutting_down or self._download_thread is None:
+            note(f"youtube download error after cancel/shutdown: {message[:160]}")
+            return
+        note(f"youtube download error: {message[:160]}")
         self._cleanup_download_thread()
-        self._show_download_mode(False)
+        self._close_progress_dialog()
+        self.show()
+        self.raise_()
+        self._set_searching(False)
         self.btn_download.setEnabled(self.list.currentItem() is not None)
         self.status.setText(tr("Error", self._lang()))
         CustomConfirmDialog.information(
             self, tr("Error", self._lang()), message
         )
 
-    def _show_download_mode(self, downloading):
-        """Прячет поиск и показывает прогресс (или наоборот)."""
-        self.list.setVisible(not downloading)
-        self.input.setVisible(not downloading)
-        self.btn_search.setVisible(not downloading)
-        self.progress.setVisible(downloading)
-        self.btn_download.setVisible(not downloading)
+    def _on_download_cancelled(self):
+        self._cleanup_download_thread()
+        self._close_progress_dialog()
+        self.show()
+        self.raise_()
+        self._set_searching(False)
+        self.btn_download.setEnabled(self.list.currentItem() is not None)
+        self.status.setText(tr("Cancelled", self._lang()))
+
+    def _close_progress_dialog(self):
+        dialog = self._progress_dialog
+        self._progress_dialog = None
+        if dialog is None:
+            return
+        dialog.finish()
+        dialog.deleteLater()
 
     # ------------------------------------------------------------------
     #  Очистка
     # ------------------------------------------------------------------
     @staticmethod
     def _stop_thread(thread, worker):
-        """Останавливает worker и дожидается завершения QThread."""
+        """Останавливает worker, не уничтожая работающий QThread."""
         if worker is not None:
-            worker.stop()
+            try:
+                worker.stop()
+            except Exception:
+                pass
         if thread is None:
             return
-        try:
-            thread.quit()
-            if thread.isRunning():
-                thread.wait(2000)
-            if worker is not None:
-                worker.deleteLater()
-            if thread.isRunning():
-                # Нельзя удалять работающий QThread: Qt аварийно завершит
-                # приложение. Отвязываем его от диалога и уничтожаем только
-                # после реального завершения потока.
-                thread.setParent(None)
-                thread.finished.connect(
-                    lambda: _release_lingering_thread(thread)
-                )
-                _LINGERING_THREADS.append(thread)
-            else:
-                thread.deleteLater()
-        except RuntimeError:
-            pass
+        retire_thread(thread, 2000)
 
     def _cleanup_search_thread(self):
         thread = self._search_thread
@@ -638,17 +807,39 @@ class YoutubeDialog(_FramelessDialog):
         if getattr(self, "_shutting_down", False):
             return
         self._shutting_down = True
+        note("youtube dialog shutdown begin")
 
         # Сначала гарантированно останавливаем фоновые потоки: иначе при
         # уничтожении диалога Qt получит QThread: Destroyed while running.
-        # _stop_thread() внутри _cleanup_* вызывает worker.stop(),
-        # thread.quit() и thread.wait(2000).
         self._cleanup_search_thread()
         self._cleanup_download_thread()
+        self._close_progress_dialog()
 
-        if self._thumb_pool is not None:
-            self._thumb_pool.clear()
-            self._thumb_pool.waitForDone(2000)
+        pool = self._thumb_pool
+        if pool is not None:
+            # Новые превью больше не ставятся в очередь; уже запущенные
+            # доработают и будут дожданы без магического таймаута.
+            pool.clear()
+            note(
+                "thumbnail pool wait: "
+                f"active={pool.activeThreadCount()}"
+            )
+            started = time.monotonic()
+            pool.waitForDone()
+            elapsed = time.monotonic() - started
+            note(f"thumbnail pool finished in {elapsed:.2f}s")
+            if elapsed >= 2.0:
+                log_warning(
+                    "thumbnail pool close took "
+                    f"{elapsed:.2f}s (waited fully)"
+                )
+            self._thumb_pool = None
+            untrack_pool(pool)
+        note("youtube dialog shutdown end")
+
+    def shutdown(self):
+        """Публичная остановка диалога (в т.ч. при выходе из приложения)."""
+        self._shutdown()
 
     def _on_cancel(self):
         self.reject()

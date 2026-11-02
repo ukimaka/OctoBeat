@@ -43,6 +43,7 @@ from PyQt5.QtWidgets import (
     QStyle,
 )
 
+from dialog_base import DimmedFileDialog
 from paths import RESOURCE_DIR
 from pixmap_utils import (
     draw_centered,
@@ -245,7 +246,7 @@ class IconProvider:
 
 
 def _make_file_dialog(parent, caption, directory, file_filter, options=None):
-    dialog = QFileDialog(parent, caption, directory, file_filter)
+    dialog = DimmedFileDialog(parent, caption, directory, file_filter)
     if options is not None:
         dialog.setOptions(options)
     dialog.setOption(QFileDialog.DontUseNativeDialog, True)

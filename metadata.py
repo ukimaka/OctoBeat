@@ -16,6 +16,7 @@
 
 """Чтение метаданных аудиофайлов: теги через mutagen + fallback на имя файла."""
 
+import os
 import re
 from pathlib import Path
 
@@ -137,6 +138,12 @@ def extract_cover(file_path, track_id):
     cover_file = COVERS_DIR / f"{track_id}.jpg"
     if cover_file.exists() and cover_file.stat().st_size > 0:
         return str(cover_file)
+
+    # Удалённый/перемещённый файл не должен доходить до mutagen: он
+    # печатает ошибку на каждый вызов при перерисовке списка. None —
+    # делегат нарисует placeholder без чтения с диска.
+    if not file_path or not os.path.isfile(file_path):
+        return None
 
     try:
         audio = MutagenFile(file_path)

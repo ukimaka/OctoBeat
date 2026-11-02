@@ -415,26 +415,27 @@ class _DetailPage(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         palette = self.palette()
-        dark = _theme_is_dark()
-        # Нижний цвет градиента — фон текущей темы (QPalette.Window),
-        # поэтому страница автоматически подстраивается под любой .qss.
+        # Определяем светлоту по фактической палитре, а не по имени темы:
+        # пользовательские светлые темы могут не содержать слова "light".
         bottom = palette.color(QPalette.Window)
+        dark = bottom.lightness() < 128
 
         if self._top_color is not None:
             top = QColor(self._top_color)
-            if not dark:
-                # В светлой теме приглушаем цвет обложки, уводя его в фон.
-                top = _blend(top, bottom, 0.6)
+            # На светлом фоне сильно уводим цвет обложки в window, иначе
+            # тёмная обложка даёт грязное серое пятно. На тёмном — лишь
+            # слегка смягчаем, сохраняя акцент обложки.
+            top = _blend(top, bottom, 0.25 if dark else 0.80)
         else:
             top = QColor(bottom)
 
+        # Единая плавная кривая для обеих тем: середина всегда тянется к
+        # palette(window), поэтому стыка с фоном внизу нет.
+        mid = _blend(top, bottom, 0.55 if dark else 0.65)
+
         gradient = QLinearGradient(0, 0, 0, self.height())
         gradient.setColorAt(0.0, top)
-        if dark:
-            gradient.setColorAt(0.3, bottom)
-        else:
-            # Светлая тема: плавный переход обложка → фон без «жёсткого» стыка.
-            gradient.setColorAt(0.45, _blend(top, bottom, 0.75))
+        gradient.setColorAt(0.45, mid)
         gradient.setColorAt(1.0, bottom)
         painter.fillRect(self.rect(), gradient)
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QSettings, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -29,7 +28,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from qt_diagnostics import track_thread
+from qt_lifecycle import retire_thread
+
 from api_client import ApiClient, ApiError
+from dialog_base import _DimmedDialog
 
 
 class _AuthWorker(QThread):
@@ -40,6 +43,7 @@ class _AuthWorker(QThread):
 
     def __init__(self, mode: str, username: str, password: str, parent=None):
         super().__init__(parent)
+        track_thread(self, "auth")
         self.mode = mode
         self.username = username
         self.password = password
@@ -70,7 +74,7 @@ class _AuthWorker(QThread):
                 self.succeeded.emit(data)
 
 
-class AuthDialog(QDialog):
+class AuthDialog(_DimmedDialog):
     """Модальный диалог с вкладками Login и Register."""
 
     logged_in = pyqtSignal(str)
@@ -80,6 +84,7 @@ class AuthDialog(QDialog):
         self.setWindowTitle("Log In / Register")
         self.setMinimumWidth(380)
         self._worker: _AuthWorker | None = None
+        self._success_pending = False
         self._submit_buttons: list[QPushButton] = []
 
         layout = QVBoxLayout(self)
@@ -157,7 +162,7 @@ class AuthDialog(QDialog):
         self.error_label.setText("")
         self._set_busy(True)
 
-        self._worker = _AuthWorker(mode, username, password, self)
+        self._worker = _AuthWorker(mode, username, password)
         self._worker.succeeded.connect(self._on_success)
         self._worker.failed.connect(self._on_failure)
         self._worker.finished.connect(self._on_finished)
@@ -176,35 +181,37 @@ class AuthDialog(QDialog):
 
         QSettings("MusicPlayer", "MusicPlayer").setValue("api_token", token)
         self.logged_in.emit(token)
-        self.accept()
+        # Закрываемся только после finished: нельзя уничтожать диалог,
+        # пока его дочерний QThread ещё выполняет run().
+        self._success_pending = True
 
     def _on_failure(self, message: str) -> None:
         self.error_label.setText(message)
         self._set_busy(False)
 
     def _on_finished(self) -> None:
-        if self._worker is not None:
-            self._worker.deleteLater()
-            self._worker = None
+        worker = self._worker
+        self._worker = None
+        retire_thread(worker, 0)
         self._set_busy(False)
+        if self._success_pending:
+            self._success_pending = False
+            self.accept()
 
     # ------------------------------------------------------------------
     #  Закрытие во время запроса
     # ------------------------------------------------------------------
     def _stop_worker(self) -> bool:
-        """Останавливает запрос; False — поток не успел завершиться."""
+        """Останавливает запрос, не уничтожая работающий QThread."""
         worker = self._worker
+        self._worker = None
         if worker is None:
             return True
         try:
             worker.cancel()
-            worker.quit()
-            if worker.isRunning() and not worker.wait(2000):
-                return False
-            self._worker = None
-            worker.deleteLater()
         except RuntimeError:
-            self._worker = None
+            pass
+        retire_thread(worker, 2000)
         self._set_busy(False)
         return True
 

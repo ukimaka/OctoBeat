@@ -481,9 +481,9 @@ class PlaylistsPage(QWidget):
 
     def _delete_playlist(self, playlist_id):
         dialog = CustomConfirmDialog(
+            self,
             tr("Delete Playlist", _lang()),
             tr("Delete this playlist?", _lang()),
-            self,
         )
         if dialog.exec_():
             db.delete_playlist(playlist_id)
@@ -573,7 +573,6 @@ class PlaylistsPage(QWidget):
         self.tracks_list.clear()
         if self.current_playlist_id is None:
             return
-        lang = _lang()
         search = self.search_edit.text().strip().lower()
 
         rows = db.get_tracks_in_playlist(self.current_playlist_id)
@@ -615,12 +614,8 @@ class PlaylistsPage(QWidget):
             })
             self.tracks_list.addItem(item)
 
-        if not rows:
-            self.tracks_list.addItem(
-                QListWidgetItem(tr("Nothing added", lang))
-            )
-            self.tracks_list.item(0).setFlags(Qt.NoItemFlags)
-
+        # Пустой плейлист остаётся действительно пустым: никаких
+        # placeholder-строк, которые можно принять за «Unknown Title».
         self._update_track_count(len(rows))
 
     def _update_track_count(self, count):

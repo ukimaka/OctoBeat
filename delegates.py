@@ -423,10 +423,14 @@ class TrackDelegate(QStyledItemDelegate):
             self.COVER_SIZE,
         )
         cover_started = paint_timer.nsecsElapsed()
+        # Удалённый файл: не читаем обложку, delegate рисует placeholder.
+        cover_path = (
+            data.get("cover_path") if data.get("exists", True) else None
+        )
         self._draw_cover(
             painter,
             cover_rect,
-            data.get("cover_path"),
+            cover_path,
             palette,
             data.get("metadata_source"),
             data.get("cover_version", 0),
@@ -576,6 +580,8 @@ class TrackDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipPath(clip)
 
+        if cover_path and not os.path.exists(cover_path):
+            cover_path = None
         pixmap = cached_cover(
             cover_path, rect.width(), rect.height(), cover_version
         )

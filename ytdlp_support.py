@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from qt_diagnostics import note
+
 # YouTube's web clients currently work best with these player clients.
 # Equivalent CLI option:
 #   --extractor-args "youtube:player_client=web_safari,tv"
@@ -46,6 +48,12 @@ _BOT_MARKERS = (
     "please sign in",
     "bot check",
 )
+_COOKIE_MARKERS = (
+    "cookies database",
+    "cookies from browser",
+    "cookiesfrombrowser",
+    "failed to decrypt",
+)
 _RETRY_MARKERS = (
     "page needs to be reloaded",
     "no video formats found",
@@ -53,6 +61,54 @@ _RETRY_MARKERS = (
     "failed to extract",
     *_BOT_MARKERS,
 )
+
+# Браузеры, из которых yt-dlp умеет читать cookies. Список совпадает с
+# поддерживаемыми именами в --cookies-from-browser.
+SUPPORTED_BROWSERS = (
+    "brave",
+    "chrome",
+    "chromium",
+    "edge",
+    "firefox",
+    "opera",
+    "safari",
+    "vivaldi",
+    "whale",
+)
+
+
+class _QuietYtDlpLogger:
+    """Глушит служебный вывод yt-dlp.
+
+    Ошибки всё равно приходят исключением и показываются в диалоге, а
+    консоль не засоряется внутренними повторами yt-dlp.
+    """
+
+    def debug(self, message):
+        pass
+
+    def info(self, message):
+        pass
+
+    def warning(self, message):
+        pass
+
+    def error(self, message):
+        pass
+
+
+_QUIET_LOGGER = _QuietYtDlpLogger()
+
+
+def cookies_from_browser_option(browser, profile=""):
+    """Собирает tuple для yt-dlp cookiesfrombrowser или возвращает None."""
+    browser = (browser or "").strip().lower()
+    if browser in ("", "none", "off", "disabled", "no"):
+        return None
+    if browser not in SUPPORTED_BROWSERS:
+        return None
+    profile = (profile or "").strip()
+    return (browser, profile) if profile else (browser,)
 
 
 class YtDlpUnavailable(RuntimeError):
@@ -77,6 +133,7 @@ def load_ytdlp():
 
 def build_options(
     cookies_path=None,
+    cookies_from_browser=None,
     *,
     extra: dict[str, Any] | None = None,
     extractor_args: dict[str, Any] | None = None,
@@ -98,8 +155,11 @@ def build_options(
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,
+        "logger": _QUIET_LOGGER,
     }
-    if cookies_path:
+    if cookies_from_browser:
+        options["cookiesfrombrowser"] = tuple(cookies_from_browser)
+    elif cookies_path:
         options["cookiefile"] = str(cookies_path)
     if extra:
         options.update(extra)
@@ -117,8 +177,20 @@ def format_error(exc: BaseException) -> str:
     lowered = message.lower()
     if any(marker in lowered for marker in _BOT_MARKERS):
         message = (
-            "YouTube требует авторизации (bot check). "
-            "Добавьте cookies.txt в настройках.\n" + message
+            "YouTube требует входа (bot check).\n"
+            "Откройте Настройки → YouTube → «Cookies из браузера» и "
+            "выберите браузер, в котором вы вошли в YouTube. "
+            "Можно также указать cookies.txt.\n\n" + message
+        )
+    elif (
+        any(marker in lowered for marker in _COOKIE_MARKERS)
+        or ("could not find" in lowered and "cookies" in lowered)
+    ):
+        message = (
+            "Не удалось прочитать cookies из браузера.\n"
+            "Проверьте, что выбран правильный браузер и в нём выполнен "
+            "вход в YouTube, либо укажите cookies.txt в настройках.\n\n"
+            + message
         )
     return message
 
@@ -127,6 +199,7 @@ def search_videos(
     query: str,
     limit: int = 5,
     cookies_path=None,
+    cookies_from_browser=None,
 ) -> list[dict[str, Any]]:
     """Search YouTube with yt-dlp and return flat video dictionaries."""
     query = (query or "").strip()
@@ -138,6 +211,7 @@ def search_videos(
     def attempt(extractor_args):
         options = build_options(
             cookies_path,
+            cookies_from_browser,
             extra={"extract_flat": True, "skip_download": True},
             extractor_args=extractor_args,
         )
@@ -152,7 +226,7 @@ def search_videos(
     except Exception as first_exc:
         if not should_retry_with_default(first_exc):
             raise
-        print(
+        note(
             "[youtube] primary clients failed, retrying default: "
             + format_error(first_exc).splitlines()[0]
         )
@@ -170,6 +244,7 @@ def download_audio(
     source: str,
     outtmpl: str,
     cookies_path=None,
+    cookies_from_browser=None,
     progress_callback: Callable[[int], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> str:
@@ -182,6 +257,7 @@ def download_audio(
             source,
             outtmpl,
             cookies_path,
+            cookies_from_browser,
             progress_callback,
             cancel_check,
             extractor_args,
@@ -196,7 +272,7 @@ def download_audio(
             raise DownloadCancelled() from first_exc
         if not should_retry_with_default(first_exc):
             raise
-        print(
+        note(
             "[youtube] primary clients failed, retrying default: "
             + format_error(first_exc).splitlines()[0]
         )
@@ -208,6 +284,7 @@ def _download_with_options(
     source: str,
     outtmpl: str,
     cookies_path,
+    cookies_from_browser,
     progress_callback,
     cancel_check,
     extractor_args,
@@ -251,6 +328,7 @@ def _download_with_options(
 
     options = build_options(
         cookies_path,
+        cookies_from_browser,
         extractor_args=extractor_args,
         extra={
             "format": "bestaudio/best",

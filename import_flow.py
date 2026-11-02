@@ -19,15 +19,14 @@
 from pathlib import Path
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
-    QDialog,
-    QProgressDialog,
-)
+from PyQt5.QtWidgets import QDialog
 
 import workers
 from api_client import ApiClient, ApiError
-from dialogs import CustomConfirmDialog
+from dialogs import CustomConfirmDialog, DimmedProgressDialog
 from translations import tr
+from qt_diagnostics import hold_worker, note, track_thread
+from qt_lifecycle import retire_thread, widget_alive
 from ui_common import get_open_file_name, get_open_file_names
 
 
@@ -40,6 +39,7 @@ class _RemotePlaylistDownloadWorker(QObject):
 
     def __init__(self, playlist_id: int, token: str | None, music_folder):
         super().__init__()
+        self.setObjectName("remote-playlist-worker")
         self.playlist_id = playlist_id
         self.token = token
         self.music_folder = music_folder
@@ -127,6 +127,9 @@ class ImportFlow(QObject):
         self._progress_dialog = None
         self._worker = None
         self._thread = None
+        self._youtube_dialog = None
+        self._progress_depth = 0
+        self._finish_pending = None
 
     # ------------------------------------------------------------------
     #  Публичные сценарии
@@ -149,6 +152,7 @@ class ImportFlow(QObject):
                 "Importing files", self.settings.value("language", "en")
             ),
             on_finished=self._on_import_finished,
+            thread_name="import-files",
         )
 
     def import_csv(self) -> None:
@@ -166,20 +170,27 @@ class ImportFlow(QObject):
             workers.CsvImportWorker(path, self.music_folder),
             title=tr("Import from CSV", lang),
             on_finished=self._on_csv_import_finished,
+            thread_name="import-csv",
         )
 
     def rescan(self) -> None:
+        note("rescan requested")
+        # libVLC must drop the file before the worker rewrites tags/renames
+        # it.  Rewriting a file while VLC decodes it can crash the decoder
+        # thread (SIGSEGV), and a blocking cross-thread release signal can
+        # deadlock the worker.  Release once on the GUI thread instead.
+        try:
+            self.parent_window.controller.media_player.release()
+        except Exception as exc:
+            print(f"[rescan] player release failed: {exc}")
         worker = workers.RescanWorker()
-        worker.release_requested.connect(
-            self.parent_window.controller.media_player.release,
-            Qt.BlockingQueuedConnection,
-        )
         self._run_worker_with_progress(
             worker,
             title=tr(
                 "Updating track info", self.settings.value("language", "en")
             ),
             on_finished=self._on_rescan_finished,
+            thread_name="rescan",
         )
 
     def youtube_dialog(self) -> None:
@@ -188,7 +199,13 @@ class ImportFlow(QObject):
         dialog = YoutubeDialog(
             self.parent_window, target_folder=self.music_folder
         )
-        if dialog.exec_() != QDialog.Accepted:
+        self._youtube_dialog = dialog
+        try:
+            accepted = dialog.exec_() == QDialog.Accepted
+        finally:
+            if self._youtube_dialog is dialog:
+                self._youtube_dialog = None
+        if not accepted:
             self.finished.emit()
             return
 
@@ -210,7 +227,10 @@ class ImportFlow(QObject):
         )
         title = tr("Download", self.settings.value("language", "en"))
         self._run_worker_with_progress(
-            worker, title, self._on_downloads_finished
+            worker,
+            title,
+            self._on_downloads_finished,
+            thread_name="remote-playlist",
         )
 
     # ------------------------------------------------------------------
@@ -279,6 +299,10 @@ class ImportFlow(QObject):
     def _on_rescan_finished(
         self, meta_updated, loudness_processed, loudness_failed
     ):
+        note(
+            f"rescan UI finished: meta={meta_updated} "
+            f"loudness={loudness_processed} failed={loudness_failed}"
+        )
         self.library_changed.emit()
         print(f"[rescan] metadata: {meta_updated}, "
               f"loudness: {loudness_processed} ok / {loudness_failed} failed")
@@ -329,68 +353,114 @@ class ImportFlow(QObject):
 
     def shutdown(self) -> None:
         """Останавливает импорт/скачивание при закрытии приложения."""
+        dialog = self._youtube_dialog
+        if dialog is not None:
+            try:
+                dialog.shutdown()
+            except RuntimeError:
+                pass
+            self._youtube_dialog = None
         self._stop_current_worker()
         thread = self._thread
-        worker = self._worker
         self._thread = None
         self._worker = None
         if thread is not None:
-            try:
-                thread.quit()
-                if thread.isRunning():
-                    thread.wait(2000)
-                thread.deleteLater()
-            except RuntimeError:
-                pass
-        if worker is not None:
-            try:
-                worker.deleteLater()
-            except RuntimeError:
-                pass
-        if self._progress_dialog is not None:
-            self._progress_dialog.close()
-            self._progress_dialog.deleteLater()
-            self._progress_dialog = None
+            retire_thread(thread, 2000)
+        self._close_progress()
 
-    def _run_worker_with_progress(self, worker, title, on_finished):
+    def _close_progress(self, dialog=None) -> None:
+        """Закрывает диалог только после завершения текущего setValue().
+
+        QProgressDialog::setValue() для модального диалога вызывает
+        QApplication::processEvents(). Внутри него может прийти finished,
+        который раньше закрывал/удалял диалог прямо посреди setValue() —
+        отсюда use-after-free в QProgressBar::maximum(). Поэтому удаление
+        откладывается до выхода из самого внешнего setValue().
+        """
+        if self._progress_depth:
+            self._finish_pending = (
+                lambda d=dialog: self._close_progress(d)
+            )
+            return
+        if dialog is None:
+            dialog = self._progress_dialog
+        if self._progress_dialog is dialog:
+            self._progress_dialog = None
+        if not widget_alive(dialog):
+            return
+        try:
+            dialog.setAutoClose(False)
+            dialog.setAutoReset(False)
+            dialog.close()
+            dialog.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _run_worker_with_progress(
+        self, worker, title, on_finished, thread_name="import-worker"
+    ):
         cancel_text = tr("Cancel", self.settings.value("language", "en"))
-        self._progress_dialog = QProgressDialog(
+        dialog = DimmedProgressDialog(
             title, cancel_text, 0, 100, self.parent_window
         )
-        self._progress_dialog.setWindowTitle(title)
-        self._progress_dialog.setWindowModality(Qt.WindowModal)
-        self._progress_dialog.setMinimumDuration(0)
-        self._progress_dialog.setValue(0)
+        self._progress_dialog = dialog
+        dialog.setWindowTitle(title)
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
 
         thread = QThread()
+        track_thread(thread, thread_name)
         worker.moveToThread(thread)
+        hold_worker(thread, worker, f"{thread_name}-worker")
+        thread.finished.connect(worker.deleteLater)
 
         def _on_progress(done, total):
-            if self._progress_dialog is not None:
-                percent = int(done * 100 / total) if total else 0
-                self._progress_dialog.setValue(percent)
-
-        def _cleanup():
-            thread.requestInterruption()
-            thread.quit()
-            if thread.isRunning():
-                thread.wait(2000)
+            if self._progress_dialog is not dialog or not widget_alive(dialog):
+                return
+            # Не входим повторно в processEvents() из QProgressDialog:
+            # события, пришедшие во вложенном цикле, обновят значение
+            # следующим штатным сигналом.
+            if self._progress_depth:
+                return
+            percent = int(done * 100 / total) if total else 0
+            self._progress_depth += 1
             try:
-                worker.deleteLater()
-                thread.deleteLater()
+                dialog.setValue(percent)
             except RuntimeError:
+                pass
+            finally:
+                self._progress_depth -= 1
+                if self._progress_depth == 0:
+                    pending = self._finish_pending
+                    self._finish_pending = None
+                    if pending is not None:
+                        pending()
+
+        def _finish_operation(*args):
+            # finished мог быть доставлен внутри dialog.setValue().
+            # Замыкание должно сохранить аргументы сигнала: у разных
+            # воркеров finished() имеет разный набор параметров.
+            if self._progress_depth:
+                self._finish_pending = (
+                    lambda: _finish_operation(*args)
+                )
+                return
+            try:
+                worker.progress.disconnect(_on_progress)
+            except (TypeError, RuntimeError):
                 pass
             if self._thread is thread:
                 self._thread = None
                 self._worker = None
-            if self._progress_dialog is not None:
-                self._progress_dialog.close()
-                self._progress_dialog.deleteLater()
-                self._progress_dialog = None
+            self._close_progress(dialog)
+            retire_thread(thread, 2000)
+            on_finished(*args)
 
         worker.progress.connect(_on_progress)
-        worker.finished.connect(on_finished)
-        worker.finished.connect(_cleanup)
+        # Cleanup и completion выполняются одной функцией, чтобы между
+        # удалением диалога и открытием модального окна не было гонки.
+        worker.finished.connect(_finish_operation)
         if hasattr(worker, "error"):
             err_title = tr(
                 "Error", self.settings.value("language", "en")
@@ -402,7 +472,7 @@ class ImportFlow(QObject):
             )
 
         thread.started.connect(worker.run)
-        self._progress_dialog.canceled.connect(self._stop_current_worker)
+        dialog.canceled.connect(self._stop_current_worker)
 
         self._worker = worker
         self._thread = thread

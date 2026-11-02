@@ -28,6 +28,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 import db
 from lyrics_api import LyricsWorker
+from qt_lifecycle import retire_thread
 
 # Таймкод LRC: [mm:ss.xx], [mm:ss.xxx] или [mm:ss:xx]
 _LRC_TIME_RE = re.compile(r"\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]")
@@ -182,7 +183,7 @@ class LyricsManager(QObject):
             self._render_lyrics(None)
             return
         worker = LyricsWorker(
-            track_id, row["artist"], row["title"], row["duration"], self
+            track_id, row["artist"], row["title"], row["duration"]
         )
         worker.loaded.connect(self._on_lyrics_loaded)
         worker.failed.connect(self._on_lyrics_failed)
@@ -380,13 +381,10 @@ class LyricsManager(QObject):
         for worker in workers:
             try:
                 worker.cancel()
-                worker.quit()
-                if worker.isRunning():
-                    worker.wait(2000)
-                worker.deleteLater()
             except RuntimeError:
                 # C++-объект уже удалён обработчиком finished.
-                pass
+                continue
+            retire_thread(worker, 2000)
         self._lyrics_workers.clear()
         # Закрываем полноэкранный оверлей (основной плеер не трогаем).
         if self._lyrics_overlay is not None:

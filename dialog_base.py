@@ -16,16 +16,27 @@
 
 """Базовая обвязка безрамочных диалогов и общие иконки."""
 
-from PyQt5.QtCore import QEvent, QSettings, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QPalette, QPixmap
+from PyQt5.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPropertyAnimation,
+    QSettings,
+    QSize,
+    Qt,
+    pyqtProperty,
+)
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressDialog,
     QPushButton,
     QSizeGrip,
     QVBoxLayout,
@@ -75,6 +86,15 @@ def _dialog_lang():
 _CUSTOM_DIALOG_QSS_TEMPLATE = """
 QDialog {
     background: transparent;
+    color: @TEXT@;
+}
+QTextEdit, QTextBrowser {
+    background-color: @FIELD@;
+    color: @TEXT@;
+    border: 1px solid @BORDER@;
+    border-radius: 8px;
+    selection-background-color: @ACCENT@;
+    selection-color: @ACCENT_TEXT@;
 }
 #cdRoot {
     background-color: @BG@;
@@ -228,6 +248,202 @@ def _custom_dialog_qss(palette):
 
 
 
+# Затемнение под модальными диалогами: ровно 40% чёрного (alpha 102).
+_DIM_OVERLAY_ALPHA = 102
+_DIM_OVERLAYS = {}
+_DIM_COUNTS = {}
+
+
+class _WindowDimOverlay(QWidget):
+    """Полупрозрачный слой, который затемняет окно под модальным диалогом.
+
+    Слой живёт в родительском окне (а не в диалоге), поэтому диалог со
+    своим непрозрачным фоном остаётся поверх затемнения. Рисуем alpha
+    вручную, без QGraphicsOpacityEffect: так дешевле и не ломается
+    композитинг на Wayland/X11.
+    """
+
+    def __init__(self, window):
+        super().__init__(window)
+        self._active = False
+        self._alpha = 0.0
+        self.setObjectName("windowDimOverlay")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self._animation = QPropertyAnimation(self, b"dimAlpha", self)
+        self._animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._animation.finished.connect(self._on_animation_finished)
+        window.installEventFilter(self)
+        self._sync_geometry()
+        self.hide()
+
+    def _sync_geometry(self):
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(0, 0, parent.width(), parent.height())
+
+    def eventFilter(self, watched, event):
+        if watched is self.parentWidget():
+            if event.type() == QEvent.Resize:
+                self._sync_geometry()
+            elif event.type() == QEvent.Show:
+                self._sync_geometry()
+                if self._active:
+                    self.raise_()
+        return False
+
+    def _get_dim_alpha(self):
+        return self._alpha
+
+    def _set_dim_alpha(self, value):
+        value = max(0.0, min(1.0, float(value)))
+        if abs(value - self._alpha) > 1e-4:
+            self._alpha = value
+            self.update()
+
+    dimAlpha = pyqtProperty(float, _get_dim_alpha, _set_dim_alpha)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(
+            self.rect(),
+            QColor(0, 0, 0, round(_DIM_OVERLAY_ALPHA * self._alpha)),
+        )
+        painter.end()
+
+    def show_overlay(self):
+        self._active = True
+        self._sync_geometry()
+        self.show()
+        self.raise_()
+        self._animate_to(1.0, 120)
+
+    def hide_overlay(self):
+        self._active = False
+        if not self.isVisible():
+            # Родительское окно скрыто (свёрнуто/закрыто): анимация не
+            # нужна, но сбрасываем alpha, чтобы слой не всплыл снова при
+            # следующем показе окна.
+            self._animation.stop()
+            self._set_dim_alpha(0.0)
+            self.hide()
+            return
+        self._animate_to(0.0, 180)
+
+    def _animate_to(self, target, duration):
+        self._animation.stop()
+        self._animation.setStartValue(self._alpha)
+        self._animation.setEndValue(float(target))
+        self._animation.setDuration(duration)
+        self._animation.start()
+
+    def _on_animation_finished(self):
+        if not self._active and self._alpha <= 0.001:
+            self.hide()
+
+
+def _overlay_for_window(window):
+    overlay = _DIM_OVERLAYS.get(window)
+    if overlay is None:
+        overlay = _WindowDimOverlay(window)
+        _DIM_OVERLAYS[window] = overlay
+        window.destroyed.connect(
+            lambda *_: _forget_overlay(window)
+        )
+    return overlay
+
+
+def _forget_overlay(window):
+    _DIM_OVERLAYS.pop(window, None)
+    _DIM_COUNTS.pop(window, None)
+
+
+def _acquire_dim(window):
+    _DIM_COUNTS[window] = _DIM_COUNTS.get(window, 0) + 1
+    _overlay_for_window(window).show_overlay()
+
+
+def _release_dim(window):
+    count = _DIM_COUNTS.get(window, 0)
+    if count <= 0:
+        return
+    if count == 1:
+        _DIM_COUNTS.pop(window, None)
+        overlay = _DIM_OVERLAYS.get(window)
+        if overlay is not None:
+            overlay.hide_overlay()
+    else:
+        _DIM_COUNTS[window] = count - 1
+
+
+class _DimmedMixin:
+    """Общая логика затемнения родительского окна для модальных диалогов.
+
+    Счётчик открытых диалогов не даёт затемнению исчезнуть, если один
+    модальный диалог открыт поверх другого.
+    """
+
+    def _init_dimming(self):
+        self._dim_active = False
+        self._dim_target = self._resolve_dim_target()
+
+    def _resolve_dim_target(self):
+        parent = self.parentWidget()
+        if parent is not None:
+            return parent.window()
+        active = QApplication.activeWindow()
+        if active is not None and active is not self:
+            return active
+        return None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._dim_active:
+            return
+        target = self._dim_target
+        if target is None:
+            target = self._resolve_dim_target()
+            self._dim_target = target
+        if target is not None and target is not self:
+            self._dim_active = True
+            _acquire_dim(target)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if not self._dim_active:
+            return
+        self._dim_active = False
+        target = self._dim_target
+        if target is not None:
+            _release_dim(target)
+
+
+class _DimmedDialog(_DimmedMixin, QDialog):
+    """Диалог, который при показе затемняет своё родительское окно."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_dimming()
+
+
+class DimmedProgressDialog(_DimmedMixin, QProgressDialog):
+    """Стандартный QProgressDialog с тем же затемнением фона."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._init_dimming()
+
+
+class DimmedFileDialog(_DimmedMixin, QFileDialog):
+    """QFileDialog с тем же затемнением родительского окна."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._init_dimming()
+
+
 class _CustomTitleBar(QWidget):
     """Заголовок безрамочного диалога с перетаскиванием окна мышью."""
 
@@ -299,7 +515,7 @@ class _CustomTitleBar(QWidget):
         super().mousePressEvent(event)
 
 
-class _FramelessDialog(QDialog):
+class _FramelessDialog(_DimmedDialog):
     """Общая обвязка безрамочных диалогов: тёмный фон, скругления, тень."""
 
     _NORMAL_MARGINS = (16, 16, 16, 16)

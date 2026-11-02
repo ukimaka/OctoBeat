@@ -30,6 +30,8 @@ from urllib.parse import unquote, urlparse
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from qt_diagnostics import track_thread
+
 from path_utils import subprocess_creationflags, subprocess_env
 from version import __version__
 
@@ -60,6 +62,7 @@ class UpdateChecker(QThread):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        track_thread(self, "update-check")
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -125,6 +128,7 @@ class UpdateDownloader(QThread):
 
     def __init__(self, url, parent=None):
         super().__init__(parent)
+        track_thread(self, "update-download")
         self._url = url
         self._cancelled = False
 

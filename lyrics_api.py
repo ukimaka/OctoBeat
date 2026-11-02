@@ -30,6 +30,8 @@ import re
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from qt_diagnostics import note, track_thread
+
 import db
 
 try:
@@ -145,6 +147,7 @@ class LyricsWorker(QThread):
 
     def __init__(self, track_id, artist, title, duration, parent=None):
         super().__init__(parent)
+        track_thread(self, "lyrics")
         self.track_id = track_id
         self.artist = artist
         self.title = title
@@ -164,6 +167,7 @@ class LyricsWorker(QThread):
     def run(self):
         if self._cancelled or self.isInterruptionRequested():
             return
+        note(f"lyrics fetch start track={self.track_id}")
         try:
             result = fetch_lyrics(self.artist, self.title, self.duration)
         except Exception as e:  # noqa: BLE001 — воркер не должен ронять поток
@@ -185,6 +189,7 @@ class LyricsWorker(QThread):
         synced = result.get("synced") or ""
         plain = result.get("plain") or ""
         self._save(synced, plain)
+        note(f"lyrics fetch done track={self.track_id}")
         self.loaded.emit(self.track_id, synced, plain)
 
     def _save(self, synced, plain):
