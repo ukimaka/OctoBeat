@@ -1,6 +1,5 @@
 <div align="center">
-
-<!-- Put your logo in assets/logo.png (square, about 512x512, transparent PNG is best) -->
+  
 <img src="assets/logo.png" alt="OctoBeat logo" width="140" height="140">
 
 # OctoBeat
@@ -25,7 +24,6 @@ No streaming, no subscription.
 
 <br>
 
-<!-- Put a screenshot of the main window in assets/screenshots/main.png (about 1280x720) -->
 <img src="assets/screenshots/main.png" alt="OctoBeat main window" width="860">
 
 </div>
@@ -45,7 +43,6 @@ It is a personal project, and it is vibe-coded: I built it with the help of AI. 
 - Crossfade between tracks. The length depends on the track (3 seconds at most). You can turn it off in Settings.
 - Loudness normalization with ffmpeg, so quiet and loud songs sound about the same.
 - Shuffle, repeat (off, all, one) and a queue.
-- The app remembers your volume and the last track or playlist you played.
 - Plays MP3, FLAC, OGG, M4A and WAV.
 
 **Library**
@@ -76,36 +73,27 @@ It is a personal project, and it is vibe-coded: I built it with the help of AI. 
 
 **Other**
 
-- Dark and light theme, interface zoom, English and Russian.
+- Dark, light, dracula and catpuccin theme, interface zoom, English and Russian.
 - On Linux, media keys and desktop controls work through MPRIS.
 
 ## Screenshots
 
-<!--
-  Put your screenshots in assets/screenshots/ with the names below.
-  The README already uses these names, so you do not need to edit it. Suggested size: 1280x720, PNG.
--->
-
 <table>
   <tr>
-    <td width="50%"><img src="assets/screenshots/library.png" alt="Library"><br><sub>Library</sub></td>
     <td width="50%"><img src="assets/screenshots/playlists.png" alt="Playlists"><br><sub>Playlists</sub></td>
-  </tr>
-  <tr>
     <td width="50%"><img src="assets/screenshots/karaoke.png" alt="Karaoke mode"><br><sub>Karaoke mode</sub></td>
-    <td width="50%"><img src="assets/screenshots/profile.png" alt="Profile"><br><sub>Profile</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="assets/screenshots/friends.png" alt="Friends"><br><sub>Friends</sub></td>
+    <td width="50%"><img src="assets/screenshots/profile.png" alt="Profile"><br><sub>Profile</sub></td>
     <td width="50%"><img src="assets/screenshots/light-theme.png" alt="Light theme"><br><sub>Light theme</sub></td>
   </tr>
 </table>
 
 ## Install
 
-I develop and test OctoBeat on Linux. Windows and Android are planned, but not tested yet.
+I develop and test OctoBeat on Linux so if you experience issues on Windows start let me know about it in [issues](https://github.com/ukimaka/OctoBeat/issues).
 
-You need:
+For manual instalation You need:
 
 - Python 3.10 or newer
 - ffmpeg (it converts downloads to MP3 and measures loudness)
@@ -144,9 +132,9 @@ Start the app from the activated virtual environment. OctoBeat looks for `yt-dlp
 
 ## Usage
 
-1. Add music: import your files, or download tracks with the "Download music" button.
-2. Make folders and playlists. Drag and drop works, and so does the right-click menu on a track.
-3. Press play. Covers and tags are loaded on their own. You can open the lyrics and the karaoke mode from the player.
+1. Import your files, or download tracks with the "Download music" button.
+2. Make folders and playlists.
+3. Covers and tags are loaded on their own. You can open the lyrics and the karaoke mode from the player.
 4. If you want a profile and friends, sign in. You can skip this, the player works without an account.
 
 ### Hotkeys
@@ -187,14 +175,10 @@ The account is optional. Without it, OctoBeat sends nothing to its own server. T
 
 If you sign in, the app syncs your profile: nickname, "About me", avatar, banner, and some statistics (total listening time, number of tracks and playlists, library age, your favorite track and your top 5 tracks). Your music files are never uploaded.
 
-Profiles and friends work through a small REST server written with FastAPI. By default the app uses `https://octopus-music-server.onrender.com`. If you run your own server, change `DEFAULT_BASE_URL` in [`api_client.py`](api_client.py).
-
-<!-- TODO: add a link to the server repository here when it is public -->
+Profiles and friends work through a small REST server written with FastAPI.
 
 ## Limitations
 
-- Only Linux is tested. Windows and Android are planned.
-- Downloads from YouTube can break when YouTube changes something. Update `yt-dlp` first (`pip install -U yt-dlp`). If that does not help, try a `cookies.txt` file.
 - You can download a friend's playlists, but you cannot publish your own playlists from the app yet.
 - Changing the language or the zoom needs a restart.
 - The default server is a small hosted instance. It can be slow or offline.
@@ -208,13 +192,11 @@ There are no dates. The list changes as I work on the project.
 - [ ] Likes on profiles
 - [ ] Shared playlists
 - [ ] Import and export of M3U and YouTube playlists
-- [ ] A guide for running your own server
 - [ ] Equalizer, smart playlists, sleep timer, tray icon and mini player
 - [ ] ListenBrainz scrobbling
 - [ ] "Now listening" status for friends and a yearly summary
-- [ ] Windows build, AppImage and Flatpak
 - [ ] Android app
-- [ ] Custom themes and more languages
+- [ ] more languages
 
 If you have an idea, [open an issue](https://github.com/ukimaka/OctoBeat/issues).
 
