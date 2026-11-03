@@ -50,6 +50,7 @@ class AudioTrimDialog(_FramelessDialog):
     def __init__(self, parent=None, file_path="", track_title=""):
         lang = _dialog_lang()
         super().__init__(parent, tr("Trim audio", lang))
+        self.setObjectName("trimDialog")
 
         self._lang = lang
         self._file_path = file_path

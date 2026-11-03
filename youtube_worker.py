@@ -20,20 +20,21 @@ import os
 import re
 from pathlib import Path
 
-from mutagen.easyid3 import EasyID3
-from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 
 import db
+import audio_tags
+from cookies_store import find_cookies_file
 from metadata import clean_youtube_title, read_metadata
 from musicbrainz_client import get_track_metadata_with_fallback
 from paths import MUSIC_DIR
 from qt_diagnostics import note
 from ytdlp_support import (
     DownloadCancelled,
-    cookies_from_browser_option,
+    current_download_mode,
     download_audio,
     format_error,
+    is_youtube_url,
     search_videos,
 )
 
@@ -49,60 +50,28 @@ _VIDEO_ID_RE = re.compile(
 )
 
 
-def _image_mime(path):
-    """MIME-тип обложки по расширению файла."""
-    suffix = Path(path).suffix.lower()
-    if suffix == ".png":
-        return "image/png"
-    if suffix == ".webp":
-        return "image/webp"
-    if suffix == ".gif":
-        return "image/gif"
-    return "image/jpeg"
-
-
-def _find_cookies_file(extra_folder=None):
-    """Ищет cookies.txt: сначала в настройках, затем в стандартных местах."""
-    settings = QSettings("MusicPlayer", "MusicPlayer")
-    cookies_path_str = settings.value("youtube_cookies", "")
-    cookies_path = Path(cookies_path_str) if cookies_path_str else None
-    if cookies_path and cookies_path.is_file():
-        return cookies_path
-
-    candidates = []
-    if extra_folder is not None:
-        candidates.append(Path(extra_folder) / "cookies.txt")
-    candidates.append(MUSIC_FOLDER / "cookies.txt")
-    candidates.append(Path(__file__).resolve().parent / "cookies.txt")
-
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _cookies_from_browser():
-    """Браузер из настроек → tuple для yt-dlp cookiesfrombrowser."""
-    settings = QSettings("MusicPlayer", "MusicPlayer")
-    browser = str(settings.value("youtube_browser", "") or "")
-    profile = str(settings.value("youtube_browser_profile", "") or "")
-    return cookies_from_browser_option(browser, profile)
-
-
 class YoutubeWorker(QObject):
     """Качает аудио через yt-dlp. Живёт в отдельном QThread."""
 
     progress = pyqtSignal(int)      # 0..100
-    finished = pyqtSignal(str)      # путь к скачанному mp3
+    finished = pyqtSignal(str)      # путь к скачанному файлу (m4a/webm/mp3)
     error = pyqtSignal(str)
 
-    def __init__(self, query, target_folder=None):
+    def __init__(self, query, target_folder=None, download_mode=None):
         super().__init__()
         self.setObjectName("yt-download-worker")
         self.query = (query or "").strip()
         settings = QSettings("MusicPlayer", "MusicPlayer")
         default_dir = MUSIC_DIR
-        self.target_folder = Path(settings.value("download_dir", str(default_dir)))
+        if target_folder:
+            self.target_folder = Path(target_folder)
+        else:
+            self.target_folder = Path(
+                settings.value("download_dir", str(default_dir))
+            )
+        self.download_mode = (
+            download_mode or current_download_mode()
+        )
         self._stopped = False
 
     def run(self):
@@ -132,24 +101,23 @@ class YoutubeWorker(QObject):
 
         source = (
             self.query
-            if self._looks_like_url(self.query)
+            if is_youtube_url(self.query)
             else f"ytsearch1:{self.query}"
         )
-        cookies_path = _find_cookies_file(self.target_folder)
-        cookies_browser = _cookies_from_browser()
+        cookies_path = find_cookies_file(self.target_folder)
         note(
             "yt-download cookies: "
-            f"browser={cookies_browser or 'none'} "
-            f"file={cookies_path or 'none'}"
+            f"file={cookies_path or 'none'} "
+            f"mode={self.download_mode}"
         )
 
         final_path = download_audio(
             source,
             str(self.target_folder / "%(title)s.%(ext)s"),
             cookies_path=cookies_path,
-            cookies_from_browser=cookies_browser,
             progress_callback=self._on_progress,
             cancel_check=lambda: self._stopped,
+            mode=self.download_mode,
         )
         if self._stopped:
             return
@@ -165,7 +133,7 @@ class YoutubeWorker(QObject):
         raw_title = Path(final_path).stem
         fallback_artist, fallback_title = clean_youtube_title(raw_title)
 
-        # yt-dlp мог скачать превью рядом с mp3 (--write-thumbnail).
+        # yt-dlp мог скачать превью рядом с аудио (--write-thumbnail).
         base_path = os.path.splitext(final_path)[0]
         img_path = None
         for ext in (".jpg", ".webp", ".png"):
@@ -202,30 +170,18 @@ class YoutubeWorker(QObject):
         cover_source = info.get("cover_path") or img_path
         embedded_ok = False
         if cover_source and os.path.exists(cover_source):
-            try:
-                try:
-                    audio = ID3(final_path)
-                except ID3NoHeaderError:
-                    audio = ID3()
-
-                mime = _image_mime(cover_source)
-                with open(cover_source, "rb") as img:
-                    audio.add(APIC(
-                        encoding=3,
-                        mime=mime,
-                        type=3,
-                        desc="Cover",
-                        data=img.read(),
-                    ))
-
-                audio.save(final_path, v2_version=3)
-                embedded_ok = True
+            embedded_ok = audio_tags.embed_cover(final_path, cover_source)
+            if embedded_ok:
                 print(
                     f"[tags] Обложка вшита ({info.get('source', 'youtube')}): "
-                    f"{mime}"
+                    f"{Path(final_path).suffix.lower()} "
+                    f"{Path(cover_source).suffix.lower()}"
                 )
-            except Exception as e:
-                print(f"[tags] Ошибка вшивания обложки: {e}")
+            else:
+                print(
+                    f"[tags] Обложка не вшита: формат "
+                    f"{Path(final_path).suffix.lower()}"
+                )
 
         # Временное превью yt-dlp больше не нужно (кэш MusicBrainz не трогаем).
         if embedded_ok and img_path and os.path.exists(img_path):
@@ -236,24 +192,22 @@ class YoutubeWorker(QObject):
 
         # --- Теги: MusicBrainz/YouTube либо очищенное имя файла ---
         if clean_title:
-            try:
-                try:
-                    audio = EasyID3(final_path)
-                except Exception:
-                    audio = EasyID3()
-
-                if artist and artist != "Unknown Artist":
-                    audio["artist"] = artist
-                audio["title"] = clean_title
-                if album:
-                    audio["album"] = album
-                audio.save(final_path, v2_version=3)
+            tags_ok = audio_tags.write_tags(
+                final_path,
+                title=clean_title,
+                artist=artist if artist != "Unknown Artist" else None,
+                album=album,
+            )
+            if tags_ok:
                 print(
                     f"[tags] Artist='{artist}', Title='{clean_title}', "
                     f"Album='{album}'"
                 )
-            except Exception as e:
-                print(f"[tags] Cannot write tags: {e}")
+            else:
+                print(
+                    f"[tags] Cannot write tags for "
+                    f"{Path(final_path).suffix.lower()}"
+                )
 
         if artist and artist != "Unknown Artist" and clean_title:
             safe_name = _UNSAFE_FS_RE.sub("_", f"{artist} - {clean_title}").strip()
@@ -310,10 +264,6 @@ class YoutubeWorker(QObject):
     def stop(self):
         """Ask yt-dlp to stop from its progress hook."""
         self._stopped = True
-
-    @staticmethod
-    def _looks_like_url(text):
-        return text.startswith(("http://", "https://", "www."))
 
 
 def _extract_video_id(value):
@@ -420,18 +370,15 @@ class YoutubeSearchWorker(QObject):
             return
         note(f"yt-search start: {self.query[:120]!r}")
 
-        cookies_path = _find_cookies_file()
-        cookies_browser = _cookies_from_browser()
+        cookies_path = find_cookies_file()
         note(
             "yt-search cookies: "
-            f"browser={cookies_browser or 'none'} "
             f"file={cookies_path or 'none'}"
         )
         entries = search_videos(
             self.query,
             limit=self.RESULT_LIMIT,
             cookies_path=cookies_path,
-            cookies_from_browser=cookies_browser,
         )
         if self._stopped:
             return

@@ -24,8 +24,12 @@ catchable exceptions instead of blocking on stdout/stderr pipes.
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
+
+from PyQt5.QtCore import QSettings
 
 from qt_diagnostics import note
 
@@ -42,6 +46,17 @@ YOUTUBE_FALLBACK_EXTRACTOR_ARGS = {
 }
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# yt-dlp can download DASH/HLS fragments in parallel. YouTube audio often
+# comes as fragmented streams, so this is the main throughput knob.
+FRAGMENT_CONCURRENCY = 4
+_MB = 1024.0 * 1024.0
+
+DOWNLOAD_MODE_SETTING = "youtube_download_mode"
+DOWNLOAD_MODE_NATIVE = "native"
+DOWNLOAD_MODE_MP3 = "mp3"
+DEFAULT_DOWNLOAD_MODE = DOWNLOAD_MODE_NATIVE
+DOWNLOAD_MODES = (DOWNLOAD_MODE_NATIVE, DOWNLOAD_MODE_MP3)
 _BOT_MARKERS = (
     "sign in to confirm you're not a bot",
     "confirm you're not a bot",
@@ -50,8 +65,6 @@ _BOT_MARKERS = (
 )
 _COOKIE_MARKERS = (
     "cookies database",
-    "cookies from browser",
-    "cookiesfrombrowser",
     "failed to decrypt",
 )
 _RETRY_MARKERS = (
@@ -61,21 +74,6 @@ _RETRY_MARKERS = (
     "failed to extract",
     *_BOT_MARKERS,
 )
-
-# Браузеры, из которых yt-dlp умеет читать cookies. Список совпадает с
-# поддерживаемыми именами в --cookies-from-browser.
-SUPPORTED_BROWSERS = (
-    "brave",
-    "chrome",
-    "chromium",
-    "edge",
-    "firefox",
-    "opera",
-    "safari",
-    "vivaldi",
-    "whale",
-)
-
 
 class _QuietYtDlpLogger:
     """Глушит служебный вывод yt-dlp.
@@ -100,19 +98,42 @@ class _QuietYtDlpLogger:
 _QUIET_LOGGER = _QuietYtDlpLogger()
 
 
-def cookies_from_browser_option(browser, profile=""):
-    """Собирает tuple для yt-dlp cookiesfrombrowser или возвращает None."""
-    browser = (browser or "").strip().lower()
-    if browser in ("", "none", "off", "disabled", "no"):
-        return None
-    if browser not in SUPPORTED_BROWSERS:
-        return None
-    profile = (profile or "").strip()
-    return (browser, profile) if profile else (browser,)
-
-
 class YtDlpUnavailable(RuntimeError):
     """Raised when the yt-dlp Python package cannot be imported."""
+
+
+def is_youtube_url(value: str) -> bool:
+    """True для прямой http(s)-ссылки на YouTube (youtube.com или youtu.be)."""
+    text = (value or "").strip()
+    if not text.lower().startswith(("http://", "https://")):
+        return False
+    try:
+        host = (urlparse(text).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return (
+        host == "youtube.com"
+        or host.endswith(".youtube.com")
+        or host == "youtu.be"
+        or host.endswith(".youtu.be")
+    )
+
+
+def normalize_download_mode(mode: str | None) -> str:
+    """Приводит режим из настроек к native/mp3."""
+    value = str(mode or "").strip().lower()
+    return value if value in DOWNLOAD_MODES else DEFAULT_DOWNLOAD_MODE
+
+
+def current_download_mode() -> str:
+    """Режим скачивания из QSettings (native по умолчанию)."""
+    try:
+        value = QSettings("MusicPlayer", "MusicPlayer").value(
+            DOWNLOAD_MODE_SETTING, DEFAULT_DOWNLOAD_MODE
+        )
+    except Exception:
+        value = DEFAULT_DOWNLOAD_MODE
+    return normalize_download_mode(value)
 
 
 class DownloadCancelled(Exception):
@@ -133,7 +154,6 @@ def load_ytdlp():
 
 def build_options(
     cookies_path=None,
-    cookies_from_browser=None,
     *,
     extra: dict[str, Any] | None = None,
     extractor_args: dict[str, Any] | None = None,
@@ -155,11 +175,10 @@ def build_options(
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,
+        "concurrent_fragment_downloads": FRAGMENT_CONCURRENCY,
         "logger": _QUIET_LOGGER,
     }
-    if cookies_from_browser:
-        options["cookiesfrombrowser"] = tuple(cookies_from_browser)
-    elif cookies_path:
+    if cookies_path:
         options["cookiefile"] = str(cookies_path)
     if extra:
         options.update(extra)
@@ -178,18 +197,17 @@ def format_error(exc: BaseException) -> str:
     if any(marker in lowered for marker in _BOT_MARKERS):
         message = (
             "YouTube требует входа (bot check).\n"
-            "Откройте Настройки → YouTube → «Cookies из браузера» и "
-            "выберите браузер, в котором вы вошли в YouTube. "
-            "Можно также указать cookies.txt.\n\n" + message
+            "Откройте Настройки → YouTube и импортируйте cookies.txt "
+            "из браузера, где выполнен вход в YouTube.\n\n" + message
         )
     elif (
         any(marker in lowered for marker in _COOKIE_MARKERS)
         or ("could not find" in lowered and "cookies" in lowered)
     ):
         message = (
-            "Не удалось прочитать cookies из браузера.\n"
-            "Проверьте, что выбран правильный браузер и в нём выполнен "
-            "вход в YouTube, либо укажите cookies.txt в настройках.\n\n"
+            "Не удалось прочитать cookies.txt.\n"
+            "Проверьте, что файл существует и экспортирован в формате "
+            "Netscape, либо импортируйте его заново в настройках YouTube.\n\n"
             + message
         )
     return message
@@ -199,27 +217,31 @@ def search_videos(
     query: str,
     limit: int = 5,
     cookies_path=None,
-    cookies_from_browser=None,
 ) -> list[dict[str, Any]]:
-    """Search YouTube with yt-dlp and return flat video dictionaries."""
+    """Search YouTube with yt-dlp and return flat video dictionaries.
+
+    A direct ``youtube.com``/``youtu.be`` URL is extracted as-is; any other
+    text is sent through yt-dlp's ``ytsearch`` prefix.
+    """
     query = (query or "").strip()
     if not query:
         return []
 
     yt_dlp = load_ytdlp()
+    direct_url = is_youtube_url(query)
 
     def attempt(extractor_args):
         options = build_options(
             cookies_path,
-            cookies_from_browser,
             extra={"extract_flat": True, "skip_download": True},
             extractor_args=extractor_args,
         )
+        # Прямую ссылку отдаём yt-dlp как есть, без префикса ytsearch.
+        target = query if direct_url else (
+            f"ytsearch{max(1, int(limit))}:{query}"
+        )
         with yt_dlp.YoutubeDL(options) as ydl:
-            return ydl.extract_info(
-                f"ytsearch{max(1, int(limit))}:{query}",
-                download=False,
-            )
+            return ydl.extract_info(target, download=False)
 
     try:
         info = attempt(YOUTUBE_EXTRACTOR_ARGS)
@@ -240,16 +262,29 @@ def search_videos(
     return [info] if info.get("id") else []
 
 
+def _log_download(message: str) -> None:
+    """Пишет измерение скорости и в терминал, и в диагностический лог."""
+    print(message, flush=True)
+    note(message)
+
+
 def download_audio(
     source: str,
     outtmpl: str,
     cookies_path=None,
-    cookies_from_browser=None,
     progress_callback: Callable[[int], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    mode: str | None = None,
 ) -> str:
-    """Download one YouTube source as MP3 and return the final path."""
+    """Download one YouTube source and return the final (native or MP3) path."""
+    mode = normalize_download_mode(mode or current_download_mode())
     yt_dlp = load_ytdlp()
+    conversion = "none (native)" if mode == DOWNLOAD_MODE_NATIVE else "MP3 320 kbps"
+    _log_download(
+        "[youtube] download options: format=bestaudio/best, "
+        f"conversion={conversion}, "
+        f"concurrent_fragment_downloads={FRAGMENT_CONCURRENCY}"
+    )
 
     def attempt(extractor_args):
         return _download_with_options(
@@ -257,10 +292,10 @@ def download_audio(
             source,
             outtmpl,
             cookies_path,
-            cookies_from_browser,
             progress_callback,
             cancel_check,
             extractor_args,
+            mode,
         )
 
     try:
@@ -284,13 +319,22 @@ def _download_with_options(
     source: str,
     outtmpl: str,
     cookies_path,
-    cookies_from_browser,
     progress_callback,
     cancel_check,
     extractor_args,
+    mode: str,
 ) -> str:
     """Run one download attempt with a specific set of player clients."""
-    captured = {"filepath": None, "last_percent": -1}
+    now = time.monotonic()
+    captured = {
+        "filepath": None,
+        "last_percent": -1,
+        "started": now,
+        "last_speed_log": now,
+        "last_speed_bytes": 0,
+        "peak_speed": 0.0,
+        "summary_logged": False,
+    }
 
     def is_cancelled() -> bool:
         return bool(cancel_check and cancel_check())
@@ -298,20 +342,59 @@ def _download_with_options(
     def progress_hook(status: dict[str, Any]) -> None:
         if is_cancelled():
             raise DownloadCancelled()
-        if progress_callback is None:
-            return
-        if status.get("status") == "finished":
+
+        current = time.monotonic()
+        finished = status.get("status") == "finished"
+        downloaded = max(0, int(status.get("downloaded_bytes") or 0))
+        total = status.get("total_bytes") or status.get(
+            "total_bytes_estimate"
+        )
+        percent = None
+        if total:
+            percent = int(downloaded * 100 / int(total))
+            percent = max(0, min(99, percent))
+
+        if finished:
+            if not captured["summary_logged"]:
+                elapsed = max(current - captured["started"], 0.001)
+                average = downloaded / elapsed / _MB
+                peak = max(captured["peak_speed"] / _MB, average)
+                _log_download(
+                    "[youtube] download done: "
+                    f"{downloaded / _MB:.2f} MB in {elapsed:.1f}s, "
+                    f"avg {average:.2f} MB/s, "
+                    f"peak {peak:.2f} MB/s"
+                )
+                captured["summary_logged"] = True
             percent = 99
         else:
-            total = status.get("total_bytes") or status.get(
-                "total_bytes_estimate"
-            )
-            if not total:
-                return
-            percent = int(
-                (status.get("downloaded_bytes") or 0) * 100 / int(total)
-            )
-            percent = max(0, min(99, percent))
+            # Считаем скорость сами за последний интервал: yt-dlp иногда
+            # отдаёт мгновенный speed 150+ MB/s после буферизации, из-за чего
+            # такие значения бесполезны для сравнения.
+            elapsed_since_log = current - captured["last_speed_log"]
+            if elapsed_since_log >= 2.0:
+                speed = max(
+                    0.0,
+                    (downloaded - captured["last_speed_bytes"])
+                    / elapsed_since_log,
+                )
+                captured["last_speed_log"] = current
+                captured["last_speed_bytes"] = downloaded
+                if speed >= 0.01 * _MB:
+                    captured["peak_speed"] = max(
+                        captured["peak_speed"], speed
+                    )
+                    suffix = (
+                        f", {percent}%" if percent is not None else ""
+                    )
+                    _log_download(
+                        "[youtube] download speed: "
+                        f"{speed / _MB:.2f} MB/s "
+                        f"({downloaded / _MB:.2f} MB{suffix})"
+                    )
+
+        if percent is None or progress_callback is None:
+            return
         if percent != captured["last_percent"]:
             captured["last_percent"] = percent
             progress_callback(percent)
@@ -326,26 +409,29 @@ def _download_with_options(
         if filepath:
             captured["filepath"] = str(filepath)
 
+    postprocessors = [
+        {
+            "key": "FFmpegThumbnailsConvertor",
+            "format": "jpg",
+            "when": "before_dl",
+        },
+    ]
+    if mode == DOWNLOAD_MODE_MP3:
+        postprocessors.append({
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "320",
+        })
+
     options = build_options(
         cookies_path,
-        cookies_from_browser,
         extractor_args=extractor_args,
         extra={
+            # Only the audio stream is requested: no video download at all.
             "format": "bestaudio/best",
             "outtmpl": str(outtmpl),
             "writethumbnail": True,
-            "postprocessors": [
-                {
-                    "key": "FFmpegThumbnailsConvertor",
-                    "format": "jpg",
-                    "when": "before_dl",
-                },
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "0",
-                },
-            ],
+            "postprocessors": postprocessors,
             "progress_hooks": [progress_hook],
             "postprocessor_hooks": [postprocessor_hook],
         },

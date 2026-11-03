@@ -16,7 +16,7 @@
 
 """Страница настроек в стиле Spotify (вкладка в главном окне).
 
-Две колонки: слева навигация (General / Account / Appearance / YouTube /
+Две колонки: слева навигация (General / Appearance / YouTube /
 Data / About), справа — содержимое выбранного раздела. Кнопок Save/Cancel
 нет: все настройки применяются мгновенно и сразу сохраняются в QSettings.
 """
@@ -44,13 +44,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from api_client import ApiClient
-from auth_ui import AuthDialog
+from cookies_store import find_cookies_file, import_cookies, remove_cookies
 from dialogs import CustomConfirmDialog, colored_icon
 from paths import CACHE_DIR, DATA_DIR, MUSIC_DIR
 from styles import available_themes, is_dark_theme
 from translations import tr
 from ui_common import get_existing_directory, get_open_file_name
+from ytdlp_support import DOWNLOAD_MODE_SETTING, normalize_download_mode
 
 COVERS_DIR = CACHE_DIR / "covers"
 PLAYLIST_COVERS_DIR = DATA_DIR / "playlist_covers"
@@ -115,14 +115,12 @@ class SettingsPage(QWidget):
     # Сигнал «показ бейджей источников метаданных изменён» — списки обновляются.
     metadata_badges_changed = pyqtSignal(bool)
 
-    # Сигнал «пользователь вышел из аккаунта» — главное окно чистит состояние.
-    logged_out = pyqtSignal()
-
     # Сигнал «нужно импортировать треки из CSV» — обрабатывает главное окно.
     csv_import_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("settingsPage")
         self.settings = QSettings("MusicPlayer", "MusicPlayer")
         self._description_labels = []
 
@@ -157,15 +155,16 @@ class SettingsPage(QWidget):
         self.stack = QStackedWidget()
 
         self._add_nav_item(tr("General", lang), self._build_general_page())
-        self._add_nav_item(tr("Account", lang), self._build_account_page())
         self._add_nav_item(tr("Appearance", lang), self._build_appearance_page())
         self._add_nav_item(tr("YouTube", lang), self._build_youtube_page())
         self._add_nav_item(tr("Data", lang), self._build_data_page())
         self._add_nav_item(tr("About", lang), self._build_about_page())
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        # Небольшой отступ превращает навигацию в отдельную стеклянную
+        # панель, а не в жёстко приклеенную к краю полосу.
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
         layout.addWidget(self.nav)
         layout.addWidget(self.stack, 1)
 
@@ -176,7 +175,6 @@ class SettingsPage(QWidget):
 
         self._connect_signals()
 
-        self.refresh_auth_state()
         self.apply_theme()
 
     def _lang(self):
@@ -330,48 +328,6 @@ class SettingsPage(QWidget):
         layout.addStretch(1)
         return page
 
-    def _build_account_page(self):
-        page, layout = self._new_page(tr("Account", self._lang()))
-        lang = self._lang()
-
-        self.account_username_label = QLabel("")
-        self.account_username_label.setStyleSheet("font-weight: 600;")
-        self._account_username_row = self._make_row(
-            tr("Username", lang), "", self.account_username_label
-        )
-        layout.addWidget(self._account_username_row)
-
-        self.account_logout_button = QPushButton(tr("Log Out", lang))
-        self.account_logout_button.setObjectName("accountLogoutButton")
-        self.account_logout_button.setAutoDefault(False)
-        self.account_logout_button.setCursor(Qt.PointingHandCursor)
-        self.account_logout_button.setStyleSheet(
-            "QPushButton { background-color: #e05a5a; color: #ffffff;"
-            " border: none; border-radius: 6px; padding: 6px 18px; }"
-            "QPushButton:hover { background-color: #ef6b6b; }"
-            "QPushButton:pressed { background-color: #c94f4f; }"
-        )
-        self._account_logout_row = self._make_row(
-            tr("Log Out", lang),
-            tr("Sign out of your account on this device.", lang),
-            self.account_logout_button,
-        )
-        layout.addWidget(self._account_logout_row)
-
-        self.account_login_button = QPushButton(tr("Log In / Register", lang))
-        self.account_login_button.setObjectName("accountLoginButton")
-        self.account_login_button.setAutoDefault(False)
-        self.account_login_button.setCursor(Qt.PointingHandCursor)
-        self._account_login_row = self._make_row(
-            tr("Log In / Register", lang),
-            tr("Sign in to your account or create a new one.", lang),
-            self.account_login_button,
-        )
-        layout.addWidget(self._account_login_row)
-
-        layout.addStretch(1)
-        return page
-
     def _build_appearance_page(self):
         page, layout = self._new_page(tr("Appearance", self._lang()))
 
@@ -431,53 +387,66 @@ class SettingsPage(QWidget):
 
     def _build_youtube_page(self):
         page, layout = self._new_page(tr("YouTube", self._lang()))
+        lang = self._lang()
 
-        self.cookies_edit = QLineEdit()
-        self.cookies_edit.setReadOnly(True)
-        self.cookies_edit.setMinimumWidth(140)
-        self.cookies_edit.setMaximumWidth(260)
-        self.cookies_edit.setPlaceholderText(tr("No file selected", self._lang()))
-
-        self.browse_button = QPushButton(tr("Browse...", self._lang()))
-        self.browse_button.setAutoDefault(False)
-
-        control = QWidget()
-        control_row = QHBoxLayout(control)
-        control_row.setContentsMargins(0, 0, 0, 0)
-        control_row.setSpacing(8)
-        control_row.addWidget(self.cookies_edit)
-        control_row.addWidget(self.browse_button)
-
+        self.download_mode_combo = SettingsComboBox()
+        self.download_mode_combo.setMinimumWidth(220)
+        self.download_mode_combo.setMaximumWidth(300)
+        self.download_mode_combo.addItem(
+            tr("Speed (original format)", lang), "native"
+        )
+        self.download_mode_combo.addItem(
+            tr("Compatibility (MP3 320 kbps)", lang), "mp3"
+        )
         layout.addWidget(self._make_row(
-            tr("Path to cookies.txt", self._lang()),
-            tr("A cookies.txt file is used to download music from YouTube.", self._lang()),
-            control,
+            tr("Download format", lang),
+            tr(
+                "Speed keeps the original M4A/WebM audio without "
+                "re-encoding. Compatibility converts it to MP3 320 kbps.",
+                lang,
+            ),
+            self.download_mode_combo,
         ))
 
-        self.browser_combo = SettingsComboBox()
-        self.browser_combo.setMinimumWidth(180)
-        self.browser_combo.setMaximumWidth(260)
-        for label, value in (
-            (tr("Do not use browser cookies", self._lang()), ""),
-            ("Firefox", "firefox"),
-            ("Google Chrome", "chrome"),
-            ("Chromium", "chromium"),
-            ("Brave", "brave"),
-            ("Microsoft Edge", "edge"),
-            ("Opera", "opera"),
-            ("Vivaldi", "vivaldi"),
-            ("Safari", "safari"),
-        ):
-            self.browser_combo.addItem(label, value)
+        self.cookies_status_edit = QLineEdit()
+        self.cookies_status_edit.setReadOnly(True)
+        self.cookies_status_edit.setMinimumWidth(240)
+        self.cookies_status_edit.setMaximumWidth(360)
+        self.cookies_status_edit.setPlaceholderText(
+            tr("No cookies.txt found", lang)
+        )
+
+        self.import_cookies_button = QPushButton(
+            tr("Import cookies.txt", lang)
+        )
+        self.import_cookies_button.setAutoDefault(False)
+        self.delete_cookies_button = QPushButton(
+            tr("Delete cookies", lang)
+        )
+        self.delete_cookies_button.setAutoDefault(False)
+
+        cookie_control = QWidget()
+        cookie_col = QVBoxLayout(cookie_control)
+        cookie_col.setContentsMargins(0, 0, 0, 0)
+        cookie_col.setSpacing(6)
+        cookie_col.addWidget(self.cookies_status_edit)
+        cookie_buttons = QHBoxLayout()
+        cookie_buttons.setContentsMargins(0, 0, 0, 0)
+        cookie_buttons.setSpacing(8)
+        cookie_buttons.addWidget(self.import_cookies_button)
+        cookie_buttons.addWidget(self.delete_cookies_button)
+        cookie_buttons.addStretch(1)
+        cookie_col.addLayout(cookie_buttons)
 
         layout.addWidget(self._make_row(
-            tr("Cookies from browser", self._lang()),
+            tr("Cookies file", lang),
             tr(
-                "Read YouTube cookies from the selected browser. "
-                "Use it if YouTube asks you to sign in.",
-                self._lang(),
+                "OctoBeat looks for cookies.txt in the app data folder "
+                "and in the music folder. Import a file if YouTube asks "
+                "you to sign in.",
+                lang,
             ),
-            self.browser_combo,
+            cookie_control,
         ))
 
         layout.addStretch(1)
@@ -580,8 +549,14 @@ class SettingsPage(QWidget):
         for button in (self.clear_covers_button, self.clear_all_cache_button):
             button.setIcon(colored_icon("trash.svg", icon_color))
             button.setIconSize(QSize(18, 18))
-        self.browse_button.setIcon(colored_icon("show-folder-with-music.svg", icon_color))
-        self.browse_button.setIconSize(QSize(18, 18))
+        self.import_cookies_button.setIcon(
+            colored_icon("download.svg", icon_color)
+        )
+        self.import_cookies_button.setIconSize(QSize(18, 18))
+        self.delete_cookies_button.setIcon(
+            colored_icon("trash.svg", icon_color)
+        )
+        self.delete_cookies_button.setIconSize(QSize(18, 18))
         self.report_bug_button.setIcon(colored_icon("bug.svg", icon_color))
         self.report_bug_button.setIconSize(QSize(18, 18))
         self.csv_import_button.setIcon(colored_icon("add-music.svg", icon_color))
@@ -619,48 +594,14 @@ class SettingsPage(QWidget):
         index = self.theme_combo.findData(theme)
         self.theme_combo.setCurrentIndex(max(index, 0))
 
-        self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
-
-        browser = self.settings.value("youtube_browser", "") or ""
-        index = self.browser_combo.findData(browser)
-        self.browser_combo.setCurrentIndex(max(index, 0))
+        mode = normalize_download_mode(
+            self.settings.value(DOWNLOAD_MODE_SETTING, "native")
+        )
+        index = self.download_mode_combo.findData(mode)
+        self.download_mode_combo.setCurrentIndex(max(index, 0))
+        self._refresh_cookies_status()
 
         self.music_folder_edit.setText(self.settings.value("download_dir", str(MUSIC_DIR)))
-
-    # ------------------------------------------------------------------
-    #  Аккаунт
-    # ------------------------------------------------------------------
-    def refresh_auth_state(self):
-        """Показывает имя пользователя и Log Out либо кнопку входа."""
-        token = self.settings.value("api_token")
-        authenticated = isinstance(token, str) and bool(token.strip())
-
-        username = self.settings.value("api_username") or "—"
-        self.account_username_label.setText(str(username))
-        self._account_username_row.setVisible(authenticated)
-        self._account_logout_row.setVisible(authenticated)
-        self._account_login_row.setVisible(not authenticated)
-
-    def _open_auth_dialog(self):
-        dialog = AuthDialog(self)
-        dialog.logged_in.connect(self._on_logged_in)
-        dialog.exec_()
-
-    def _on_logged_in(self, token):
-        try:
-            user = ApiClient(token=token, timeout=5).get_me()
-            username = str(user.get("username") or "")
-        except Exception:
-            username = str(self.settings.value("api_username") or "")
-        if username:
-            self.settings.setValue("api_username", username)
-        self.refresh_auth_state()
-
-    def _on_logout(self):
-        self.settings.remove("api_token")
-        self.settings.remove("api_username")
-        self.refresh_auth_state()
-        self.logged_out.emit()
 
     # ------------------------------------------------------------------
     #  Сигналы (мгновенное применение)
@@ -679,13 +620,14 @@ class SettingsPage(QWidget):
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         self.clear_covers_button.clicked.connect(self._on_clear_covers)
         self.clear_all_cache_button.clicked.connect(self._on_clear_all_cache)
-        self.browse_button.clicked.connect(self._on_browse_cookies)
-        self.browser_combo.currentIndexChanged.connect(self._on_browser_changed)
+        self.download_mode_combo.currentIndexChanged.connect(
+            self._on_download_mode_changed
+        )
+        self.import_cookies_button.clicked.connect(self._on_import_cookies)
+        self.delete_cookies_button.clicked.connect(self._on_delete_cookies)
         self.browse_music_button.clicked.connect(self._on_browse_music_folder)
         self.csv_import_button.clicked.connect(self.csv_import_requested.emit)
         self.report_bug_button.clicked.connect(self._on_report_bug)
-        self.account_login_button.clicked.connect(self._open_auth_dialog)
-        self.account_logout_button.clicked.connect(self._on_logout)
 
     def _on_language_changed(self):
         lang = self.language_combo.currentData()
@@ -814,23 +756,59 @@ class SettingsPage(QWidget):
             tr("All cache cleared successfully.", lang),
         )
 
-    def _on_browse_cookies(self):
-        start_dir = self.cookies_edit.text() or str(Path.home())
+    def _refresh_cookies_status(self):
+        path = find_cookies_file()
+        if path is not None:
+            self.cookies_status_edit.setText(str(path))
+            self.cookies_status_edit.setToolTip(str(path))
+            self.delete_cookies_button.setEnabled(True)
+        else:
+            self.cookies_status_edit.clear()
+            self.cookies_status_edit.setToolTip("")
+            self.delete_cookies_button.setEnabled(False)
+
+    def _on_import_cookies(self):
+        lang = self._lang()
         path, _ = get_open_file_name(
             self,
-            tr("Select cookies.txt", self._lang()),
-            start_dir,
+            tr("Select cookies.txt", lang),
+            str(Path.home()),
             "Cookies files (*.txt);;All files (*)",
         )
-        if path:
-            self.cookies_edit.setText(path)
-            self.settings.setValue("youtube_cookies", path)
-            self.settings.sync()
+        if not path:
+            return
+        try:
+            import_cookies(path)
+        except OSError as exc:
+            CustomConfirmDialog.information(
+                self,
+                tr("Error", lang),
+                tr("Could not import cookies.txt:\n{e}", lang).format(e=exc),
+            )
+            return
+        self._refresh_cookies_status()
 
-    def _on_browser_changed(self):
-        """Сохраняет выбранный браузер для cookies yt-dlp."""
-        browser = self.browser_combo.currentData() or ""
-        self.settings.setValue("youtube_browser", browser)
+    def _on_delete_cookies(self):
+        if find_cookies_file() is None:
+            return
+        lang = self._lang()
+        if not CustomConfirmDialog.question(
+            self,
+            tr("Delete cookies", lang),
+            tr(
+                "Delete cookies.txt from all OctoBeat cookie locations?",
+                lang,
+            ),
+        ):
+            return
+        remove_cookies()
+        self._refresh_cookies_status()
+
+    def _on_download_mode_changed(self):
+        mode = normalize_download_mode(
+            self.download_mode_combo.currentData()
+        )
+        self.settings.setValue(DOWNLOAD_MODE_SETTING, mode)
         self.settings.sync()
 
     def _on_browse_music_folder(self):

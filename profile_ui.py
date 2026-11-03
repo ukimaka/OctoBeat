@@ -16,11 +16,10 @@
 
 """Вкладка «Профиль»: шапка, локальная статистика и любимый трек."""
 
-import base64
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, QSize, Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QDialog,
@@ -28,7 +27,6 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -36,12 +34,8 @@ from PyQt5.QtWidgets import (
 
 import db
 import metadata
-from api_client import ApiClient, ApiError
-from auth_ui import AuthDialog
 from dialogs import (
-    CustomConfirmDialog,
     CustomInputDialog,
-    colored_icon,
     colored_pixmap,
 )
 from profile_assets import (
@@ -51,7 +45,6 @@ from profile_assets import (
     _icon_color,
     _lang,
     _round_avatar_pixmap,
-    _theme_is_dark,
 )
 from profile_widgets import (
     BBCodeEditorDialog,
@@ -211,123 +204,24 @@ class CoverLoader(QThread):
         return ""
 
 
-class _FriendProfileWorker(QThread):
-    """Загружает чужой профиль и его публичные плейлисты."""
-
-    loaded = pyqtSignal(dict, list)
-    failed = pyqtSignal(str, int)
-
-    def __init__(self, user_id: int, token: str | None, parent=None):
-        super().__init__(parent)
-        track_thread(self, "friend-profile")
-        self.user_id = user_id
-        self.token = token
-
-    def cancel(self) -> None:
-        self.requestInterruption()
-
-    def run(self) -> None:
-        if self.isInterruptionRequested():
-            return
-        try:
-            client = ApiClient(token=self.token)
-            profile = client.get_user_profile(self.user_id)
-            playlists = client.get_user_playlists(self.user_id)
-        except ApiError as exc:
-            if not self.isInterruptionRequested():
-                self.failed.emit(str(exc), exc.status_code or 0)
-        except Exception as exc:
-            if not self.isInterruptionRequested():
-                self.failed.emit(f"Unexpected error: {exc}", 0)
-        else:
-            if not self.isInterruptionRequested():
-                self.loaded.emit(profile, playlists)
-
-
-class _ProfileSyncWorker(QThread):
-    """Отправляет изменения профиля на сервер в фоновом потоке."""
-
-    synced = pyqtSignal(dict)
-    failed = pyqtSignal(str)
-
-    def __init__(
-        self,
-        token: str,
-        payload: dict,
-        avatar_path: str | None = None,
-        banner_path: str | None = None,
-        parent=None,
-    ):
-        super().__init__(parent)
-        track_thread(self, "profile-sync")
-        self.token = token
-        self.payload = dict(payload)
-        self.avatar_path = avatar_path
-        self.banner_path = banner_path
-
-    def cancel(self) -> None:
-        self.requestInterruption()
-
-    def run(self) -> None:
-        if self.isInterruptionRequested():
-            return
-        data = dict(self.payload)
-        for key, path in (
-            ("avatar_base64", self.avatar_path),
-            ("banner_base64", self.banner_path),
-        ):
-            if not path:
-                continue
-            try:
-                data[key] = base64.b64encode(
-                    Path(path).read_bytes()
-                ).decode("ascii")
-            except OSError as exc:
-                if not self.isInterruptionRequested():
-                    self.failed.emit(f"Cannot read profile image: {exc}")
-                return
-            if self.isInterruptionRequested():
-                return
-
-        try:
-            result = ApiClient(token=self.token).update_my_profile(data)
-        except ApiError as exc:
-            if not self.isInterruptionRequested():
-                self.failed.emit(str(exc))
-        except Exception as exc:
-            if not self.isInterruptionRequested():
-                self.failed.emit(f"Unexpected error: {exc}")
-        else:
-            if not self.isInterruptionRequested():
-                self.synced.emit(result)
-
-
 class ProfilePage(QWidget):
     """Вкладка «Профиль»: шапка и локальная статистика прослушиваний."""
 
     playlist_clicked = pyqtSignal(int)
     avatar_changed = pyqtSignal(str)
-    back_requested = pyqtSignal()
-    playlist_download_requested = pyqtSignal(int)
 
     BANNER_HEIGHT = 150
     AVATAR_SIZE = 100
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.settings = QSettings("MusicPlayer", "MusicPlayer")
+        self.setObjectName("profilePage")
         self._icon_labels = []
         self._cover_loaders = {}
         self._cover_labels = {}
         self._banner_path = None
         self._avatar_path = None
-        self._friend_mode = False
-        self._friend_user_id = None
-        self._friend_worker = None
-        self._friend_playlists = []
-        self._sync_workers = set()
         self._build_ui()
-        self._refresh_status()
         self.reload_stats()
 
     # ------------------------------------------------------------------
@@ -359,20 +253,6 @@ class ProfilePage(QWidget):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(4)
-        self.back_button = QPushButton(tr("Back", lang))
-        self.back_button.setObjectName("profileBackButton")
-        self.back_button.setCursor(Qt.PointingHandCursor)
-        self.back_button.setIcon(
-            colored_icon("back.svg", _icon_color())
-        )
-        self.back_button.setIconSize(QSize(16, 16))
-        self.back_button.setStyleSheet(
-            "QPushButton { background: transparent; border: none;"
-            " padding: 2px 0; }"
-        )
-        self.back_button.clicked.connect(self.back_requested.emit)
-        self.back_button.hide()
-        text_col.addWidget(self.back_button, 0, Qt.AlignLeft)
 
         self.nickname_label = _DoubleClickLabel()
         self.nickname_label.setObjectName("profileNickname")
@@ -384,16 +264,6 @@ class ProfilePage(QWidget):
         )
         self.nickname_label.doubleClicked.connect(self._edit_nickname)
         text_col.addWidget(self.nickname_label)
-
-        self.status_label = QLabel()
-        self.status_label.setObjectName("profileStatusLabel")
-        text_col.addWidget(self.status_label)
-
-        self.auth_button = QPushButton("Log In / Register")
-        self.auth_button.setObjectName("profileAuthButton")
-        self.auth_button.setCursor(Qt.PointingHandCursor)
-        self.auth_button.clicked.connect(self._open_auth_dialog)
-        text_col.addWidget(self.auth_button, 0, Qt.AlignLeft)
 
         text_col.addStretch(1)
         header_layout.addLayout(text_col, 1)
@@ -512,317 +382,12 @@ class ProfilePage(QWidget):
         self.scroll_area.setWidget(content)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(12, 12, 12, 12)
         root.addWidget(self.scroll_area)
-
-    # ------------------------------------------------------------------
-    #  Авторизация
-    # ------------------------------------------------------------------
-    def _open_auth_dialog(self) -> None:
-        dialog = AuthDialog(self)
-        dialog.logged_in.connect(self._on_logged_in)
-        dialog.exec_()
-
-    def _on_logged_in(self, token: str) -> None:
-        try:
-            user = ApiClient(token=token).get_me()
-        except ApiError as exc:
-            CustomConfirmDialog.information(
-                self, "Authorization", str(exc)
-            )
-            return
-        self.set_authenticated(user.get("username", ""))
-        self._sync_stats_to_server()
-
-    def set_authenticated(self, username: str) -> None:
-        """Запоминает имя пользователя и показывает статус Online."""
-        if username:
-            self.settings.setValue("api_username", username)
-        self._refresh_status()
-
-    def reset_auth_button(self) -> None:
-        """Сбрасывает кнопку входа и пересчитывает статус по токену."""
-        self.auth_button.setText("Log In / Register")
-        self.auth_button.setEnabled(True)
-        self.auth_button.setToolTip("")
-        self._refresh_status()
-
-    def _has_token(self) -> bool:
-        token = self.settings.value("api_token")
-        return isinstance(token, str) and bool(token.strip())
-
-    def _refresh_status(self) -> None:
-        """Online при наличии токена, иначе Offline."""
-        lang = _lang()
-        if self._has_token():
-            self.status_label.setText("● " + tr("Online", lang))
-            self.status_label.setStyleSheet(
-                "color: #1db954; font-weight: 600; font-size: 13px;"
-            )
-            self.auth_button.hide()
-        else:
-            self.status_label.setText("● " + tr("Offline", lang))
-            self.status_label.setStyleSheet(
-                "color: #8a8a8a; font-weight: 600; font-size: 13px;"
-            )
-            self.auth_button.show()
 
     # ------------------------------------------------------------------
     #  Чужой профиль
     # ------------------------------------------------------------------
-    def _set_friend_mode(self, enabled: bool) -> None:
-        """Переключает режим просмотра чужого профиля без редактирования."""
-        lang = _lang()
-        self._friend_mode = enabled
-        self.back_button.setVisible(enabled)
-        self.achievements_container.setVisible(not enabled)
-        self.status_label.setVisible(not enabled)
-        self.avatar_label.set_editable(not enabled)
-        self.banner_label.set_editable(not enabled)
-
-        # Статистика и любимый трек остаются на месте: в режиме друга
-        # они заполняются данными с сервера.
-        self.left_stats_widget.setVisible(True)
-        self.favorite_title.setVisible(True)
-        self.favorite_container.setVisible(True)
-        self.stats_grid.addWidget(self.right_stats_widget, 0, 1, Qt.AlignTop)
-
-        if enabled:
-            self.auth_button.hide()
-            self.nickname_label.setToolTip("")
-            self.description_label.setToolTip("")
-        else:
-            self._friend_user_id = None
-            self.nickname_label.setToolTip(
-                tr("Double-click to edit the nickname", lang)
-            )
-            self.description_label.setToolTip(
-                tr("Double-click to edit About Me", lang)
-            )
-            self._refresh_status()
-
-    def load_friend_profile(self, user_id: int) -> None:
-        """Загружает чужой профиль и его публичные плейлисты с сервера."""
-        lang = _lang()
-        token = self.settings.value("api_token")
-        if not isinstance(token, str) or not token.strip():
-            CustomConfirmDialog.information(
-                self,
-                tr("Profile", lang),
-                tr("Please log in to view profiles", lang),
-            )
-            return
-
-        self._set_friend_mode(True)
-        self._friend_user_id = int(user_id)
-        self._cover_labels = {}
-        self.nickname_label.setText(tr("Loading...", lang))
-        self.description_label.setText("")
-        self._apply_banner(None)
-        self._apply_avatar(None)
-        self.total_time_label.setText(self._format_total(0))
-        self._fill_friend_top_tracks([], lang)
-        self._fill_friend_favorite(None, lang)
-        self._clear_layout(self.public_playlists_grid)
-        loading = QLabel(tr("Loading...", lang))
-        loading.setStyleSheet("color: #8a8a8a;")
-        self.public_playlists_grid.addWidget(loading, 0, 0)
-
-        worker = _FriendProfileWorker(self._friend_user_id, token)
-        worker.loaded.connect(self._on_friend_profile_loaded)
-        worker.failed.connect(
-            lambda message, code, uid=self._friend_user_id: (
-                self._on_friend_profile_error(uid, message, code)
-            )
-        )
-        worker.finished.connect(
-            lambda w=worker: self._on_friend_worker_finished(w)
-        )
-        self._friend_worker = worker
-        worker.start()
-
-    def _on_friend_profile_loaded(
-        self, profile: dict, playlists: list
-    ) -> None:
-        if not self._friend_mode:
-            return
-        if int(profile.get("id") or 0) != self._friend_user_id:
-            return
-
-        lang = _lang()
-        username = str(profile.get("username") or "")
-        nickname = str(profile.get("nickname") or username or "Music Lover")
-        self.nickname_label.setText(nickname)
-
-        description = str(profile.get("description") or "")
-        if description:
-            self.description_label.setText(_description_html(description))
-        else:
-            self.description_label.setText(tr("No description", lang))
-
-        self._apply_banner(
-            profile.get("banner_bytes") or profile.get("banner_path")
-        )
-        self._apply_avatar(
-            profile.get("avatar_bytes") or profile.get("avatar_path")
-        )
-
-        self.total_time_label.setText(
-            self._format_total(int(profile.get("listening_time") or 0))
-        )
-        self._fill_friend_top_tracks(profile.get("top_tracks") or [], lang)
-        self._fill_friend_favorite(profile.get("favorite_track"), lang)
-
-        self._friend_playlists = list(playlists or [])
-        self._fill_friend_playlists(lang)
-
-    def _on_friend_profile_error(
-        self, user_id: int, message: str, status_code: int
-    ) -> None:
-        if not self._friend_mode or user_id != self._friend_user_id:
-            return
-        lang = _lang()
-        text = (
-            tr("This profile is private", lang)
-            if status_code == 403
-            else message
-        )
-        self.description_label.setText(text)
-        self.total_time_label.setText(self._format_total(0))
-        self._fill_friend_top_tracks([], lang)
-        self._fill_friend_favorite(None, lang)
-        self._clear_layout(self.public_playlists_grid)
-        empty = QLabel(tr("No playlists yet", lang))
-        empty.setStyleSheet("color: #8a8a8a;")
-        self.public_playlists_grid.addWidget(empty, 0, 0)
-        CustomConfirmDialog.information(self, tr("Profile", lang), text)
-
-    def _on_friend_worker_finished(self, worker) -> None:
-        if self._friend_worker is worker:
-            self._friend_worker = None
-        worker.deleteLater()
-
-    def show_own_profile(self) -> None:
-        """Возвращает страницу к локальному (своему) профилю."""
-        self.reload_stats()
-
-    def _remote_track_row(self, track, index):
-        """Строка трека из JSON-статистики друга."""
-        if not isinstance(track, dict):
-            return None
-        title = str(track.get("title") or "Unknown track")
-        artist = str(track.get("artist") or "")
-        cover = track.get("cover") or ""
-        if not (
-            isinstance(cover, (str, Path))
-            and cover
-            and Path(cover).is_file()
-        ):
-            cover = ""
-
-        raw_key = (
-            f"{self._friend_user_id}:{index}:"
-            f"{track.get('id')}:{title}:{artist}"
-        )
-        track_key = -(abs(hash(raw_key)) % 2_000_000_000 + 1)
-        return self._track_row(
-            track_key,
-            cover,
-            title,
-            artist or None,
-            query=self._cover_query(artist, title),
-        )
-
-    def _fill_friend_top_tracks(self, tracks, lang):
-        self._clear_layout(self.top_tracks_layout)
-        if not tracks:
-            empty = QLabel(tr("No plays yet", lang))
-            empty.setStyleSheet("color: #8a8a8a;")
-            self.top_tracks_layout.addWidget(empty)
-            return
-        for index, track in enumerate(tracks):
-            row = self._remote_track_row(track, index)
-            if row is not None:
-                self.top_tracks_layout.addWidget(row)
-
-    def _fill_friend_favorite(self, track, lang):
-        self._clear_layout(self.favorite_layout)
-        if not isinstance(track, dict) or not track:
-            label = QLabel(tr("No favorite track yet", lang))
-            label.setStyleSheet("color: #8a8a8a;")
-            self.favorite_layout.addWidget(label)
-            return
-        row = self._remote_track_row(track, 0)
-        if row is None:
-            label = QLabel(tr("No favorite track yet", lang))
-            label.setStyleSheet("color: #8a8a8a;")
-            self.favorite_layout.addWidget(label)
-        else:
-            self.favorite_layout.addWidget(row)
-
-    def _fill_friend_playlists(self, lang: str) -> None:
-        self._clear_layout(self.public_playlists_grid)
-        if not self._friend_playlists:
-            empty = QLabel(tr("No playlists yet", lang))
-            empty.setStyleSheet("color: #8a8a8a;")
-            self.public_playlists_grid.addWidget(empty, 0, 0)
-            return
-
-        dark = _theme_is_dark()
-        for index, playlist in enumerate(self._friend_playlists):
-            card = QFrame()
-            card.setObjectName("remotePlaylistCard")
-            card.setFixedWidth(190)
-            card.setStyleSheet(
-                "#remotePlaylistCard { background: transparent;"
-                " border-radius: 10px; }"
-                + (
-                    "#remotePlaylistCard:hover {"
-                    " background: rgba(255, 255, 255, 0.08); }"
-                    if dark
-                    else "#remotePlaylistCard:hover {"
-                    " background: rgba(0, 0, 0, 0.06); }"
-                )
-            )
-            col = QVBoxLayout(card)
-            col.setContentsMargins(6, 6, 6, 6)
-            col.setSpacing(6)
-
-            cover = QLabel()
-            cover.setFixedSize(64, 64)
-            cover.setAlignment(Qt.AlignCenter)
-            cover.setPixmap(_cover_pixmap(None, 64))
-            col.addWidget(cover, 0, Qt.AlignHCenter)
-
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            name = QLabel(str(playlist.get("name") or ""))
-            name.setWordWrap(True)
-            row.addWidget(name, 1)
-
-            download = QPushButton(tr("Download", lang))
-            download.setCursor(Qt.PointingHandCursor)
-            download.setIcon(
-                colored_icon("download.svg", _icon_color())
-            )
-            download.setIconSize(QSize(14, 14))
-            download.setStyleSheet(
-                "QPushButton { background: transparent; border: none;"
-                " padding: 2px 4px; }"
-                "QPushButton:hover { color: palette(highlight); }"
-            )
-            playlist_id = int(playlist.get("id") or 0)
-            download.clicked.connect(
-                lambda _checked=False, pid=playlist_id: (
-                    self.playlist_download_requested.emit(pid)
-                )
-            )
-            row.addWidget(download)
-            col.addLayout(row)
-
-            self.public_playlists_grid.addWidget(
-                card, index // 2, index % 2
-            )
 
     def _section_title(self, icon_name, text):
         """Заголовок секции: иконка + подпись."""
@@ -963,7 +528,6 @@ class ProfilePage(QWidget):
     def reload_stats(self):
         """Перечитывает профиль и статистику из БД."""
         lang = _lang()
-        self._set_friend_mode(False)
         self._apply_icon_theme()
         self._cover_labels = {}
 
@@ -1167,13 +731,7 @@ class ProfilePage(QWidget):
 
     def shutdown(self):
         """Останавливает все фоновые QThread профиля при закрытии."""
-        workers = []
-        if self._friend_worker is not None:
-            workers.append(self._friend_worker)
-            self._friend_worker = None
-        workers.extend(self._sync_workers)
-        self._sync_workers.clear()
-        workers.extend(self._cover_loaders.values())
+        workers = list(self._cover_loaders.values())
         self._cover_loaders.clear()
         self._cover_labels.clear()
 
@@ -1190,118 +748,13 @@ class ProfilePage(QWidget):
             retire_thread(worker, 2000)
 
     # ------------------------------------------------------------------
-    #  Синхронизация с сервером
-    # ------------------------------------------------------------------
-    def _track_stats_payload(self, track):
-        """Преобразует локальный трек в JSON-совместимый словарь."""
-        if track is None:
-            return None
-        file_path = track["file_path"]
-        title = track["title"] or Path(file_path).stem
-        try:
-            cover = metadata.extract_cover(file_path, track["id"]) or ""
-        except Exception:
-            cover = ""
-        return {
-            "id": track["id"],
-            "title": title,
-            "artist": track["artist"] or "",
-            "cover": cover,
-        }
-
-    def _build_stats_payload(self):
-        profile = db.get_profile()
-        favorite_id = profile["favorite_track_id"] if profile else None
-        favorite = (
-            self._track_stats_payload(db.get_track_by_id(favorite_id))
-            if favorite_id
-            else None
-        )
-        top_tracks = [
-            payload
-            for payload in (
-                self._track_stats_payload(row)
-                for row in db.get_top_tracks(5)
-            )
-            if payload is not None
-        ]
-        return {
-            "listening_time": db.get_total_play_time(),
-            "tracks_count": db.get_tracks_count(),
-            "playlists_count": db.get_playlists_count(),
-            "app_age_days": db.get_app_age_days(),
-            "favorite_track": favorite,
-            "top_tracks": top_tracks,
-        }
-
-    def _sync_stats_to_server(self) -> None:
-        """Отправляет актуальную локальную статистику на сервер."""
-        token = self.settings.value("api_token")
-        if not isinstance(token, str) or not token.strip():
-            return
-        self._sync_profile_to_server(
-            stats=self._build_stats_payload(), silent=True
-        )
-
-    def sync_stats_to_server(self) -> None:
-        """Публичная точка входа для периодической синхронизации."""
-        self._sync_stats_to_server()
-
-    def _sync_profile_to_server(
-        self,
-        *,
-        avatar_path=None,
-        banner_path=None,
-        nickname=None,
-        description=None,
-        stats=None,
-        silent=False,
-    ) -> None:
-        """Отправляет изменения профиля на сервер в фоновом потоке."""
-        token = self.settings.value("api_token")
-        if not isinstance(token, str) or not token.strip():
-            return
-
-        payload = {}
-        if nickname is not None:
-            payload["nickname"] = nickname
-        if description is not None:
-            payload["description"] = description
-        if stats is not None:
-            payload["stats"] = stats
-        if not payload and not avatar_path and not banner_path:
-            return
-
-        worker = _ProfileSyncWorker(
-            token,
-            payload,
-            avatar_path=str(avatar_path) if avatar_path else None,
-            banner_path=str(banner_path) if banner_path else None,
-        )
-        if not silent:
-            worker.failed.connect(self._on_profile_sync_failed)
-        worker.finished.connect(
-            lambda w=worker: self._on_profile_sync_finished(w)
-        )
-        self._sync_workers.add(worker)
-        worker.start()
-
-    def _on_profile_sync_failed(self, message: str) -> None:
-        lang = _lang()
-        CustomConfirmDialog.information(
-            self, tr("Profile", lang), message
-        )
-
-    def _on_profile_sync_finished(self, worker) -> None:
-        self._sync_workers.discard(worker)
-        worker.deleteLater()
-
-    # ------------------------------------------------------------------
     #  Действия
     # ------------------------------------------------------------------
+    def change_avatar(self):
+        """Публичный вход для контекстного меню аватарки в главном окне."""
+        self._change_avatar()
+
     def _change_banner(self):
-        if self._friend_mode:
-            return
         path, _ = get_open_file_name(
             self, tr("Select Banner", _lang()), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
@@ -1314,11 +767,8 @@ class ProfilePage(QWidget):
             return
         db.update_profile(banner_path=str(new_path))
         self._apply_banner(str(new_path))
-        self._sync_profile_to_server(banner_path=str(new_path))
 
     def _change_avatar(self):
-        if self._friend_mode:
-            return
         path, _ = get_open_file_name(
             self, tr("Select Avatar", _lang()), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
@@ -1332,12 +782,9 @@ class ProfilePage(QWidget):
         db.update_profile(avatar_path=str(new_path))
         self._apply_avatar(str(new_path))
         self.avatar_changed.emit(str(new_path))
-        self._sync_profile_to_server(avatar_path=str(new_path))
 
     def _edit_nickname(self):
         """Смена никнейма по двойному клику."""
-        if self._friend_mode:
-            return
         profile = db.get_profile()
         current = (profile["nickname"] if profile else "") or ""
         lang = _lang()
@@ -1349,12 +796,9 @@ class ProfilePage(QWidget):
         nickname = name.strip() or "Music Lover"
         db.update_profile(nickname=nickname)
         self.reload_stats()
-        self._sync_profile_to_server(nickname=nickname)
 
     def _edit_about(self):
         """Редактирование описания в BBCode по двойному клику."""
-        if self._friend_mode:
-            return
         profile = db.get_profile()
         dialog = BBCodeEditorDialog(
             profile["description"] if profile else "", self
@@ -1364,4 +808,3 @@ class ProfilePage(QWidget):
         description = dialog.value()
         db.update_profile(description=description)
         self.reload_stats()
-        self._sync_profile_to_server(description=description)

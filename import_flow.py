@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Импорт музыки, CSV, YouTube и удалённых плейлистов."""
+"""Импорт музыки, CSV и YouTube."""
 
 from pathlib import Path
 
@@ -22,86 +22,11 @@ from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import QDialog
 
 import workers
-from api_client import ApiClient, ApiError
 from dialogs import CustomConfirmDialog, DimmedProgressDialog
 from translations import tr
 from qt_diagnostics import hold_worker, note, track_thread
 from qt_lifecycle import retire_thread, widget_alive
 from ui_common import get_open_file_name, get_open_file_names
-
-
-class _RemotePlaylistDownloadWorker(QObject):
-    """Скачивает все треки удалённого плейлиста через yt-dlp."""
-
-    progress = pyqtSignal(int, int)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
-
-    def __init__(self, playlist_id: int, token: str | None, music_folder):
-        super().__init__()
-        self.setObjectName("remote-playlist-worker")
-        self.playlist_id = playlist_id
-        self.token = token
-        self.music_folder = music_folder
-        self._stopped = False
-        self._current_worker = None
-
-    def stop(self) -> None:
-        self._stopped = True
-        worker = self._current_worker
-        if worker is not None:
-            try:
-                worker.stop()
-            except Exception:
-                pass
-
-    def run(self) -> None:
-        from youtube_worker import YoutubeWorker
-
-        try:
-            data = ApiClient(token=self.token).get_playlist(
-                self.playlist_id
-            )
-        except ApiError as exc:
-            self.error.emit(str(exc))
-            self.finished.emit([])
-            return
-
-        tracks = data.get("tracks") or []
-        if not tracks:
-            self.finished.emit([])
-            return
-
-        paths: list[str] = []
-        failures: list[str] = []
-        total = len(tracks)
-        for index, track in enumerate(tracks):
-            if self._stopped or QThread.currentThread().isInterruptionRequested():
-                break
-            source = str(track.get("source_id") or "").strip()
-            if not source:
-                continue
-            if not source.lower().startswith(("http://", "https://")):
-                source = f"https://www.youtube.com/watch?v={source}"
-
-            self.progress.emit(index, total)
-            worker = YoutubeWorker(source, self.music_folder)
-            self._current_worker = worker
-            downloaded: list[str] = []
-            errors: list[str] = []
-            worker.finished.connect(downloaded.append)
-            worker.error.connect(errors.append)
-            worker.run()
-            self._current_worker = None
-            paths.extend(downloaded)
-            failures.extend(errors)
-            if self._stopped:
-                break
-
-        self.progress.emit(total, total)
-        if not paths and failures:
-            self.error.emit(failures[-1])
-        self.finished.emit(paths)
 
 
 class ImportFlow(QObject):
@@ -142,7 +67,7 @@ class ImportFlow(QObject):
                 self.settings.value("language", "en"),
             ),
             str(Path.home()),
-            "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a);;All files (*)",
+            "Audio files (*.mp3 *.flac *.ogg *.wav *.m4a *.webm *.opus);;All files (*)",
         )
         if not files:
             return
@@ -217,21 +142,6 @@ class ImportFlow(QObject):
         self.sync_library()
         self.library_changed.emit()
         self.finished.emit()
-
-    def download_remote_playlist(self, playlist_id: int) -> None:
-        """Скачивает все треки чужого публичного плейлиста."""
-        worker = _RemotePlaylistDownloadWorker(
-            playlist_id,
-            self._token(),
-            self.music_folder,
-        )
-        title = tr("Download", self.settings.value("language", "en"))
-        self._run_worker_with_progress(
-            worker,
-            title,
-            self._on_downloads_finished,
-            thread_name="remote-playlist",
-        )
 
     # ------------------------------------------------------------------
     #  Завершение операций
@@ -321,21 +231,9 @@ class ImportFlow(QObject):
         )
         self.finished.emit()
 
-    def _on_downloads_finished(self, paths) -> None:
-        if paths:
-            self.sync_library()
-            self.library_changed.emit()
-        self.finished.emit()
-
     # ------------------------------------------------------------------
     #  Внутренние помощники
     # ------------------------------------------------------------------
-    def _token(self) -> str | None:
-        token = self.settings.value("api_token")
-        if isinstance(token, str) and token.strip():
-            return token
-        return None
-
     def _stop_current_worker(self) -> None:
         """Просит текущий воркер завершиться (кнопка Cancel/закрытие)."""
         worker = self._worker

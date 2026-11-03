@@ -345,6 +345,22 @@ class PlayerController(QObject):
     def play_from_list(self, ids, clicked_id, context_type, name, playlist_id=None):
         self._play_from_list(ids, clicked_id, context_type, name, playlist_id)
 
+    def play_track_from_list(
+        self, ids, clicked_id, context_type, name, playlist_id=None
+    ):
+        """Клик по mini-play: текущий трек ставится на паузу/снимается с неё.
+
+        Повторный запуск того же трека с нуля не допускается. Любой другой
+        трек запускается как обычно, с новым контекстом.
+        """
+        if (
+            clicked_id == self.current_track_id
+            and not self.media_player.media_is_null()
+        ):
+            self.toggle_play()
+            return
+        self._play_from_list(ids, clicked_id, context_type, name, playlist_id)
+
     def set_context(self, ids, index, context_type, name, playlist_id=None):
         self._set_context(ids, index, context_type, name, playlist_id)
 

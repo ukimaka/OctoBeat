@@ -23,7 +23,7 @@
 
 from pathlib import Path
 
-from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QFontMetrics,
@@ -39,8 +39,10 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect,
     QLabel,
     QPushButton,
+    QProxyStyle,
     QSlider,
     QStyle,
+    QStyleFactory,
 )
 
 from dialog_base import DimmedFileDialog
@@ -79,6 +81,62 @@ def apply_menu_depth(menu):
     shadow.setColor(QColor(0, 0, 0, 160))
     menu.setGraphicsEffect(shadow)
     return menu
+
+
+class _TooltipDelayStyle(QProxyStyle):
+    """QProxyStyle с глобальной задержкой появления QToolTip."""
+
+    def __init__(self, base_style=None, delay_ms=1000):
+        super().__init__(base_style)
+        self._tooltip_delay_ms = int(delay_ms)
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.SH_ToolTip_WakeUpDelay:
+            return self._tooltip_delay_ms
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def install_tooltip_delay(app=None, delay_ms=1000) -> QStyle:
+    """Ставит глобальную задержку QToolTip (по умолчанию 1000 мс)."""
+    if app is None:
+        app = QApplication.instance()
+    if app is None:
+        return None
+    current = app.style()
+    if getattr(current, "_octobeat_tooltip_delay", None) == delay_ms:
+        return current
+
+    base = QStyleFactory.create("Fusion")
+    if base is None:
+        base = current
+    style = _TooltipDelayStyle(base, delay_ms)
+    # QProxyStyle не владеет базовым стилем; держим ссылку живой.
+    style._base_style = base
+    style._octobeat_tooltip_delay = delay_ms
+    app.setStyle(style)
+    app._octobeat_tooltip_style = style
+    return style
+
+
+class GlassTooltipFilter(QObject):
+    """Делает стандартные QToolTip прозрачными, чтобы работал QSS-стекло.
+
+    QToolTip — отдельное top-level-окно без WA_TranslucentBackground,
+    поэтому rgba-фон в QSS иначе смешивается с непрозрачной подложкой.
+    Фильтр ставится на QApplication и включает прозрачность до показа.
+    """
+
+    def eventFilter(self, obj, event):
+        if (
+            event.type() == QEvent.Show
+            and isinstance(obj, QLabel)
+            and obj.windowType() == Qt.ToolTip
+        ):
+            obj.setAttribute(Qt.WA_TranslucentBackground, True)
+            obj.setAttribute(Qt.WA_NoSystemBackground, True)
+            obj.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            obj.update()
+        return False
 
 
 class ClickSlider(QSlider):

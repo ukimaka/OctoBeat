@@ -16,11 +16,7 @@ No streaming, no subscription.
 
 [About](#about) ·
 [Features](#features) ·
-[Screenshots](#screenshots) ·
-[Install](#install) ·
-[Usage](#usage) ·
-[Limitations](#limitations) ·
-[Roadmap](#roadmap)
+[Install](#install)
 
 <br>
 
@@ -34,7 +30,7 @@ I got tired of music streaming services. They felt cluttered and hard to use, an
 
 OctoBeat has no streaming. Instead, it has other features that make up for it. The main one: you can build a big library of tracks without leaving the app. Search YouTube, download a track, and OctoBeat adds the tags and the cover for you.
 
-It is a personal project, and it is vibe-coded: I built it with the help of AI. It is still young, so expect rough edges and bugs. See [Limitations](#limitations).
+It is a personal project, and it is vibe-coded: I built it with the help of AI.
 
 ## Features
 
@@ -43,7 +39,8 @@ It is a personal project, and it is vibe-coded: I built it with the help of AI. 
 - Crossfade between tracks. The length depends on the track (3 seconds at most). You can turn it off in Settings.
 - Loudness normalization with ffmpeg, so quiet and loud songs sound about the same.
 - Shuffle, repeat (off, all, one) and a queue.
-- Plays MP3, FLAC, OGG, M4A and WAV.
+- The app remembers your volume and the last track or playlist you played.
+- Plays MP3, FLAC, OGG, M4A, WebM and WAV.
 
 **Library**
 
@@ -54,7 +51,8 @@ It is a personal project, and it is vibe-coded: I built it with the help of AI. 
 
 **Getting music**
 
-- Search YouTube and download tracks from inside the app (it uses `yt-dlp`). You get an MP3 with tags and a cover.
+- Search YouTube or paste a direct video link and download tracks from inside the app (it uses `yt-dlp`). Audio-only downloads use four parallel fragments where the stream supports them; the download speed is printed to the log in MB/s.
+- Download format is selectable in Settings → YouTube: **Speed** keeps the native M4A/WebM stream without re-encoding, while **Compatibility** converts to MP3 320 kbps. M4A tags and the cover are written with `mutagen.mp4`.
 - Import a Spotify playlist: export it to CSV with [Exportify](https://exportify.net/), then load the file. OctoBeat finds the tracks, downloads them and adds tags.
 - Import files you already have.
 - Tags and covers come from [MusicBrainz](https://musicbrainz.org/) and the [Cover Art Archive](https://coverartarchive.org/). If they have nothing, OctoBeat uses the YouTube title and thumbnail.
@@ -65,38 +63,28 @@ It is a personal project, and it is vibe-coded: I built it with the help of AI. 
 - A full-screen karaoke mode with the current line highlighted.
 - If the lyrics are a bit early or late, move them by 0.5 seconds.
 
-**Profile and friends (optional)**
+**Profile (local)**
 
 - A profile with a nickname, avatar, banner and an "About me" text. The text supports BBCode and has a live preview.
 - Your favorite track, top tracks and total listening time. There are also achievements with four levels (Bronze, Silver, Gold, Diamond): tracks downloaded, playlists created, listening time and library age.
-- Find people, send and accept friend requests, open a friend's profile and download their playlists.
+- Everything is stored in the local database and profile folder.
+- Click the avatar in the top-right corner to open the profile. Right-click it to change the avatar or exit the app.
 
 **Other**
 
-- Dark, light, dracula and catpuccin theme, interface zoom, English and Russian.
+- Dark, light, Dracula, Catppuccin and Base2Tone themes, interface zoom, English and Russian.
+- Frosted-glass context menus, tooltips, the settings sidebar and the Next in queue card.
+- System tray: closing the window hides it to the tray when one is available, otherwise it minimizes to the taskbar. Left-click the tray icon to restore the window; its menu has Open and Exit.
 - On Linux, media keys and desktop controls work through MPRIS.
-
-## Screenshots
-
-<table>
-  <tr>
-    <td width="50%"><img src="assets/screenshots/playlists.png" alt="Playlists"><br><sub>Playlists</sub></td>
-    <td width="50%"><img src="assets/screenshots/karaoke.png" alt="Karaoke mode"><br><sub>Karaoke mode</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="assets/screenshots/profile.png" alt="Profile"><br><sub>Profile</sub></td>
-    <td width="50%"><img src="assets/screenshots/light-theme.png" alt="Light theme"><br><sub>Light theme</sub></td>
-  </tr>
-</table>
 
 ## Install
 
 I develop and test OctoBeat on Linux so if you experience issues on Windows start let me know about it in [issues](https://github.com/ukimaka/OctoBeat/issues).
 
-For manual instalation You need:
+For manual installation you need:
 
 - Python 3.10 or newer
-- ffmpeg (it converts downloads to MP3 and measures loudness)
+- ffmpeg (MP3 mode, thumbnail conversion and loudness measurement)
 - GStreamer plugins (on Linux, Qt plays audio through GStreamer)
 
 <details>
@@ -130,126 +118,13 @@ python main.py
 
 Start the app from the activated virtual environment. OctoBeat looks for `yt-dlp` in your `PATH`, and `pip` installs it into `.venv/bin`.
 
-## Usage
+### Build a standalone binary
 
-1. Import your files, or download tracks with the "Download music" button.
-2. Make folders and playlists.
-3. Covers and tags are loaded on their own. You can open the lyrics and the karaoke mode from the player.
-4. If you want a profile and friends, sign in. You can skip this, the player works without an account.
+OctoBeat ships with a PyInstaller spec file. Install PyInstaller into the same virtual environment and build:
 
-### Hotkeys
-
-| Key | Action |
-| --- | --- |
-| `Space` | Play / pause |
-| `Ctrl` + `→` / `Ctrl` + `←` | Next / previous track |
-| `Ctrl` + `↑` / `Ctrl` + `↓` | Volume up / down |
-| `Ctrl` + `F` | Search |
-
-### YouTube cookies
-
-Sometimes YouTube tells `yt-dlp` to "confirm you're not a bot", and the download fails. To fix it, give OctoBeat a `cookies.txt` file from a browser where you are signed in to YouTube.
-
-1. Export your YouTube cookies in the Netscape `cookies.txt` format. The [yt-dlp FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ) explains how.
-2. Save the file as `~/Music/cookies.txt`, or choose it in Settings > YouTube.
-
-OctoBeat looks for the file in this order: the path from Settings, the download folder, `~/Music/cookies.txt`, the app folder.
-
-> [!WARNING]
-> `cookies.txt` gives access to your Google account. Do not share it and do not commit it to a repository.
-
-### Where the data is
-
-| What | Where |
-| --- | --- |
-| Library and playlists | `music.db` in the app folder |
-| Metadata and cover cache | `~/.cache/music_player/` |
-| Profile images | `~/.local/share/music_player/profile/` |
-| Downloads (default) | `~/Music/` |
-
-Settings > Data can clear the cached covers and images.
-
-## Online features
-
-The account is optional. Without it, OctoBeat sends nothing to its own server. Tags and covers come from MusicBrainz and the Cover Art Archive, lyrics come from the lyrics providers, and downloads come from YouTube.
-
-If you sign in, the app syncs your profile: nickname, "About me", avatar, banner, and some statistics (total listening time, number of tracks and playlists, library age, your favorite track and your top 5 tracks). Your music files are never uploaded.
-
-Profiles and friends work through a small REST server written with FastAPI.
-
-## Limitations
-
-- You can download a friend's playlists, but you cannot publish your own playlists from the app yet.
-- Changing the language or the zoom needs a restart.
-- The default server is a small hosted instance. It can be slow or offline.
-- Only download music you have the right to download. You are responsible for following the laws of your country and the terms of the services you use.
-
-## Roadmap
-
-There are no dates. The list changes as I work on the project.
-
-- [ ] Publish your own playlists (public or private) so friends can download them
-- [ ] Likes on profiles
-- [ ] Shared playlists
-- [ ] Import and export of M3U and YouTube playlists
-- [ ] Equalizer, smart playlists, sleep timer, tray icon and mini player
-- [ ] ListenBrainz scrobbling
-- [ ] "Now listening" status for friends and a yearly summary
-- [ ] Android app
-- [ ] more languages
-
-If you have an idea, [open an issue](https://github.com/ukimaka/OctoBeat/issues).
-
-## Tech stack
-
-| Part | What I use |
-| --- | --- |
-| Language | Python 3.10+ |
-| GUI and audio | PyQt5 (Qt Widgets and Qt Multimedia) |
-| Database | SQLite |
-| Tags and metadata | [mutagen](https://mutagen.readthedocs.io/), [musicbrainzngs](https://python-musicbrainzngs.readthedocs.io/) |
-| Downloads | [yt-dlp](https://github.com/yt-dlp/yt-dlp) and ffmpeg |
-| Lyrics | [syncedlyrics](https://github.com/moehmeni/syncedlyrics), [LRCLIB](https://lrclib.net/) |
-| Linux media keys | [mpris-server](https://github.com/alexdelorenzo/mpris_server) |
-| Server (optional) | FastAPI |
-
-<details>
-<summary>Project layout</summary>
-
-```text
-main.py                  entry point
-main_window.py           main window
-controller.py            playback logic: queue, shuffle, repeat
-player.py                CrossfadePlayer (two QMediaPlayer objects)
-db.py                    SQLite tables and queries
-workers.py               background jobs: import, update info, CSV import
-youtube_worker.py        yt-dlp downloads
-youtube_dialog.py        YouTube search and download window
-musicbrainz_client.py    MusicBrainz and Cover Art Archive, with a cache
-metadata.py              reading tags, extracting covers
-lyrics_*.py              loading lyrics, lyrics panel
-karaoke_overlay.py       karaoke mode
-library_tab.py           library view
-playlists_ui.py          playlists view
-profile_ui.py            profile, stats, achievements
-friends_ui.py            friends and requests
-api_client.py            client for the optional server
-mpris_integration.py     MPRIS (Linux media keys)
-translations.py          English and Russian texts
-styles.py, appearance.py themes and scaling
-icons/                   SVG icons (see THIRD_PARTY_LICENSES.md)
+```bash
+pip install pyinstaller
+pyinstaller OctoBeat.spec
 ```
 
-</details>
-
-## Contributing
-
-Bug reports and ideas are welcome. The easiest way is to [open an issue](https://github.com/ukimaka/OctoBeat/issues). In the app, Settings > Report a Bug opens the same page.
-
-If you want to change the code, fork the repository, make a branch and open a pull request. Please say what you changed and how you tested it, and keep the GPL header at the top of new files.
-
-## License
-
-OctoBeat is licensed under the [GNU General Public License v3.0](LICENSE). The icons are from [SVG Repo](https://www.svgrepo.com/) under open licenses, see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-
-Thanks to MusicBrainz and the Cover Art Archive for the metadata, LRCLIB for the lyrics, and the authors of yt-dlp, mutagen and PyQt5.
+The result is `dist/OctoBeat`. The spec bundles the `themes/` and `icons/` folders, PyQt5 and VLC, so the binary does not need the source tree next to it.

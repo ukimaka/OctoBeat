@@ -327,14 +327,12 @@ def _youtube_first_result(query: str) -> dict[str, Any] | None:
     if not query:
         return None
 
-    # Cookies из настроек YouTube-загрузчика (если PyQt/QSettings доступны).
+    # Общий cookies.txt ищется в каталоге данных и музыкальной папке.
     cookies_path = None
-    cookies_browser = None
     try:
-        from youtube_worker import _cookies_from_browser, _find_cookies_file
+        from cookies_store import find_cookies_file
 
-        cookies_path = _find_cookies_file()
-        cookies_browser = _cookies_from_browser()
+        cookies_path = find_cookies_file()
     except Exception:
         pass
 
@@ -343,7 +341,6 @@ def _youtube_first_result(query: str) -> dict[str, Any] | None:
             query,
             limit=1,
             cookies_path=cookies_path,
-            cookies_from_browser=cookies_browser,
         )
     except Exception as exc:
         print(f"[youtube] search failed: {format_error(exc)}")

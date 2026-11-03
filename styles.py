@@ -168,10 +168,8 @@ BASE_QSS = """
 #profileBackButton,
 #profileNickname,
 #profileStatusLabel,
-#profileAuthButton,
 #profileDescription,
 #playlistCard,
-#remotePlaylistCard,
 #overlayLyricsView,
 #overlayCloseButton,
 #karaokeView,
@@ -336,10 +334,20 @@ QTextEdit, QTextBrowser {
 /* ------------------------------------------------------------------
    Spotify-like glass surface, pill search and hover-only scrollbars.
    ------------------------------------------------------------------ */
-/* Статичная 1 px рамка вместо QGraphicsDropShadowEffect. */
+/* Окно безрамочное и прозрачное; видимую поверхность рисует mainSurface.
+   8 px внутреннего отступа (MainWindow) не даёт детям заходить в углы. */
+QMainWindow#mainWindow {
+    background: transparent;
+    border: none;
+}
 QWidget#mainSurface {
     background-color: palette(window);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 18px;
+}
+QWidget#mainSurface[windowMaximized="true"] {
+    border: none;
+    border-radius: 0px;
 }
 
 #playerBar, #customTitleBar {
@@ -440,6 +448,113 @@ def available_themes():
     return sorted(path.stem for path in THEMES_DIR.glob("*.qss"))
 
 
+# ------------------------------------------------------------------
+# Glassmorphism layer
+# ------------------------------------------------------------------
+# Qt QSS не умеет настоящий CSS backdrop-filter. Вместо размытия фона
+# используем полупрозрачные слои, тонкую обводку и существующую тень QMenu;
+# текст при этом остаётся полностью контрастным.
+_GLASS_QSS = """
+/* Парящие стеклянные меню (ПКМ, трей). */
+QMenu {
+    background-color: %(menu_bg)s;
+    color: %(text)s;
+    border: 1px solid %(border)s;
+    border-radius: 12px;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 7px 26px 7px 24px;
+    background: transparent;
+    border-radius: 7px;
+}
+QMenu::item:selected {
+    background-color: %(hover)s;
+}
+QMenu::separator {
+    height: 1px;
+    background: %(border_soft)s;
+    margin: 5px 8px;
+}
+
+/* Тултипы — та же капсула, чуть плотнее для читаемости. */
+QToolTip {
+    background-color: %(tooltip_bg)s;
+    color: %(text)s;
+    border: 1px solid %(tooltip_border)s;
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+/* Страницы настроек и профиля — стеклянные капсулы внутри вкладки. */
+QWidget#settingsPage, QWidget#profilePage {
+    background-color: %(page_bg)s;
+    border: 1px solid %(border_soft)s;
+    border-radius: 14px;
+}
+
+/* Левая панель настроек — лёгкое стекло, не спорит с контентом. */
+QListWidget#settingsNav {
+    background-color: %(sidebar_bg)s;
+    border: 1px solid %(border_soft)s;
+    border-radius: 14px;
+    padding: 8px;
+}
+
+/* Next in queue — отдельная стеклянная капсула в тулбаре. */
+QWidget#nextTrackIsland {
+    background-color: %(island_bg)s;
+    border: 1px solid %(border)s;
+    border-radius: 10px;
+}
+"""
+
+
+def _rgba_color(color, alpha):
+    """QColor → строка rgba() для QSS."""
+    return (
+        f"rgba({color.red()}, {color.green()}, {color.blue()}, "
+        f"{max(0.0, min(1.0, alpha)):.2f})"
+    )
+
+
+def _glass_tint(theme_name, mix, alpha):
+    """Смешивает фон темы с белым и добавляет прозрачность."""
+    background = QColor(theme_background(theme_name))
+    if not background.isValid():
+        background = QColor("#121212")
+    tint = _mix_color(background, QColor("#ffffff"), mix)
+    return _rgba_color(tint, alpha)
+
+
+def glass_qss(theme_name):
+    """Возвращает QSS стеклянных слоёв для выбранной темы."""
+    dark = is_dark_theme(theme_name)
+    text = QColor(theme_text(theme_name))
+    if not text.isValid():
+        text = QColor("#ffffff" if dark else "#2E3440")
+    accent = QColor(theme_accent(theme_name))
+    border = "rgba(255, 255, 255, 0.14)" if dark else "rgba(46, 52, 64, 0.14)"
+    border_soft = (
+        "rgba(255, 255, 255, 0.09)" if dark else "rgba(46, 52, 64, 0.09)"
+    )
+    hover = (
+        "rgba(255, 255, 255, 0.11)" if dark else "rgba(46, 52, 64, 0.08)"
+    )
+    return _GLASS_QSS % {
+        "menu_bg": _glass_tint(theme_name, 0.10 if dark else 0.70, 0.84),
+        "tooltip_bg": _glass_tint(theme_name, 0.06 if dark else 0.55, 0.85),
+        "sidebar_bg": _glass_tint(theme_name, 0.05 if dark else 0.45, 0.72),
+        "island_bg": _glass_tint(theme_name, 0.12 if dark else 0.62, 0.76),
+        "page_bg": _glass_tint(theme_name, 0.035 if dark else 0.45, 0.70),
+        "tooltip_border": _rgba_color(accent, 0.45),
+        "border": border,
+        "border_soft": border_soft,
+        "hover": hover,
+        "text": text.name(),
+    }
+
+
 _URL_RE = re.compile(r"""url\(\s*([\"']?)([^)\"']+)\1\s*\)""")
 
 
@@ -479,7 +594,11 @@ def load_theme(theme_name, app=None):
     перебивает её и вокруг панелей снова появляются синие рамки.
     """
     theme_qss = load_theme_qss(theme_name)
-    qss = theme_qss + "\n" + BASE_QSS if theme_qss else BASE_QSS
+    qss = (
+        theme_qss + "\n" + BASE_QSS + "\n" + glass_qss(theme_name)
+        if theme_qss
+        else BASE_QSS + "\n" + glass_qss(theme_name)
+    )
     if app is None:
         app = QApplication.instance()
     if app is not None:

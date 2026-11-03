@@ -17,7 +17,6 @@
 """Окно настроек приложения (вкладки: General, Appearance, YouTube, About)."""
 
 import shutil
-from pathlib import Path
 
 from PyQt5.QtCore import QSettings, QSize, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -27,7 +26,6 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -38,7 +36,6 @@ from dialogs import CustomConfirmDialog, _DimmedDialog, colored_icon
 from paths import CACHE_DIR, DATA_DIR
 from styles import is_dark_theme
 from translations import tr
-from ui_common import get_open_file_name
 
 COVERS_DIR = CACHE_DIR / "covers"
 PLAYLIST_COVERS_DIR = DATA_DIR / "playlist_covers"
@@ -135,42 +132,13 @@ class SettingsDialog(_DimmedDialog):
     def _build_youtube_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-
-        layout.addWidget(QLabel(tr("Path to cookies.txt (used for YouTube):", self._lang())))
-
-        row = QHBoxLayout()
-        self.cookies_edit = QLineEdit()
-        self.cookies_edit.setReadOnly(True)
-        self.cookies_edit.setPlaceholderText(tr("No file selected", self._lang()))
-
-        self.browse_button = QPushButton(tr("Browse...", self._lang()))
-        self.browse_button.setIcon(colored_icon("show-folder-with-music.svg"))
-        self.browse_button.setAutoDefault(False)
-        self.browse_button.clicked.connect(self._on_browse_cookies)
-
-        row.addWidget(self.cookies_edit, 1)
-        row.addWidget(self.browse_button)
-        layout.addLayout(row)
-
         layout.addWidget(QLabel(tr(
-            "Cookies from browser (used for YouTube):", self._lang()
+            "OctoBeat reads cookies.txt automatically from the app data "
+            "folder or the music folder. Import it from Settings → YouTube "
+            "in the main window.",
+            self._lang(),
         )))
-        self.browser_combo = QComboBox()
-        for label, value in (
-            (tr("Do not use browser cookies", self._lang()), ""),
-            ("Firefox", "firefox"),
-            ("Google Chrome", "chrome"),
-            ("Chromium", "chromium"),
-            ("Brave", "brave"),
-            ("Microsoft Edge", "edge"),
-            ("Opera", "opera"),
-            ("Vivaldi", "vivaldi"),
-            ("Safari", "safari"),
-        ):
-            self.browser_combo.addItem(label, value)
-        layout.addWidget(self.browser_combo)
         layout.addStretch()
-
         return tab
 
     def _build_about_tab(self):
@@ -216,21 +184,10 @@ class SettingsDialog(_DimmedDialog):
         index = self.theme_combo.findData(theme)
         self.theme_combo.setCurrentIndex(max(index, 0))
 
-        self.cookies_edit.setText(self.settings.value("youtube_cookies", "") or "")
-
-        browser = self.settings.value("youtube_browser", "") or ""
-        index = self.browser_combo.findData(browser)
-        self.browser_combo.setCurrentIndex(max(index, 0))
-
     def _save_settings(self):
         self.settings.setValue("language", self.language_combo.currentData())
         self.settings.setValue("zoom", self.zoom_combo.currentData())
         self.settings.setValue("theme", self.theme_combo.currentData())
-        self.settings.setValue("youtube_cookies", self.cookies_edit.text())
-        self.settings.setValue(
-            "youtube_browser", self.browser_combo.currentData() or ""
-        )
-
     def _on_save(self):
         self._save_settings()
         self.accept()
@@ -259,17 +216,6 @@ class SettingsDialog(_DimmedDialog):
             tr("Clear Cache", lang),
             tr("Cache cleared successfully.\nRemoved {n} item(s).", lang).format(n=removed),
         )
-
-    def _on_browse_cookies(self):
-        start_dir = self.cookies_edit.text() or str(Path.home())
-        path, _ = get_open_file_name(
-            self,
-            tr("Select cookies.txt", self._lang()),
-            start_dir,
-            "Cookies files (*.txt);;All files (*)",
-        )
-        if path:
-            self.cookies_edit.setText(path)
 
     def _on_report_bug(self):
         QDesktopServices.openUrl(QUrl(PROJECT_GITHUB_URL))

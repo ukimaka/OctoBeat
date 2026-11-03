@@ -42,7 +42,6 @@ class AppearanceManager(QObject):
         lyrics_panel,
         settings_page,
         profile_page,
-        friends_page,
         media_player,
         player_state_changed,
         parent_window=None,
@@ -57,7 +56,6 @@ class AppearanceManager(QObject):
         self.lyrics_panel = lyrics_panel
         self.settings_page = settings_page
         self.profile_page = profile_page
-        self.friends_page = friends_page
         self.media_player = media_player
         self.player_state_changed = player_state_changed
         self.parent_window = parent_window
@@ -97,9 +95,6 @@ class AppearanceManager(QObject):
 
         # Аватарка в углу вкладок.
         self.avatar_update_requested.emit()
-
-        # FriendsPage перекрашивает поиск и строки друзей.
-        self.friends_page.refresh_icons()
 
         # Панель библиотеки (тулбар, поиск, фильтр, Next in queue)
         self.library_tab.apply_theme()

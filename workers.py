@@ -26,11 +26,13 @@ import tempfile
 from pathlib import Path
 
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import APIC, ID3, ID3NoHeaderError
+from mutagen.id3 import ID3, ID3NoHeaderError
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
+import audio_tags
 import db
 import metadata
+from cookies_store import find_cookies_file
 from musicbrainz_client import (
     get_track_metadata_with_fallback,
     metadata_needs_refresh,
@@ -47,12 +49,13 @@ from path_utils import (
 from ytdlp_support import (
     DownloadCancelled,
     YtDlpUnavailable,
+    current_download_mode,
     download_audio,
     format_error,
     load_ytdlp,
 )
 
-AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav"}
+AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav", ".webm", ".opus"}
 
 MUSIC_FOLDER = MUSIC_DIR
 
@@ -558,19 +561,16 @@ class CsvImportWorker(QObject):
     # ------------------------------------------------------------------
     def _download(self, artist, track_name, output_base):
         """Download one search result through the yt-dlp Python API."""
-        from youtube_worker import _cookies_from_browser, _find_cookies_file
-
         query = f"{artist} - {track_name}"
-        cookies_path = _find_cookies_file(self.target_folder)
-        cookies_browser = _cookies_from_browser()
+        cookies_path = find_cookies_file(self.target_folder)
 
         try:
             final_path = download_audio(
                 f"ytsearch1:{query}",
                 str(self.target_folder / (output_base + ".%(ext)s")),
                 cookies_path=cookies_path,
-                cookies_from_browser=cookies_browser,
                 cancel_check=lambda: self._stopped,
+                mode=current_download_mode(),
             )
         except DownloadCancelled:
             return None
@@ -605,7 +605,10 @@ class CsvImportWorker(QObject):
         counter = 2
         while any(
             (self.target_folder / f"{base}{ext}").exists()
-            for ext in (".mp3", ".jpg", ".webp", ".png", ".part")
+            for ext in (
+                ".mp3", ".m4a", ".webm", ".opus",
+                ".jpg", ".webp", ".png", ".part",
+            )
         ):
             base = f"{safe} ({counter})"
             counter += 1
@@ -616,7 +619,7 @@ class CsvImportWorker(QObject):
     # ------------------------------------------------------------------
     @staticmethod
     def _embed_cover(final_path, cover_path=None):
-        """Вшивает обложку в файл. Кэшированные обложки не удаляет."""
+        """Вшивает обложку в MP3/M4A. Кэшированные обложки не удаляет."""
         base_path = os.path.splitext(final_path)[0]
         img_path = cover_path if cover_path and os.path.isfile(cover_path) else None
         if not img_path:
@@ -624,64 +627,37 @@ class CsvImportWorker(QObject):
         if not img_path:
             return False
 
-        try:
-            try:
-                audio = ID3(final_path)
-            except ID3NoHeaderError:
-                audio = ID3()
-
-            suffix = Path(img_path).suffix.lower()
-            if suffix == ".png":
-                mime = "image/png"
-            elif suffix == ".webp":
-                mime = "image/webp"
-            elif suffix == ".gif":
-                mime = "image/gif"
-            else:
-                mime = "image/jpeg"
-
-            with open(img_path, "rb") as img:
-                audio.add(APIC(
-                    encoding=3,
-                    mime=mime,
-                    type=3,
-                    desc="Cover",
-                    data=img.read(),
-                ))
-
-            audio.save(final_path, v2_version=3)
-
-            # Удаляем только временное превью yt-dlp рядом с mp3,
-            # а обложку из кэша MusicBrainz/YouTube оставляем.
-            if os.path.splitext(img_path)[0] == base_path:
-                os.remove(img_path)
-            print(f"[csv-import] Обложка вшита: {mime}")
-            return True
-        except Exception as e:
-            print(f"[csv-import] Ошибка вшивания обложки: {e}")
+        if not audio_tags.embed_cover(final_path, img_path):
+            print(
+                f"[csv-import] Обложка не вшита для "
+                f"{Path(final_path).suffix.lower()}"
+            )
             return False
+
+        # Удаляем только временное превью yt-dlp рядом с аудио,
+        # а обложку из кэша MusicBrainz/YouTube оставляем.
+        if os.path.splitext(img_path)[0] == base_path:
+            try:
+                os.remove(img_path)
+            except OSError:
+                pass
+        print(f"[csv-import] Обложка вшита: {Path(img_path).suffix.lower()}")
+        return True
 
     @staticmethod
     def _write_tags(final_path, artist, title, album=None):
-        try:
-            try:
-                audio = EasyID3(final_path)
-            except Exception:
-                audio = EasyID3()
-
-            if artist:
-                audio["artist"] = artist
-            if title:
-                audio["title"] = title
-            if album:
-                audio["album"] = album
-            audio.save(final_path, v2_version=3)
+        if not audio_tags.write_tags(
+            final_path, artist=artist, title=title, album=album
+        ):
             print(
-                f"[csv-import] Теги: Artist='{artist}', Title='{title}', "
-                f"Album='{album}'"
+                f"[csv-import] Не удалось записать теги для "
+                f"{Path(final_path).suffix.lower()}"
             )
-        except Exception as e:
-            print(f"[csv-import] Не удалось записать теги: {e}")
+            return
+        print(
+            f"[csv-import] Теги: Artist='{artist}', Title='{title}', "
+            f"Album='{album}'"
+        )
 
     # ------------------------------------------------------------------
     #  Остановка
@@ -713,6 +689,8 @@ class TrimWorker(QObject):
         ".flac": "flac",
         ".ogg": "ogg",
         ".m4a": "mp4",
+        ".webm": "webm",
+        ".opus": "opus",
         ".wav": "wav",
     }
 

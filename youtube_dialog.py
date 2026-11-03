@@ -426,6 +426,7 @@ class YoutubeDialog(_FramelessDialog):
     def __init__(self, parent=None, target_folder=None):
         self.settings = QSettings("MusicPlayer", "MusicPlayer")
         super().__init__(parent, tr("Download from YouTube", self._lang()))
+        self.setObjectName("youtubeDialog")
         self.target_folder = target_folder
         self.downloaded_path = None
 
@@ -477,6 +478,7 @@ class YoutubeDialog(_FramelessDialog):
         search_row.setSpacing(8)
 
         self.input = QLineEdit(self)
+        self.input.setObjectName("ytSearch")
         self.input.setPlaceholderText(tr("Search YouTube...", lang))
         self.input.returnPressed.connect(self._on_search)
 
@@ -494,6 +496,7 @@ class YoutubeDialog(_FramelessDialog):
 
         # --- Центр: результаты ---
         self.list = QListWidget(self)
+        self.list.setObjectName("ytResults")
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.setItemDelegate(SearchResultDelegate(self.list))
         self.list.setUniformItemSizes(True)

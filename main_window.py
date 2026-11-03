@@ -18,7 +18,7 @@ import os
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -39,7 +39,6 @@ from appearance import AppearanceManager
 from controller import PlayerController
 import playback_trace
 from dialogs import CustomConfirmDialog, DimmedProgressDialog
-from friends_ui import FriendsPage
 from hotkeys import AppEventFilter
 from import_flow import ImportFlow
 from library_tab import LibraryTab
@@ -52,12 +51,13 @@ from playlists_ui import PlaylistsPage
 from profile_ui import ProfilePage
 from settings_page import SettingsPage
 from title_bar import CustomTitleBar
+from tray_icon import TrayIcon, application_icon
 from track_actions import TrackActions
 from track_menu import TrackContextMenu
 from translations import tr
 from qt_diagnostics import note, wait_for_background
 from qt_lifecycle import retire_thread, widget_alive
-from ui_common import IconProvider, apply_menu_depth
+from ui_common import GlassTooltipFilter, IconProvider, apply_menu_depth
 from updater import UpdateChecker, UpdateDownloader, apply_update
 from vlc_backend import PlaybackState
 
@@ -89,8 +89,20 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("OctoBeat")
         self.setObjectName("mainWindow")
 
-        # Делаем окно безрамочным
+        # Безрамочное окно: скруглённые углы рисует mainSurface, а
+        # WA_TranslucentBackground делает область за скруглением
+        # по-настоящему прозрачной (виден рабочий стол, а не чёрный фон).
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        app_icon = application_icon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
+            app = QApplication.instance()
+            if app is not None:
+                app.setWindowIcon(app_icon)
+        self._window_margin = 8
+        self._quitting = False
         self.title_bar = CustomTitleBar(self)
         self.title_bar.setAttribute(Qt.WA_StyledBackground, True)
 
@@ -141,12 +153,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.library_tab, tr("Library", lang))
         self.playlists_page = PlaylistsPage(self)
         self.tabs.addTab(self.playlists_page, tr("Playlists", lang))
-        self.friends_page = FriendsPage(self)
-        self.tabs.addTab(self.friends_page, tr("Friends", lang))
         self.profile_page = ProfilePage(self)
-        self.tabs.addTab(self.profile_page, tr("Profile", lang))
         self.settings_page = SettingsPage(self)
-        # Settings не показывается в tab bar: доступ только из меню аватарки.
+        self.tabs.addTab(self.settings_page, tr("Settings", lang))
+        self.tabs.addTab(self.profile_page, tr("Profile", lang))
         self.track_actions = TrackActions(
             db=db,
             controller=self.controller,
@@ -155,20 +165,20 @@ class MainWindow(QMainWindow):
             settings=self.settings,
         )
 
-        self.tabs.removeTab(self.tabs.indexOf(self.friends_page))
         self.tabs.removeTab(self.tabs.indexOf(self.profile_page))
 
         self.account_menu = AccountMenu(
             self,
             self.settings,
             self.tabs,
-            self.friends_page,
             self.profile_page,
-            self.settings_page,
             self.icons,
         )
         self.avatar_button = self.account_menu.avatar_button
         self.tabs.setCornerWidget(self.avatar_button, Qt.TopRightCorner)
+        self.tray = TrayIcon(self, self.icons)
+        self.tray.open_requested.connect(self.show_from_tray)
+        self.tray.quit_requested.connect(self.quit_application)
         self.import_flow = ImportFlow(
             self,
             self.settings,
@@ -189,7 +199,6 @@ class MainWindow(QMainWindow):
             self.lyrics_panel,
             self.settings_page,
             self.profile_page,
-            self.friends_page,
             self.media_player,
             self._on_player_state_changed,
             parent_window=self,
@@ -199,16 +208,20 @@ class MainWindow(QMainWindow):
         )
 
         # --- Компоновка ---
-        # Никаких wrapper-виджетов и QGraphicsDropShadowEffect: только
-        # обычный central widget и лёгкая статичная рамка из QSS.
+        # mainSurface — непрозрачная скруглённая «капсула» приложения.
+        # 8 px внутреннего отступа не дают дочерним виджетам заходить в
+        # скруглённые углы; снаружи радиуса просвечивает рабочий стол.
         central = QWidget()
         central.setObjectName("mainSurface")
         central.setAttribute(Qt.WA_StyledBackground, True)
 
         root = QVBoxLayout(central)
-        # 1 px оставляем под QSS-рамку, чтобы дочерние виджеты её не
-        # перекрывали.
-        root.setContentsMargins(1, 1, 1, 1)
+        root.setContentsMargins(
+            self._window_margin,
+            self._window_margin,
+            self._window_margin,
+            self._window_margin,
+        )
         root.setSpacing(0)
 
         root.addWidget(self.title_bar)
@@ -217,20 +230,26 @@ class MainWindow(QMainWindow):
         root.addWidget(self.player_bar)
 
         self.setCentralWidget(central)
+        self._surface = central
+        self._root_layout = root
+        self._apply_window_frame_state()
 
         self._connect_signals()
 
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self.event_filter)
+            # Фильтр без QObject-родителя: QToolTip — отдельное top-level
+            # окно, и родитель-окно не должно уничтожать фильтр раньше него.
+            self._glass_tooltips = GlassTooltipFilter()
+            app.installEventFilter(self._glass_tooltips)
+            app.aboutToQuit.connect(self._remove_glass_tooltips)
 
         self._apply_ui_settings()
         self._sync_library_on_startup()
         self.library_tab.reload()
         self._reload_playlists()
         self._apply_settings()
-        self.account_menu.check_stored_token()
-        self.account_menu.start_timers()
 
         if start_mpris is not None:
             start_mpris(self.controller)
@@ -400,15 +419,6 @@ class MainWindow(QMainWindow):
             retire_thread(downloader, 2000)
         self._close_update_progress()
 
-    def _token(self) -> str | None:
-        return self.account_menu.token()
-
-    def _show_user_page(self, page) -> None:
-        self.account_menu.show_user_page(page)
-
-    def _logout(self, switch_to_library: bool = True) -> None:
-        self.account_menu.logout(switch_to_library)
-
     def _load_icon(self, filename, color=None):
         return self.icons.icon(filename, color)
 
@@ -459,9 +469,6 @@ class MainWindow(QMainWindow):
             pass
         self.playlists_page.back_button.clicked.connect(self._on_playlist_back)
         self.profile_page.playlist_clicked.connect(self._on_profile_playlist_clicked)
-        self.friends_page.profile_requested.connect(self._on_friend_profile_requested)
-        self.profile_page.back_requested.connect(self._on_profile_back)
-        self.profile_page.playlist_download_requested.connect(self.import_flow.download_remote_playlist)
         self.playlists_page.tracks_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.playlists_page.tracks_list.customContextMenuRequested.connect(
             lambda pos: self._on_track_context_menu(
@@ -527,6 +534,8 @@ class MainWindow(QMainWindow):
     def _apply_ui_settings(self):
         self.appearance.apply_ui_settings()
         self.is_dark_theme = self.appearance.is_dark_theme
+        if hasattr(self, "tray"):
+            self.tray.refresh_menu()
         # Делегаты кэшируют тему: без явного флага текст остаётся в цветах
         # предыдущей темы (например, чёрным на Dracula).
         for page in (self.library_tab, self.playlists_page):
@@ -547,10 +556,6 @@ class MainWindow(QMainWindow):
         if widget is getattr(self, "profile_page", None):
             self._flush_listening_time()
             self.profile_page.reload_stats()
-        elif widget is getattr(self, "friends_page", None):
-            self.friends_page.refresh()
-        elif widget is getattr(self, "settings_page", None):
-            self.settings_page.refresh_auth_state()
 
     def _apply_icons(self):
         self.appearance.apply_icons()
@@ -561,13 +566,86 @@ class MainWindow(QMainWindow):
         self.player_bar.set_repeat_mode(self.controller.repeat_mode)
         self.player_bar.set_shuffle(self.controller.shuffle)
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._apply_window_frame_state()
+
+    def _apply_window_frame_state(self):
+        """Убирает прозрачную рамку и скругления у развёрнутого окна."""
+        surface = getattr(self, "_surface", None)
+        layout = getattr(self, "_root_layout", None)
+        if surface is None or layout is None:
+            return
+        maximized = self.isMaximized() or self.isFullScreen()
+        margin = 0 if maximized else self._window_margin
+        layout.setContentsMargins(margin, margin, margin, margin)
+        surface.setProperty("windowMaximized", maximized)
+        style = surface.style()
+        style.unpolish(surface)
+        style.polish(surface)
+        surface.update()
+
+    # ------------------------------------------------------------------
+    #  Трей / завершение приложения
+    # ------------------------------------------------------------------
+    def show_from_tray(self):
+        """Возвращает окно из трея или с панели задач."""
+        if self._quitting:
+            return
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _remove_glass_tooltips(self):
+        """Снимает глобальный фильтр QToolTip перед разрушением QApplication."""
+        app = QApplication.instance()
+        filter_obj = getattr(self, "_glass_tooltips", None)
+        if app is not None and filter_obj is not None:
+            app.removeEventFilter(filter_obj)
+        self._glass_tooltips = None
+
+    def quit_application(self):
+        """Полный выход: снять иконку трея, закрыть окно и остановить цикл."""
+        if self._quitting:
+            return
+        self._quitting = True
+        tray = getattr(self, "tray", None)
+        if tray is not None:
+            tray.hide()
+        self.close()
+        self._remove_glass_tooltips()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
     def closeEvent(self, event):
+        # Крестик не завершает приложение: при доступном трее окно
+        # скрывается, а без трея — сворачивается в панель задач.
+        # Реальный выход идёт через quit_application().
+        if not self._quitting and not self._shutting_down:
+            tray = getattr(self, "tray", None)
+            if tray is not None and tray.available:
+                self.hide()
+                note("main window close: hidden to system tray")
+            else:
+                self.showMinimized()
+                note("main window close: tray unavailable, minimized")
+            event.ignore()
+            return
+
         # Повторный closeEvent не должен заново запускать синхронизацию и
         # дёргать уже остановленные QThread.
         if self._shutting_down:
             event.accept()
             return
         self._shutting_down = True
+        tray = getattr(self, "tray", None)
+        if tray is not None:
+            tray.hide()
         note("main window close: shutdown begin")
 
         c = self.controller
@@ -582,11 +660,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "import_flow"):
             self.import_flow.shutdown()
         if hasattr(self, "profile_page"):
-            self.profile_page.sync_stats_to_server()
             self.profile_page.shutdown()
-        if hasattr(self, "friends_page"):
-            self.friends_page.shutdown()
-        self.account_menu.shutdown()
         self.lyrics_manager.shutdown()
         if stop_mpris is not None:
             stop_mpris(c)
@@ -706,7 +780,9 @@ class MainWindow(QMainWindow):
             return
         clicked_id = self._item_id(item)
         ids = self.library_tab.library_ids()
-        self.controller.play_from_list(ids, clicked_id, "library", tr("Library", lang), None)
+        self.controller.play_track_from_list(
+            ids, clicked_id, "library", tr("Library", lang), None
+        )
 
     def _on_random_play(self):
         # Random работает только по текущей папке загрузок — так же, как
@@ -829,8 +905,7 @@ class MainWindow(QMainWindow):
         menu.exec_at(pos)
 
     def _on_settings_clicked(self):
-        self.account_menu.show_user_page(self.settings_page)
-        self.settings_page.refresh_auth_state()
+        self.tabs.setCurrentWidget(self.settings_page)
 
     def _on_profile_playlist_clicked(self, playlist_id):
         self.tabs.setCurrentWidget(self.playlists_page)
@@ -846,13 +921,6 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.profile_page)
         else:
             self.playlists_page._go_back()
-
-    def _on_friend_profile_requested(self, user_id: int) -> None:
-        self._show_user_page(self.profile_page)
-        self.profile_page.load_friend_profile(user_id)
-
-    def _on_profile_back(self) -> None:
-        self.profile_page.show_own_profile()
 
     def _reload_playlists(self):
         self.playlists_page.reload()
@@ -877,7 +945,9 @@ class MainWindow(QMainWindow):
             return
         pl = db.get_playlist_by_id(playlist_id)
         pl_name = pl["name"] if pl else "Playlist"
-        self.controller.play_from_list(ids, track_id, "playlist", pl_name, playlist_id)
+        self.controller.play_track_from_list(
+            ids, track_id, "playlist", pl_name, playlist_id
+        )
 
     def _on_playlist_deleted(self, playlist_id):
         c = self.controller

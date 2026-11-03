@@ -83,6 +83,10 @@ def _artist_credit(recording: dict[str, Any]) -> str:
 
     parts: list[str] = []
     for credit in credits:
+        if isinstance(credit, str):
+            # MusicBrainz returns joinphrases as bare strings in the array
+            parts.append(credit)
+            continue
         if not isinstance(credit, dict):
             continue
         name = credit.get("name")
@@ -224,13 +228,20 @@ def _musicbrainz_search(
     artist: str,
     title: str,
     require_artist: bool,
+    strict: bool = True,
 ) -> dict[str, Any] | None:
+    """Ищет recording в MusicBrainz.
+
+    ``strict=True`` подставляет точные значения в Lucene-запрос; при
+    ``strict=False`` MusicBrainz использует более мягкий синтаксис, но
+    поле ``artist`` всё равно остаётся в запросе.
+    """
     if not _MUSICBRAINZ_READY or musicbrainzngs is None:
         return None
 
     kwargs: dict[str, Any] = {
         "recording": title,
-        "strict": True,
+        "strict": strict,
         "limit": SEARCH_LIMIT,
     }
     if artist:
@@ -255,32 +266,51 @@ def _musicbrainz_search(
 def search_musicbrainz(artist: str, title: str) -> dict[str, Any] | None:
     """Ищет трек в MusicBrainz и возвращает нормализованные метаданные.
 
-    ``strict=True`` заставляет MusicBrainz искать точные совпадения, что
-    заметно снижает шанс получить кавер вместо оригинала. Если поиск с
-    исполнителем ничего не дал, делается одна попытка только по названию.
+    Сначала ищет строго (strict) по названию И исполнителю.
+    Если ничего не нашло — повторяет с strict=False, но всё ещё
+    передавая artist, чтобы не терять контекст исполнителя.
+    Только если artist пуст — ищет по названию.
     """
     clean_artist = normalize_artist_name(artist)
     clean_title = normalize_track_query(title)
     if not clean_title:
         return None
 
-    try:
-        result = _musicbrainz_search(
-            clean_artist,
-            clean_title,
-            require_artist=bool(clean_artist),
-        )
-        if result is not None:
-            return result
-    except Exception as exc:
-        print(
-            f"[musicbrainz] search failed for "
-            f"{clean_artist!r} / {clean_title!r}: {exc}"
-        )
-        return None
-
-    # Иногда исполнитель в тегах написан иначе (транслитерация, feat. и т.п.).
+    # 1. Strict search с artist (если есть)
     if clean_artist:
+        try:
+            result = _musicbrainz_search(
+                clean_artist,
+                clean_title,
+                require_artist=True,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            print(
+                f"[musicbrainz] strict search failed for "
+                f"{clean_artist!r} / {clean_title!r}: {exc}"
+            )
+
+    # 2. Relaxed search с artist (если есть) — не strict, но artist передаём
+    if clean_artist:
+        try:
+            result = _musicbrainz_search(
+                clean_artist,
+                clean_title,
+                require_artist=True,
+                strict=False,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            print(
+                f"[musicbrainz] relaxed search failed for "
+                f"{clean_artist!r} / {clean_title!r}: {exc}"
+            )
+
+    # 3. Title-only только если artist пуст/неизвестен
+    if not clean_artist:
         try:
             return _musicbrainz_search(
                 "",

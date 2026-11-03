@@ -44,6 +44,7 @@ from qt_diagnostics import (
     wait_for_background,
 )
 from styles import ensure_preset_themes, load_theme
+from ui_common import install_tooltip_delay
 
 _interrupted = False
 
@@ -84,7 +85,11 @@ def _install_signal_handlers(app, window):
             except RuntimeError:
                 pass
         try:
-            window.close()
+            quit_application = getattr(window, "quit_application", None)
+            if callable(quit_application):
+                quit_application()
+            else:
+                window.close()
         except RuntimeError:
             pass
         app.quit()
@@ -157,6 +162,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    install_tooltip_delay(app, 1000)
     # Ограничиваем глобальный кэш обложек: 8 МБ достаточно для списков,
     # но не позволяет Qt держать десятки мегабайт растров «на всякий случай».
     QPixmapCache.setCacheLimit(8 * 1024)

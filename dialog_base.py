@@ -97,10 +97,30 @@ QTextEdit, QTextBrowser {
     selection-color: @ACCENT_TEXT@;
 }
 #cdRoot {
-    background-color: @BG@;
-    border: none;
+    background-color: @GLASS_BG@;
+    border: 1px solid @GLASS_BORDER@;
     outline: none;
-    border-radius: 12px;
+    border-radius: 14px;
+}
+/* Контент внутри капсулы прозрачный: стекло видно между контролами.
+   У полей ввода, списков и кнопок свои фоны из правил ниже. */
+#cdRoot QWidget {
+    background-color: transparent;
+}
+/* YouTube: поле поиска и список результатов остаются читаемыми, но
+   просвечивают фоном диалога. */
+QLineEdit#ytSearch {
+    background-color: @GLASS_FIELD@;
+    border: 1px solid @GLASS_BORDER@;
+    border-radius: 8px;
+    color: @TEXT@;
+    padding: 8px;
+}
+QListWidget#ytResults {
+    background-color: @GLASS_FIELD@;
+    border: 1px solid @GLASS_BORDER@;
+    border-radius: 10px;
+    outline: none;
 }
 #cdTitle {
     color: @TEXT@;
@@ -226,8 +246,16 @@ def _custom_dialog_qss(palette):
     # Поля делаем чуть отличными от фона окна, иначе они «сливаются».
     field = _mix_color(window, text, 0.07)
 
+    dark = window.lightness() < 128
+    glass_tint = _mix_color(
+        window, QColor("#ffffff"), 0.08 if dark else 0.65
+    )
+    glass_border = QColor("#ffffff") if dark else QColor("#2e3440")
     tokens = {
         "@BG@": window.name(),
+        "@GLASS_BG@": _rgba(glass_tint, 0.78),
+        "@GLASS_BORDER@": _rgba(glass_border, 0.14),
+        "@GLASS_FIELD@": _rgba(_mix_color(window, text, 0.10), 0.55),
         "@TEXT@": text.name(),
         "@TEXT_DIM@": _rgba(text, 0.85),
         "@MUTED@": _rgba(text, 0.55),
