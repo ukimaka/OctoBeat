@@ -1,6 +1,6 @@
 <div align="center">
   
-<img src="assets/logo.png" alt="OctoBeat logo" width="140" height="140">
+<img src="assets/screenshots/logo.png" alt="OctoBeat logo" width="140" height="140">
 
 # OctoBeat
 
