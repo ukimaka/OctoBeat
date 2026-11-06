@@ -267,16 +267,19 @@ def cached_cover(path, width, height, version=0):
 
 
 SOURCE_BADGE_LABELS = {
+    "somedl": "S",
     "musicbrainz": "M",
     "youtube": "Y",
     "fallback": "F",
 }
 SOURCE_BADGE_COLORS = {
+    "somedl": QColor("#2e7d32"),
     "musicbrainz": QColor("#5151ab"),
     "youtube": QColor("#c62828"),
     "fallback": QColor("#6d6d6d"),
 }
 SOURCE_BADGE_NAMES = {
+    "somedl": "SomeDL",
     "musicbrainz": "MusicBrainz",
     "youtube": "YouTube",
     "fallback": "filename / fallback",

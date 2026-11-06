@@ -17,6 +17,7 @@
 """Вкладка «Профиль»: шапка, локальная статистика и любимый трек."""
 
 import shutil
+import tempfile
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -57,6 +58,10 @@ from translations import tr
 from qt_diagnostics import note, track_thread
 from qt_lifecycle import retire_thread
 from ui_common import get_open_file_name
+
+# Размер обложек в истории/топе треков профиля. Раньше 36 px выглядели
+# как сильно сжатые иконки; 56 px читаются как настоящие миниатюры.
+TRACK_COVER_SIZE = 56
 
 # Достижения: (ключ, иконка, пороги уровней, подпись для тултипа)
 ACHIEVEMENT_TIERS = ("Bronze", "Silver", "Gold", "Diamond")
@@ -120,7 +125,13 @@ class _ClickableCard(QFrame):
 
 
 class CoverLoader(QThread):
-    """Ищет обложку: MusicBrainz/Cover Art Archive → YouTube (fallback)."""
+    """Локальный кэш обложки для профиля.
+
+    SomeDL уже вшивает обложку 544x544 в теги аудиофайла при скачивании,
+    поэтому отдельного поиска в MusicBrainz/YouTube больше не требуется.
+    Если обложка ещё не закэширована в профиле, копируем её из тегов
+    аудиофайла (встроенная обложка).
+    """
 
     # QImage можно создавать в фоновом потоке, QPixmap — только в GUI.
     loaded = pyqtSignal(int, QImage)   # track_id, обложка
@@ -132,6 +143,7 @@ class CoverLoader(QThread):
         parent=None,
         artist=None,
         title=None,
+        file_path=None,
     ):
         super().__init__(parent)
         track_thread(self, "cover-loader")
@@ -139,6 +151,7 @@ class CoverLoader(QThread):
         self.query = (query or "").strip()
         self.artist = (artist or "").strip()
         self.title = (title or "").strip()
+        self.file_path = (file_path or "").strip()
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -166,9 +179,9 @@ class CoverLoader(QThread):
                 return
 
         # Полноразмерная обложка — лишние мегабайты: в профиле она
-        # показывается всего 36×36. Уменьшаем до 144 px (запас под
-        # High-DPI). QImage безопасен в фоновом потоке; QPixmap создаст
-        # GUI-поток в слоте _on_cover_loaded().
+        # показывается миниатюрой (TRACK_COVER_SIZE). Уменьшаем до 144 px
+        # (запас под High-DPI). QImage безопасен в фоновом потоке; QPixmap
+        # создаст GUI-поток в слоте _on_cover_loaded().
         image = QImage(str(cover_file))
         if image.isNull():
             return
@@ -182,26 +195,28 @@ class CoverLoader(QThread):
         note(f"cover-loader done track={self.track_id}")
 
     def _find_cover(self):
-        """MusicBrainz → YouTube через общий пайплайн метаданных."""
-        from musicbrainz_client import get_track_metadata_with_fallback
+        """Встроенная обложка из тегов SomeDL (без сетевых запросов)."""
+        from pathlib import Path
 
-        title = self.title or self.query
-        if not title:
+        if not self.file_path or not Path(self.file_path).is_file():
             return ""
-        note(f"cover-loader metadata fetch track={self.track_id}")
+        # metadata.read_embedded_cover читает APIC/covr прямо из файла.
         try:
-            info = get_track_metadata_with_fallback(
-                self.artist,
-                title,
-            )
+            data = metadata.read_embedded_cover(self.file_path)
         except Exception as exc:
-            print(f"[cover] metadata lookup failed for {self.query!r}: {exc}")
+            print(f"[cover] embedded cover read failed: {exc}")
+            data = None
+        if not data:
+            return ""
+        # Сохраняем временно, чтобы скопировать в профиль.
+        tmp = Path(tempfile.gettempdir()) / f"octobeat_cover_{self.track_id}.jpg"
+        try:
+            tmp.write_bytes(data)
+            return str(tmp)
+        except OSError as exc:
+            print(f"[cover] cannot write temp cover: {exc}")
             return ""
 
-        cover_path = info.get("cover_path")
-        if cover_path and Path(str(cover_path)).is_file():
-            return str(cover_path)
-        return ""
 
 
 class ProfilePage(QWidget):
@@ -422,7 +437,7 @@ class ProfilePage(QWidget):
         row.setSpacing(10)
 
         cover = QLabel()
-        cover.setFixedSize(36, 36)
+        cover.setFixedSize(TRACK_COVER_SIZE, TRACK_COVER_SIZE)
         self._set_cover(
             cover,
             track_id,
@@ -459,15 +474,15 @@ class ProfilePage(QWidget):
     ):
         """Ставит локальную обложку или заглушку + подгружает её из сети."""
         if cover_path:
-            cover_label.setPixmap(_cover_pixmap(cover_path, 36))
+            cover_label.setPixmap(_cover_pixmap(cover_path, TRACK_COVER_SIZE))
             return
 
         cached = PROFILE_COVERS_DIR / f"{track_id}.jpg"
         if cached.exists() and cached.stat().st_size > 0:
-            cover_label.setPixmap(_cover_pixmap(str(cached), 36))
+            cover_label.setPixmap(_cover_pixmap(str(cached), TRACK_COVER_SIZE))
             return
 
-        cover_label.setPixmap(_cover_pixmap(None, 36))
+        cover_label.setPixmap(_cover_pixmap(None, TRACK_COVER_SIZE))
         self._cover_labels.setdefault(track_id, []).append(cover_label)
         self._start_cover_loader(
             track_id,
@@ -482,11 +497,15 @@ class ProfilePage(QWidget):
         loader = self._cover_loaders.get(track_id)
         if loader is not None and loader.isRunning():
             return
+        # Получаем путь к файлу из БД, чтобы прочитать встроенную обложку.
+        row = db.get_track_by_id(track_id)
+        file_path = row["file_path"] if row else ""
         loader = CoverLoader(
             track_id,
             query,
             artist=artist,
             title=title,
+            file_path=file_path,
         )
         loader.loaded.connect(self._on_cover_loaded)
         loader.finished.connect(
@@ -513,7 +532,7 @@ class ProfilePage(QWidget):
         labels = self._cover_labels.pop(track_id, [])
         for label in labels:
             try:
-                label.setPixmap(_cover_pixmap(pixmap, 36))
+                label.setPixmap(_cover_pixmap(pixmap, TRACK_COVER_SIZE))
             except RuntimeError:
                 # Виджет уже удалён (страница перерисована/закрыта).
                 pass

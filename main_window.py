@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 )
 
 import db
+import metadata
 import session
 import workers
 from account_menu import AccountMenu
@@ -433,6 +434,7 @@ class MainWindow(QMainWindow):
         self.track_actions.changed.connect(self.library_tab.reload)
         self.track_actions.changed.connect(self.playlists_page.refresh_tracks)
         self.track_actions.favorite_changed.connect(self.profile_page.reload_stats)
+        self.track_actions.lyrics_changed.connect(self.lyrics_manager.reload_track)
 
         self.library_tab.play_requested.connect(self._on_library_play_requested)
         self.library_tab.random_play_requested.connect(self._on_random_play)
@@ -753,6 +755,28 @@ class MainWindow(QMainWindow):
         if removed:
             print(f"[startup] missing tracks removed: {removed}")
 
+        # Старые записи WebM/M4A попали в БД с duration=NULL (mutagen не
+        # умеет WebM, у части M4A нет длины в заголовке). Дозаполняем их
+        # до отрисовки библиотеки, иначе исправленный metadata.py заметен
+        # только после ручного рескана.
+        filled = 0
+        for row in db.get_all_tracks():
+            if row["duration"]:
+                continue
+            path = row["file_path"]
+            if not path or not Path(path).is_file():
+                continue
+            try:
+                duration = metadata.read_metadata(path)["duration"]
+            except Exception as exc:
+                print(f"[startup] duration probe failed {path}: {exc}")
+                continue
+            if duration:
+                db.update_track_duration(row["id"], duration)
+                filled += 1
+        if filled:
+            print(f"[startup] durations filled: {filled}")
+
         download_dir = Path(
             self.settings.value("download_dir", str(MUSIC_FOLDER))
         )
@@ -893,6 +917,7 @@ class MainWindow(QMainWindow):
         menu.add_to_queue_requested.connect(self.track_actions.add_to_queue)
         menu.favorite_requested.connect(self.track_actions.set_favorite)
         menu.edit_metadata_requested.connect(self.track_actions.edit_metadata)
+        menu.edit_lyrics_requested.connect(self.track_actions.edit_lyrics)
         menu.change_cover_requested.connect(self.track_actions.change_cover)
         menu.trim_audio_requested.connect(self.track_actions.trim_audio)
         menu.remove_requested.connect(self.track_actions.remove)

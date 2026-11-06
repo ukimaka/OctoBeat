@@ -24,7 +24,6 @@ from PyQt5.QtGui import (
     QPainter,
     QPainterPath,
     QPalette,
-    QPixmap,
     QPen,
 )
 from PyQt5.QtWidgets import (
@@ -45,8 +44,14 @@ from dialog_base import (
     _mix_color,
     colored_pixmap,
 )
-from musicbrainz_client import get_cached_source_for_path
-from pixmap_utils import draw_centered, draw_cover, draw_source_badge
+from cover_provider import get_cached_source_for_path
+from pixmap_utils import (
+    cached_cover,
+    cover_cache_version,
+    draw_centered,
+    draw_cover,
+    draw_source_badge,
+)
 from translations import tr
 
 
@@ -159,7 +164,15 @@ class _BulkTrackDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipPath(clip)
         cover_path = data.get("cover_path")
-        pixmap = QPixmap(cover_path) if cover_path else QPixmap()
+        # QImageReader внутри cached_cover уменьшает обложку при декодировании
+        # и кэширует результат: полноразмерный QPixmap на каждой строке
+        # заставлял список дёргаться при движении мыши.
+        pixmap = cached_cover(
+            cover_path,
+            self.COVER_SIZE,
+            self.COVER_SIZE,
+            data.get("cover_version", 0),
+        )
         if not draw_cover(painter, cover_rect, pixmap):
             painter.fillRect(cover_rect, palette["cover_bg"])
             draw_centered(painter, cover_rect, self._note_pixmap(palette["note"]))
@@ -224,6 +237,10 @@ class _BulkListWidget(QListWidget):
 class BulkAddDialog(_FramelessDialog):
     """Безрамочный диалог массового добавления треков в плейлист."""
 
+    # Большой список с обложками: тень контейнера перерисовывается целиком
+    # на каждый hover и делает движение мыши заметно лагающим.
+    _ENABLE_SHADOW = False
+
     def __init__(self, parent=None):
         lang = _dialog_lang()
         super().__init__(parent, tr("Add Tracks", lang))
@@ -247,6 +264,8 @@ class BulkAddDialog(_FramelessDialog):
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setMouseTracking(True)
         self.list.viewport().setMouseTracking(True)
+        # Аналог QTreeView.setUniformRowHeights для QListWidget: все строки
+        # имеют фиксированную высоту, Qt не пересчитывает геометрию.
         self.list.setUniformItemSizes(True)
 
         for row in db.get_all_tracks():
@@ -259,6 +278,7 @@ class BulkAddDialog(_FramelessDialog):
                 "title": row["title"] or "Unknown Title",
                 "artist": row["artist"] or "Unknown Artist",
                 "cover_path": cover_path,
+                "cover_version": cover_cache_version(cover_path),
                 "metadata_source": source,
             })
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)

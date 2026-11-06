@@ -102,6 +102,19 @@ def parse_lrc(text):
     return lines
 
 
+def split_lyrics_text(text):
+    """Делит ручной текст на LRC и обычный вариант для БД.
+
+    Возвращает ``(synced, plain)``, ровно одно поле заполнено. Если в тексте
+    есть хотя бы один таймкод ``[mm:ss]``, он считается синхронизированным
+    и сохраняется в ``lyrics_synced``; иначе — в ``lyrics_plain``.
+    """
+    text = text or ""
+    if _LRC_TIME_RE.search(text):
+        return text, None
+    return None, text
+
+
 class LyricsManager(QObject):
     """Загружает текст, считает подсветку и управляет оверлеями."""
 
@@ -242,7 +255,7 @@ class LyricsManager(QObject):
         """Отпускает текущий воркер, не дожидаясь сети.
 
         ``quit()`` бесполезен для QThread с переопределённым ``run()``, а
-        ``wait()`` замораживал бы UI на всё время запроса к syncedlyrics.
+        ``wait()`` замораживал бы UI на всё время сетевого запроса к LRCLIB.
         Воркер сам проверит флаг отмены и не запишет/не отдаст результат.
         """
         worker = self._lyrics_worker
@@ -261,6 +274,14 @@ class LyricsManager(QObject):
         self._lyrics_attempted.add(track_id)
         if track_id != self._current_track_id:
             return
+        # Пока шёл запрос, пользователь мог сохранить свой текст вручную.
+        # Авто-результат в этом случае игнорируем полностью.
+        try:
+            if self.db.is_track_lyrics_manual(track_id):
+                playback_trace.log("lyrics.loaded.skip_manual", track=track_id)
+                return
+        except Exception as e:  # noqa: BLE001 — БД не должна ронять UI
+            print(f"[lyrics] manual check failed for track {track_id}: {e}")
         # Провайдеры могут ответить «нет текста» при сбое. Если в панели уже
         # показан сохранённый текст, не затираем его пустым ответом.
         if not synced and not plain and (self._lyrics_lines or self._lyrics_plain):
@@ -355,6 +376,30 @@ class LyricsManager(QObject):
     def refresh_highlight(self):
         """Пересчитывает подсветку для текущей позиции плеера."""
         self.on_position(self._position())
+
+    def reload_track(self, track_id):
+        """Перечитывает текст из БД (после ручного сохранения).
+
+        Если трек сейчас не играет, ничего не делаем: при переключении
+        ``set_track`` сам возьмёт свежие данные. Для текущего трека сразу
+        обновляем панель и оверлеи, не дожидаясь смены песни.
+        """
+        try:
+            track_id = int(track_id)
+        except (TypeError, ValueError):
+            return
+        if track_id != self._current_track_id:
+            return
+        # Если авто-загрузка ещё идёт, её результат больше не нужен:
+        # пользователь только что сохранил свой текст.
+        self._cancel_lyrics_worker()
+        self._lyrics_attempted.add(track_id)
+        synced, plain, _checked = self.db.get_track_lyrics(track_id)
+        playback_trace.log(
+            "lyrics.reload", track=track_id,
+            synced_len=len(synced or ""), plain_len=len(plain or ""),
+        )
+        self._render_lyrics(synced, plain)
 
     def adjust_offset(self, delta_ms):
         """Сдвигает подсветку текста вперёд/назад на delta_ms."""

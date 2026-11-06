@@ -34,6 +34,8 @@ class TrackContextMenu(QMenu):
     add_to_queue_requested = pyqtSignal(int)          # track_id
     favorite_requested = pyqtSignal(int)              # track_id
     edit_metadata_requested = pyqtSignal(int)         # track_id
+    # CHANGED: ручное добавление/редактирование текста песни
+    edit_lyrics_requested = pyqtSignal(int)           # track_id
     # CHANGED: запрос на смену обложки трека
     change_cover_requested = pyqtSignal(int)          # track_id
     # CHANGED: запрос на интерактивную обрезку аудио
@@ -178,6 +180,15 @@ class TrackContextMenu(QMenu):
             self.edit_metadata_requested.emit(tid)
         )
         edit_menu.addAction(fix_action)
+
+        # CHANGED: ручной текст песни — рядом с редактированием метаданных
+        lyrics_action = QAction(tr("Add / Edit Lyrics", lang), edit_menu)
+        lyrics_action.setIcon(self.icons.icon("lyrics.svg"))
+        lyrics_action.triggered.connect(
+            lambda checked=False, tid=self.track_id:
+            self.edit_lyrics_requested.emit(tid)
+        )
+        edit_menu.addAction(lyrics_action)
 
         # CHANGED: пункт "Change cover" сразу после редактирования названия
         cover_action = QAction(tr("Change cover", lang), edit_menu)

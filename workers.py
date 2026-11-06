@@ -25,18 +25,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, ID3NoHeaderError
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
-import audio_tags
 import db
 import metadata
+import somedl_integration
 from cookies_store import find_cookies_file
-from musicbrainz_client import (
-    get_track_metadata_with_fallback,
-    metadata_needs_refresh,
-)
 from paths import MUSIC_DIR
 from qt_diagnostics import note
 from path_utils import (
@@ -47,20 +42,13 @@ from path_utils import (
     unique_path,
 )
 from ytdlp_support import (
-    DownloadCancelled,
-    YtDlpUnavailable,
+    DOWNLOAD_MODE_MP3,
     current_download_mode,
-    download_audio,
-    format_error,
-    load_ytdlp,
 )
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".m4a", ".wav", ".webm", ".opus"}
 
 MUSIC_FOLDER = MUSIC_DIR
-
-# Небезопасные для файловой системы символы (+ '%' — служебный в yt-dlp)
-_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|%\x00-\x1f]')
 
 
 def find_audio_files(folder):
@@ -68,20 +56,16 @@ def find_audio_files(folder):
     folder = Path(folder)
     if not folder.is_dir():
         return []
+    # Чистим .jpg, оставшиеся от старых версий yt-dlp, до того как UI
+    # увидит их как пользовательские sidecar.
+    try:
+        metadata.cleanup_ytdlp_thumbnails(folder)
+    except Exception as exc:
+        print(f"[cleanup] thumbnail scan failed {folder}: {exc}")
     return [
         str(p) for p in folder.rglob("*")
         if p.is_file() and p.suffix.lower() in AUDIO_EXTS
     ]
-
-
-def find_sidecar_image(file_path):
-    """Ищет превью, скачанное yt-dlp рядом с аудиофайлом."""
-    base_path = os.path.splitext(str(file_path))[0]
-    for ext in (".jpg", ".webp", ".png"):
-        candidate = base_path + ext
-        if os.path.isfile(candidate):
-            return candidate
-    return None
 
 
 def get_mean_volume(path):
@@ -245,7 +229,35 @@ class RescanWorker(QObject):
             or QThread.currentThread().isInterruptionRequested()
         )
 
+    def _reset_cover_cache(self, track_id):
+        """Сбрасывает старую обложку, чтобы UI прочитал новую из тегов."""
+        for name in (f"{track_id}.jpg", f"{track_id}.cover.json"):
+            try:
+                path = metadata.COVERS_DIR / name
+                if path.exists():
+                    path.unlink()
+            except OSError as exc:
+                print(f"[rescan] cover cache reset failed {name}: {exc}")
+        try:
+            db.update_track_cover(track_id, None)
+        except Exception as exc:
+            print(f"[rescan] cover DB reset failed {track_id}: {exc}")
+
     def run(self):
+        # SomeDL Import обновляет теги и встроенные обложки на месте,
+        # не перекачивая аудио. Выполняем один раз на всю библиотеку.
+        if db.get_all_tracks() and not self._interrupted():
+            try:
+                note("rescan: somedl import start")
+                somedl_integration.update_library_metadata(
+                    MUSIC_FOLDER, cancel_check=self._interrupted
+                )
+                note("rescan: somedl import finished")
+            except somedl_integration.SomedlCancelled:
+                return
+            except Exception as exc:
+                print(f"[rescan] somedl import failed: {exc}")
+
         # Шаг 1: метаданные (быстро)
         meta_rows = db.get_all_tracks()
         meta_total = len(meta_rows)
@@ -255,34 +267,19 @@ class RescanWorker(QObject):
                 break
             try:
                 path = row["file_path"]
+                # Старые yt-dlp-превью удаляем до чтения обложки. SomeDL
+                # не создаёт .jpg рядом с музыкой, а пользовательские
+                # sidecar'ы этот метод не трогает.
+                try:
+                    metadata.cleanup_ytdlp_thumbnail(path)
+                except Exception as exc:
+                    print(f"[rescan] thumbnail cleanup failed {path}: {exc}")
+
                 current = metadata.read_metadata(path)
-                lookup_title = str(current["title"] or Path(path).stem)
-                lookup_artist = str(current["artist"] or "Unknown Artist")
+                artist = str(current["artist"] or "Unknown Artist")
+                clean_title = str(current["title"] or Path(path).stem)
 
-                # Пустые теги или YouTube-мусор в них — повод сходить в
-                # MusicBrainz (функция сама сделает YouTube-fallback).
-                info = None
-                if metadata_needs_refresh(lookup_artist, lookup_title):
-                    try:
-                        info = get_track_metadata_with_fallback(
-                            lookup_artist,
-                            lookup_title,
-                            file_path=path,
-                        )
-                    except Exception as e:
-                        print(f"[rescan] metadata lookup failed {path}: {e}")
-
-                if info:
-                    artist = info.get("artist") or lookup_artist
-                    clean_title = info.get("title") or lookup_title
-                    album = info.get("album") or current["album"]
-                else:
-                    artist, clean_title = metadata.clean_youtube_title(
-                        Path(path).stem
-                    )
-                    album = current["album"]
-
-                # При необходимости переименовываем файл.
+                # При необходимости переименовываем файл по свежим тегам.
                 new_path = path
                 if artist != "Unknown Artist" and clean_title:
                     ext = Path(path).suffix or ".mp3"
@@ -306,42 +303,22 @@ class RescanWorker(QObject):
                         # переименование безопасно и не трогает libVLC.
                         try:
                             os.rename(path, candidate)
-                            new_path = candidate
                         except Exception as e:
                             print(f"[rescan] rename failed {path}: {e}")
                             new_path = path
+                        else:
+                            new_path = candidate
+                            try:
+                                metadata.rename_sidecar_image(path, candidate)
+                            except Exception as e:
+                                print(f"[rescan] sidecar rename failed: {e}")
 
                 if new_path != path:
                     db.update_track_path(row["id"], new_path)
 
-                # Вшиваем обложку, найденную MusicBrainz/YouTube.
-                if info and info.get("cover_path"):
-                    CsvImportWorker._embed_cover(
-                        new_path, info["cover_path"]
-                    )
-                    # Сбрасываем старую закэшированную обложку, чтобы UI
-                    # перечитал её из файла.
-                    try:
-                        old_cover = metadata.COVERS_DIR / f"{row['id']}.jpg"
-                        if old_cover.exists():
-                            old_cover.unlink()
-                    except OSError as e:
-                        print(f"[rescan] cover cache reset failed: {e}")
-
-                # Записываем новые теги
-                if artist != "Unknown Artist":
-                    try:
-                        try:
-                            audio = EasyID3(new_path)
-                        except Exception:
-                            audio = EasyID3()
-                        audio["artist"] = artist
-                        audio["title"] = clean_title
-                        if album:
-                            audio["album"] = album
-                        audio.save(new_path, v2_version=3)
-                    except Exception as e:
-                        print(f"[rescan] tag write failed {new_path}: {e}")
+                # SomeDL только что вшил новую обложку. Старый кэш мог
+                # содержать YouTube-превью или .webp, поэтому его сбрасываем.
+                self._reset_cover_cache(row["id"])
 
                 md = metadata.read_metadata(new_path)
                 db.update_track_metadata(
@@ -442,12 +419,12 @@ class CsvImportWorker(QObject):
             self.finished.emit(0, 0)
             return
 
-        # Fail once with a clean message instead of failing every CSV row
-        # when yt-dlp is missing or broken.
-        try:
-            load_ytdlp()
-        except YtDlpUnavailable as exc:
-            self.error.emit(str(exc))
+        # Проверяем SomeDL один раз, чтобы не повторять одну и ту же
+        # ошибку для каждой строки CSV.
+        if not somedl_integration.somedl_available():
+            self.error.emit(
+                "SomeDL не установлен. Установите зависимость: pip install somedl"
+            )
             self.finished.emit(0, 0)
             return
 
@@ -473,58 +450,38 @@ class CsvImportWorker(QObject):
         self.finished.emit(added, failed)
 
     def _import_track(self, artist, track_name):
-        """Скачивает один трек, вшивает обложку/теги и добавляет его в БД.
+        """Скачивает трек через SomeDL и добавляет его в БД.
 
-        Возвращает путь к файлу или None, если скачать не удалось.
+        SomeDL сам скачивает аудио с YouTube, подтягивает метаданные и
+        вшивает обложку 544x544. Нам остаётся только добавить готовый файл
+        в библиотеку.
         """
-        output_base = self._unique_output_base(artist, track_name)
-        final_path = self._download(artist, track_name, output_base)
-        if not final_path:
+        try:
+            final_path = somedl_integration.download_track(
+                f"{artist} - {track_name}",
+                self.target_folder,
+                audio_format=(
+                    "mp3"
+                    if current_download_mode() == DOWNLOAD_MODE_MP3
+                    else "best"
+                ),
+                cookies_path=find_cookies_file(self.target_folder),
+                cancel_check=lambda: self._stopped,
+            )
+        except somedl_integration.SomedlCancelled:
+            return None
+        if self._stopped:
             return None
 
-        # --- Метаданные: MusicBrainz → YouTube → CSV ---
-        thumb_path = find_sidecar_image(final_path)
-        try:
-            info = get_track_metadata_with_fallback(
-                artist,
-                track_name,
-                file_path=final_path,
-                youtube_thumbnail_path=thumb_path,
-            )
-        except Exception as e:
-            print(f"[csv-import] metadata lookup failed: {e}")
-            info = {
-                "title": track_name,
-                "artist": artist,
-                "album": None,
-                "cover_path": thumb_path,
-            }
-
-        # --- Обложка: MusicBrainz/Cover Art Archive или превью YouTube ---
-        cover_path = info.get("cover_path") or thumb_path
-        self._embed_cover(final_path, cover_path)
-
-        # --- Теги: найденные метаданные либо значения из CSV ---
-        final_artist = info.get("artist") or artist
-        final_title = info.get("title") or track_name
-        final_album = info.get("album")
-        self._write_tags(
-            final_path,
-            final_artist,
-            final_title,
-            album=final_album,
-        )
-
-        # --- БД ---
         track_id = db.add_track(final_path)
         if track_id is not None:
             try:
                 md = metadata.read_metadata(final_path)
                 db.update_track_metadata(
                     track_id,
-                    title=md["title"] or final_title,
-                    artist=md["artist"] or final_artist,
-                    album=md["album"] or final_album,
+                    title=md["title"] or track_name,
+                    artist=md["artist"] or artist,
+                    album=md["album"],
                     duration=md["duration"],
                 )
             except Exception as e:
@@ -557,113 +514,10 @@ class CsvImportWorker(QObject):
         return rows
 
     # ------------------------------------------------------------------
-    #  Скачивание
-    # ------------------------------------------------------------------
-    def _download(self, artist, track_name, output_base):
-        """Download one search result through the yt-dlp Python API."""
-        query = f"{artist} - {track_name}"
-        cookies_path = find_cookies_file(self.target_folder)
-
-        try:
-            final_path = download_audio(
-                f"ytsearch1:{query}",
-                str(self.target_folder / (output_base + ".%(ext)s")),
-                cookies_path=cookies_path,
-                cancel_check=lambda: self._stopped,
-                mode=current_download_mode(),
-            )
-        except DownloadCancelled:
-            return None
-        except Exception as exc:
-            if self._stopped:
-                return None
-            raise RuntimeError(format_error(exc)) from exc
-
-        if self._stopped:
-            return None
-        if not (final_path and Path(final_path).exists()):
-            candidate = self.target_folder / (output_base + ".mp3")
-            if candidate.exists():
-                return str(candidate)
-            raise RuntimeError("yt-dlp завершился, но файл не найден")
-        return final_path
-
-    def _unique_output_base(self, artist, track_name):
-        """Безопасное уникальное имя файла без расширения."""
-        raw = f"{artist} - {track_name}"
-        safe = _UNSAFE_FILENAME_RE.sub("_", raw)
-        safe = re.sub(r"\s+", " ", safe).strip(" .")
-        if not safe:
-            safe = "track"
-        # Ограничиваем по байтам, а не символам: длинные кириллические
-        # названия иначе легко превышают лимит имени файла (255 байт).
-        safe = safe.encode("utf-8")[:180].decode("utf-8", "ignore").strip(" .")
-        if not safe:
-            safe = "track"
-
-        base = safe
-        counter = 2
-        while any(
-            (self.target_folder / f"{base}{ext}").exists()
-            for ext in (
-                ".mp3", ".m4a", ".webm", ".opus",
-                ".jpg", ".webp", ".png", ".part",
-            )
-        ):
-            base = f"{safe} ({counter})"
-            counter += 1
-        return base
-
-    # ------------------------------------------------------------------
-    #  Обложка и теги
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _embed_cover(final_path, cover_path=None):
-        """Вшивает обложку в MP3/M4A. Кэшированные обложки не удаляет."""
-        base_path = os.path.splitext(final_path)[0]
-        img_path = cover_path if cover_path and os.path.isfile(cover_path) else None
-        if not img_path:
-            img_path = find_sidecar_image(final_path)
-        if not img_path:
-            return False
-
-        if not audio_tags.embed_cover(final_path, img_path):
-            print(
-                f"[csv-import] Обложка не вшита для "
-                f"{Path(final_path).suffix.lower()}"
-            )
-            return False
-
-        # Удаляем только временное превью yt-dlp рядом с аудио,
-        # а обложку из кэша MusicBrainz/YouTube оставляем.
-        if os.path.splitext(img_path)[0] == base_path:
-            try:
-                os.remove(img_path)
-            except OSError:
-                pass
-        print(f"[csv-import] Обложка вшита: {Path(img_path).suffix.lower()}")
-        return True
-
-    @staticmethod
-    def _write_tags(final_path, artist, title, album=None):
-        if not audio_tags.write_tags(
-            final_path, artist=artist, title=title, album=album
-        ):
-            print(
-                f"[csv-import] Не удалось записать теги для "
-                f"{Path(final_path).suffix.lower()}"
-            )
-            return
-        print(
-            f"[csv-import] Теги: Artist='{artist}', Title='{title}', "
-            f"Album='{album}'"
-        )
-
-    # ------------------------------------------------------------------
     #  Остановка
     # ------------------------------------------------------------------
     def stop(self):
-        """Ask the current yt-dlp download to stop."""
+        """Просит SomeDL завершить текущее скачивание."""
         self._stopped = True
 
 

@@ -20,13 +20,27 @@ import os
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import QByteArray, QRectF, QSettings
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
+from PyQt5.QtCore import QByteArray, QRectF, QSettings, Qt
+from PyQt5.QtGui import (
+    QColor,
+    QIcon,
+    QImageReader,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PyQt5.QtSvg import QSvgRenderer
 
 from dialogs import colored_pixmap
 from paths import CACHE_DIR, DATA_DIR
-from pixmap_utils import draw_centered, draw_cover, new_pixmap, render_svg
+from pixmap_utils import (
+    device_pixel_ratio,
+    draw_centered,
+    draw_cover,
+    new_pixmap,
+    physical,
+    render_svg,
+)
 from styles import is_dark_theme
 
 PROFILE_COVERS_DIR = CACHE_DIR / "profile_covers"
@@ -73,10 +87,35 @@ def _cover_pixmap(source, size, radius=6):
     clip.addRoundedRect(QRectF(0, 0, size, size), radius, radius)
     painter.setClipPath(clip)
 
+    target = physical(size, device_pixel_ratio())
     if isinstance(source, QPixmap):
         pixmap = source
+    elif source:
+        # QImageReader декодирует JPEG/PNG сразу под нужный размер, а
+        # SmoothTransformation убирает «лесенку» на маленьких обложках.
+        reader = QImageReader(str(source))
+        reader.setDecideFormatFromContent(True)
+        reader.setAutoTransform(True)
+        source_size = reader.size()
+        if source_size.isValid() and not source_size.isEmpty():
+            ratio = max(
+                target / source_size.width(),
+                target / source_size.height(),
+            )
+            if ratio < 1.0:
+                reader.setScaledSize(source_size * ratio)
+        image = reader.read()
+        pixmap = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
     else:
-        pixmap = QPixmap(source) if source else QPixmap()
+        pixmap = QPixmap()
+
+    if not pixmap.isNull():
+        pixmap = pixmap.scaled(
+            target,
+            target,
+            Qt.KeepAspectRatioByExpanding,
+            Qt.SmoothTransformation,
+        )
     if not draw_cover(painter, QRectF(0, 0, size, size), pixmap):
         dark = _theme_is_dark()
         painter.fillRect(

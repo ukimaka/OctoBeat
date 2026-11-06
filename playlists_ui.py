@@ -20,7 +20,7 @@ import random
 import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import QRectF, QSettings, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QFont,
@@ -50,6 +50,7 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 import db
@@ -63,7 +64,7 @@ from dialogs import (
     colored_icon,
     colored_pixmap,
 )
-from musicbrainz_client import get_cached_source_for_path
+from cover_provider import get_cached_source_for_path
 from paths import DATA_DIR
 from pixmap_utils import (
     cover_cache_version,
@@ -88,6 +89,67 @@ from playlist_widgets import (
 )
 
 PLAYLIST_COVERS_DIR = DATA_DIR / "playlist_covers"
+
+# Тот же красный, что у иконки корзины (раньше задавался только в data()).
+_DANGER_COLOR = "#e05a4a"
+
+
+class _DangerMenuItem(QWidget):
+    """Строка QMenu с красным текстом (QAction не умеет красить текст)."""
+
+    triggered = pyqtSignal()
+
+    def __init__(self, icon, text, parent=None):
+        super().__init__(parent)
+        self._icon = icon
+        self._text = text
+        self._hover = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setFixedHeight(32)
+
+    def sizeHint(self):
+        metrics = QFontMetrics(self.font())
+        width = 24 + 16 + 10 + metrics.horizontalAdvance(self._text) + 26
+        return QSize(width, 32)
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if self._hover:
+            painter.fillRect(self.rect(), QColor(127, 127, 127, 40))
+        if not self._icon.isNull():
+            painter.drawPixmap(24, (self.height() - 16) // 2, self._icon)
+        text_x = 24 + 16 + 10
+        painter.setPen(QColor(_DANGER_COLOR))
+        painter.drawText(
+            QRectF(
+                text_x,
+                0,
+                max(0, self.width() - text_x - 26),
+                self.height(),
+            ),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            self._text,
+        )
+        painter.end()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.triggered.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class PlaylistsPage(QWidget):
@@ -453,17 +515,40 @@ class PlaylistsPage(QWidget):
         pid = data.get("id")
         if pid is None:
             return
+        lang = _lang()
+        icon_color = _icon_color()
         menu = QMenu(self)
-        play_act = menu.addAction(tr("Play", _lang()))
-        edit_act = menu.addAction(tr("Rename", _lang()))
-        del_act = menu.addAction(tr("Delete", _lang()))
+
+        play_act = menu.addAction(tr("Play", lang))
+        play_act.setIcon(colored_icon("play.svg", icon_color))
+        edit_act = menu.addAction(tr("Rename", lang))
+        edit_act.setIcon(colored_icon("pencil.svg", icon_color))
+        menu.addSeparator()
+
+        # Delete остаётся QWidgetAction: так текст действительно красный,
+        # а иконка и отступы совпадают с остальными пунктами меню.
+        danger_item = _DangerMenuItem(
+            colored_pixmap("trash.svg", 16, _DANGER_COLOR),
+            tr("Delete", lang),
+            menu,
+        )
+        danger_action = QWidgetAction(menu)
+        danger_action.setDefaultWidget(danger_item)
+
+        def _delete_from_menu(p=pid):
+            # Сначала закрываем меню, и только затем показываем диалог
+            # подтверждения — иначе QMenu остаётся поверх модального окна.
+            menu.close()
+            QTimer.singleShot(0, lambda: self._delete_playlist(p))
+
+        danger_item.triggered.connect(_delete_from_menu)
+        menu.addAction(danger_action)
+
         act = menu.exec_(global_pos)
         if act == play_act:
             self.play_playlist.emit(pid)
         elif act == edit_act:
             self._rename_playlist(pid)
-        elif act == del_act:
-            self._delete_playlist(pid)
 
     def _rename_playlist(self, playlist_id):
         row = db.get_playlist_by_id(playlist_id)

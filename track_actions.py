@@ -30,6 +30,7 @@ from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 from PyQt5.QtWidgets import QDialog
 
+import metadata
 from dialogs import CustomConfirmDialog, CustomInputDialog
 from paths import CACHE_DIR
 from path_utils import find_tool, paths_equal
@@ -42,6 +43,7 @@ class TrackActions(QObject):
 
     changed = pyqtSignal()
     favorite_changed = pyqtSignal()
+    lyrics_changed = pyqtSignal(int)  # track_id — текст сохранён вручную
 
     def __init__(
         self,
@@ -81,6 +83,9 @@ class TrackActions(QObject):
         cover_cache = CACHE_DIR / "covers" / f"{track_id}.jpg"
         if cover_cache.exists():
             cover_cache.unlink()
+        cover_marker = CACHE_DIR / "covers" / f"{track_id}.cover.json"
+        if cover_marker.exists():
+            cover_marker.unlink()
 
         self.changed.emit()
 
@@ -214,6 +219,10 @@ class TrackActions(QObject):
             else:
                 self.db.update_track_path(track_id, new_path)
                 renamed = True
+                try:
+                    metadata.rename_sidecar_image(old_path, new_path)
+                except Exception as e:
+                    print(f"[fix metadata] sidecar rename failed: {e}")
 
         # Записываем теги
         try:
@@ -246,6 +255,52 @@ class TrackActions(QObject):
                 media_player.set_media(new_path, loudness=loudness)
 
         self.changed.emit()
+
+    # CHANGED: ручное добавление/редактирование текста песни
+    def edit_lyrics(self, track_id):
+        """Открывает редактор текста и сохраняет результат в БД.
+
+        Сохранение помечает трек как ``lyrics_manual``, поэтому фоновый
+        авто-поиск больше не перезапишет текст пользователя.
+        """
+        row = self.db.get_track_by_id(track_id)
+        if row is None:
+            return
+
+        from lyrics_dialog import LyricsEditorDialog
+        from lyrics_manager import split_lyrics_text
+
+        synced, plain, _checked = self.db.get_track_lyrics(track_id)
+        # Обычно заполнено только одно поле, но если текст пришёл из старой
+        # версии с обоими — показываем синхронизированный вариант.
+        current_text = (synced or "").strip() or (plain or "")
+        file_path = row["file_path"] or ""
+        track_title = "{} - {}".format(
+            row["artist"] or "Unknown Artist",
+            row["title"] or Path(file_path).stem,
+        )
+
+        dialog = LyricsEditorDialog(
+            self.parent_widget, track_title=track_title, text=current_text
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        text = dialog.lyrics_text()
+        if not text.strip():
+            # Пустой текст — осознанная очистка: сохраняем и защищаем.
+            text = ""
+        synced_text, plain_text = split_lyrics_text(text)
+        self.db.save_track_lyrics_manual(track_id, synced_text, plain_text)
+        self.lyrics_changed.emit(track_id)
+        self.changed.emit()
+
+        lang = self._lang()
+        CustomConfirmDialog.information(
+            self.parent_widget,
+            tr("Success", lang),
+            tr("Lyrics saved", lang) if text else tr("Lyrics cleared", lang),
+        )
 
     # CHANGED: замена обложки трека (вшиваем APIC в ID3 и сбрасываем кэш)
     def change_cover(self, track_id):
@@ -292,6 +347,9 @@ class TrackActions(QObject):
             cover_cache = CACHE_DIR / "covers" / f"{track_id}.jpg"
             if cover_cache.exists():
                 cover_cache.unlink()
+            cover_marker = CACHE_DIR / "covers" / f"{track_id}.cover.json"
+            if cover_marker.exists():
+                cover_marker.unlink()
 
             # Сообщаем UI, что трек изменился
             self.changed.emit()

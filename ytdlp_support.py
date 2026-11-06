@@ -409,13 +409,10 @@ def _download_with_options(
         if filepath:
             captured["filepath"] = str(filepath)
 
-    postprocessors = [
-        {
-            "key": "FFmpegThumbnailsConvertor",
-            "format": "jpg",
-            "when": "before_dl",
-        },
-    ]
+    # Обложки скачивает только cover_provider и кладёт их в кэш приложения.
+    # yt-dlp не должен создавать .jpg рядом с аудио: иначе такие файлы
+    # выглядят как пользовательский sidecar и перебивают MusicBrainz.
+    postprocessors = []
     if mode == DOWNLOAD_MODE_MP3:
         postprocessors.append({
             "key": "FFmpegExtractAudio",
@@ -430,7 +427,8 @@ def _download_with_options(
             # Only the audio stream is requested: no video download at all.
             "format": "bestaudio/best",
             "outtmpl": str(outtmpl),
-            "writethumbnail": True,
+            # Ни превью, ни его конвертации: только аудио.
+            "writethumbnail": False,
             "postprocessors": postprocessors,
             "progress_hooks": [progress_hook],
             "postprocessor_hooks": [postprocessor_hook],

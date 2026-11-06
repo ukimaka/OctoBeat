@@ -209,6 +209,20 @@ def _configure_vlc_environment():
             )
         return
 
+    # Linux: если рядом с приложением нет собранного VLC, используем
+    # системные плагины. В onefile-сборке libVLC загружается, но без
+    # PYTHON_VLC_MODULE_PATH не находит модули и Instance() возвращает None.
+    if sys.platform.startswith("linux"):
+        if not os.environ.get("PYTHON_VLC_MODULE_PATH"):
+            for plugins in (
+                Path("/usr/lib/vlc/plugins"),
+                Path("/usr/lib64/vlc/plugins"),
+                Path("/usr/local/lib/vlc/plugins"),
+            ):
+                if plugins.is_dir():
+                    os.environ["PYTHON_VLC_MODULE_PATH"] = str(plugins)
+                    break
+
 
 def _load_vlc():
     """Lazily import python-vlc after configuring the DLL/plugin paths."""

@@ -51,11 +51,13 @@ def init_db():
                 album         TEXT,
                 duration      INTEGER,
                 loudness      REAL,
+                cover_path    TEXT,
                 folder_id     INTEGER REFERENCES folders(id) ON DELETE SET NULL,
                 created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 lyrics_synced TEXT,
                 lyrics_plain  TEXT,
-                lyrics_checked INTEGER DEFAULT 0
+                lyrics_checked INTEGER DEFAULT 0,
+                lyrics_manual INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS playlists (
@@ -100,6 +102,8 @@ def init_db():
         cols = [row[1] for row in conn.execute("PRAGMA table_info(tracks)").fetchall()]
         if "loudness" not in cols:
             conn.execute("ALTER TABLE tracks ADD COLUMN loudness REAL")
+        if "cover_path" not in cols:
+            conn.execute("ALTER TABLE tracks ADD COLUMN cover_path TEXT")
         if "folder_id" not in cols:
             conn.execute(
                 "ALTER TABLE tracks ADD COLUMN folder_id INTEGER "
@@ -122,6 +126,13 @@ def init_db():
                 "UPDATE tracks SET lyrics_checked = 1 "
                 "WHERE length(COALESCE(lyrics_synced, '')) > 0 "
                 "   OR length(COALESCE(lyrics_plain, '')) > 0"
+            )
+        # Миграция: флаг ручного текста. Он защищает введённый пользователем
+        # текст от перезаписи фоновым авто-поиском (в том числе если запрос
+        # к API уже был запущен в момент сохранения).
+        if "lyrics_manual" not in cols:
+            conn.execute(
+                "ALTER TABLE tracks ADD COLUMN lyrics_manual INTEGER DEFAULT 0"
             )
         # Миграция: дата добавления трека (для достижения «возраст»)
         if "created_at" not in cols:
@@ -244,7 +255,8 @@ def add_tracks_with_metadata(entries):
 def get_all_tracks():
     with get_connection() as conn:
         return conn.execute(
-            "SELECT id, file_path, title, artist, album, duration, loudness, folder_id "
+            "SELECT id, file_path, title, artist, album, duration, loudness, "
+            "cover_path, folder_id "
             "FROM tracks ORDER BY id"
         ).fetchall()
 
@@ -252,7 +264,8 @@ def get_all_tracks():
 def get_track_by_id(track_id):
     with get_connection() as conn:
         return conn.execute(
-            "SELECT id, file_path, title, artist, album, duration, loudness "
+            "SELECT id, file_path, title, artist, album, duration, loudness, "
+            "cover_path "
             "FROM tracks WHERE id = ?",
             (track_id,),
         ).fetchone()
@@ -265,7 +278,8 @@ def get_track_by_path(file_path):
     убедиться, что новый путь ещё не занят другим треком."""
     with get_connection() as conn:
         return conn.execute(
-            "SELECT id, file_path, title, artist, album, duration, loudness "
+            "SELECT id, file_path, title, artist, album, duration, loudness, "
+            "cover_path "
             "FROM tracks WHERE file_path = ?",
             (normalize_track_path(file_path),),
         ).fetchone()
@@ -295,6 +309,25 @@ def update_track_metadata(track_id, title, artist, album, duration):
         )
 
 
+def update_track_cover(track_id, cover_path):
+    """Привязывает найденную сетевую обложку к треку в SQLite."""
+    value = str(cover_path) if cover_path else None
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE tracks SET cover_path = ? WHERE id = ?",
+            (value, track_id),
+        )
+
+
+def update_track_duration(track_id, duration):
+    """Обновляет только длительность (backfill старых записей)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE tracks SET duration = ? WHERE id = ?",
+            (duration, track_id),
+        )
+
+
 def get_tracks_without_loudness():
     with get_connection() as conn:
         return conn.execute(
@@ -311,10 +344,12 @@ def update_track_loudness(track_id, loudness):
 
 
 def update_track_lyrics(track_id, synced, plain):
-    """Сохраняет найденный текст и помечает трек как проверенный.
+    """Сохраняет автоматически найденный текст и помечает трек проверенным.
 
     Вызывается только при успешном ответе провайдеров. Сетевые сбои сюда не
     доходят — тогда воркер ничего не пишет и попытка повторится позже.
+    Ручной текст (``lyrics_manual = 1``) не перезаписывается: воркер может
+    завершиться уже после того, как пользователь сохранил свои правки.
     """
     # closing() важен для воркера: соединение создаётся в фоновом потоке и
     # должно быть закрыто, иначе SQLite-файлы/дескрипторы копятся.
@@ -322,18 +357,45 @@ def update_track_lyrics(track_id, synced, plain):
         conn.execute(
             "UPDATE tracks "
             "SET lyrics_synced = ?, lyrics_plain = ?, lyrics_checked = 1 "
+            "WHERE id = ? AND COALESCE(lyrics_manual, 0) = 0",
+            (synced, plain, track_id),
+        )
+
+
+def save_track_lyrics_manual(track_id, synced, plain):
+    """Сохраняет текст, введённый или загруженный пользователем вручную.
+
+    Устанавливает ``lyrics_checked = 1`` и ``lyrics_manual = 1``: фоновый
+    авто-поиск больше никогда не тронет этот трек. Пустая строка — тоже
+    осознанное решение пользователя (очистка текста), поэтому она
+    сохраняется и защищается так же.
+    """
+    with closing(get_connection()) as conn, conn:
+        conn.execute(
+            "UPDATE tracks "
+            "SET lyrics_synced = ?, lyrics_plain = ?, "
+            "    lyrics_checked = 1, lyrics_manual = 1 "
             "WHERE id = ?",
             (synced, plain, track_id),
         )
 
 
+def is_track_lyrics_manual(track_id):
+    """True, если текст трека введён/загружен вручную."""
+    with closing(get_connection()) as conn:
+        row = conn.execute(
+            "SELECT lyrics_manual FROM tracks WHERE id = ?",
+            (track_id,),
+        ).fetchone()
+        return bool(row and row["lyrics_manual"])
+
+
 def get_track_lyrics(track_id):
     """Возвращает ``(synced, plain, checked)`` для трека.
 
-    ``checked`` = 1 означает, что текст уже успешно загружался (в том числе
-    подтверждённое «текста нет»). Если ``checked`` = 0, результат не
-    окончательный: прошлая попытка могла сорваться из-за сети, и загрузку
-    стоит повторить.
+    ``checked`` = 1 означает, что текст уже успешно загружался или был
+    сохранён вручную. Если ``checked`` = 0, результат не окончательный:
+    прошлая попытка могла сорваться из-за сети, и загрузку стоит повторить.
     """
     with closing(get_connection()) as conn:
         row = conn.execute(
@@ -387,7 +449,8 @@ def move_track_to_folder(track_id, folder_id):
 def get_tracks_in_folder(folder_id):
     with get_connection() as conn:
         return conn.execute(
-            "SELECT id, file_path, title, artist, album, duration, loudness, folder_id "
+            "SELECT id, file_path, title, artist, album, duration, loudness, "
+            "cover_path, folder_id "
             "FROM tracks WHERE folder_id = ? ORDER BY id",
             (folder_id,),
         ).fetchall()
@@ -504,7 +567,7 @@ def get_tracks_in_playlist(playlist_id):
     with get_connection() as conn:
         return conn.execute("""
             SELECT t.id, t.file_path, t.title, t.artist, t.album, t.duration, t.loudness,
-                   pt.added_at
+                   t.cover_path, pt.added_at
             FROM tracks t
             JOIN playlist_tracks pt ON pt.track_id = t.id
             WHERE pt.playlist_id = ?

@@ -94,6 +94,18 @@ TRANSLATIONS = {
         "Karaoke": "Karaoke",
         "Sync lyrics: -0.5s": "Sync lyrics: -0.5s",
         "Sync lyrics: +0.5s": "Sync lyrics: +0.5s",
+        "Add / Edit Lyrics": "Add / Edit Lyrics",
+        "Lyrics text": "Lyrics text",
+        "Load file": "Load file",
+        "Load lyrics file": "Load lyrics file",
+        "Loaded: {name}": "Loaded: {name}",
+        "Could not read lyrics file:\n{error}": "Could not read lyrics file:\n{error}",
+        "Lyrics saved": "Lyrics saved",
+        "Lyrics cleared": "Lyrics cleared",
+        "Paste lyrics here. LRC timecodes like [00:12.34] are supported; plain text is shown without highlighting.": (
+            "Paste lyrics here. LRC timecodes like [00:12.34] are supported; "
+            "plain text is shown without highlighting."
+        ),
         "Close": "Close",
 
         # Контекстные меню
@@ -356,6 +368,18 @@ TRANSLATIONS = {
         "Karaoke": "Караоке",
         "Sync lyrics: -0.5s": "Синхронизация текста: -0.5 с",
         "Sync lyrics: +0.5s": "Синхронизация текста: +0.5 с",
+        "Add / Edit Lyrics": "Добавить / изменить текст",
+        "Lyrics text": "Текст песни",
+        "Load file": "Загрузить файл",
+        "Load lyrics file": "Загрузить файл с текстом",
+        "Loaded: {name}": "Загружено: {name}",
+        "Could not read lyrics file:\n{error}": "Не удалось прочитать файл с текстом:\n{error}",
+        "Lyrics saved": "Текст сохранён",
+        "Lyrics cleared": "Текст очищен",
+        "Paste lyrics here. LRC timecodes like [00:12.34] are supported; plain text is shown without highlighting.": (
+            "Вставьте текст песни. Поддерживаются таймкоды LRC вида "
+            "[00:12.34]; обычный текст показывается без подсветки."
+        ),
         "Close": "Закрыть",
 
         # Контекстные меню

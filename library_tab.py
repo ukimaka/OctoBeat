@@ -36,7 +36,7 @@ import metadata
 from delegates import TrackDelegate
 from dialogs import CustomConfirmDialog, CustomInputDialog
 from library_tree import LibraryTreeWidget
-from musicbrainz_client import get_cached_source_for_path
+from cover_provider import get_cached_source_for_path
 from next_track_island import NextTrackIsland
 from path_utils import normalize_track_path
 from paths import MUSIC_DIR

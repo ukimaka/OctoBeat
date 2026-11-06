@@ -51,15 +51,15 @@ It is a personal project, and it is vibe-coded: I built it with the help of AI.
 
 **Getting music**
 
-- Search YouTube or paste a direct video link and download tracks from inside the app (it uses `yt-dlp`). Audio-only downloads use four parallel fragments where the stream supports them; the download speed is printed to the log in MB/s.
+- Search YouTube or paste a direct video link and download tracks from inside the app. Downloads go through [SomeDL](https://github.com/ChemistryGull/SomeDL), which fetches audio, cover art (544×544) and tags from YouTube Music, MusicBrainz, Genius and Deezer — no API tokens or login required. SomeDL embeds the cover and tags directly in the file, so nothing extra is saved next to your music.
 - Download format is selectable in Settings → YouTube: **Speed** keeps the native M4A/WebM stream without re-encoding, while **Compatibility** converts to MP3 320 kbps. M4A tags and the cover are written with `mutagen.mp4`.
-- Import a Spotify playlist: export it to CSV with [Exportify](https://exportify.net/), then load the file. OctoBeat finds the tracks, downloads them and adds tags.
-- Import files you already have.
-- Tags and covers come from [MusicBrainz](https://musicbrainz.org/) and the [Cover Art Archive](https://coverartarchive.org/). If they have nothing, OctoBeat uses the YouTube title and thumbnail.
+- Import a Spotify playlist: export it to CSV with [Exportify](https://exportify.net/), then load the file. OctoBeat finds the tracks, downloads them via SomeDL and adds tags.
+- Import files you already have. Use **Update track info** (rescan) to refresh tags and covers of your existing library through `somedl import`, without re-downloading audio.
+- Tags and covers are embedded in the audio file by SomeDL; OctoBeat reads them from the tags and caches them in SQLite. Covers are never saved next to your music; drop a same-name `.jpg` next to a track to override its cover.
 
 **Lyrics**
 
-- Synced lyrics, shown next to the player. They come from [syncedlyrics](https://github.com/moehmeni/syncedlyrics) and [LRCLIB](https://lrclib.net/).
+- Synced lyrics, shown next to the player. They come from [LRCLIB](https://lrclib.net/).
 - A full-screen karaoke mode with the current line highlighted.
 - If the lyrics are a bit early or late, move them by 0.5 seconds.
 
@@ -84,7 +84,7 @@ I develop and test OctoBeat on Linux so if you experience issues on Windows star
 For manual installation you need:
 
 - Python 3.10 or newer
-- ffmpeg (MP3 mode, thumbnail conversion and loudness measurement)
+- ffmpeg (MP3 mode and loudness measurement)
 - GStreamer plugins (on Linux, Qt plays audio through GStreamer)
 
 <details>

@@ -547,6 +547,10 @@ class _FramelessDialog(_DimmedDialog):
     """Общая обвязка безрамочных диалогов: тёмный фон, скругления, тень."""
 
     _NORMAL_MARGINS = (16, 16, 16, 16)
+    # Тень — QGraphicsDropShadowEffect: на больших списках она заставляет
+    # перерисовывать весь контейнер при каждом движении мыши. Диалоги с
+    # тяжёлым содержимым могут отключить её, не теряя остального оформления.
+    _ENABLE_SHADOW = True
 
     def __init__(self, parent=None, title=""):
         super().__init__(parent)
@@ -566,11 +570,12 @@ class _FramelessDialog(_DimmedDialog):
         self._container = QFrame()
         self._container.setObjectName("cdRoot")
         self._container.setFocusPolicy(Qt.NoFocus)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(28)
-        shadow.setOffset(0, 6)
-        shadow.setColor(QColor(0, 0, 0, 170))
-        self._container.setGraphicsEffect(shadow)
+        if self._ENABLE_SHADOW:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(28)
+            shadow.setOffset(0, 6)
+            shadow.setColor(QColor(0, 0, 0, 170))
+            self._container.setGraphicsEffect(shadow)
         root.addWidget(self._container)
 
         self.body = QVBoxLayout(self._container)

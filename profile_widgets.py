@@ -149,9 +149,12 @@ QTextEdit, QTextBrowser {
 QTextEdit {
     border: 1px solid palette(mid);
 }
-QTextEdit#bbEditor {
+QTextEdit#bbEditor, QTextEdit#bbEditor:focus {
     background: palette(base);
-    border: 1px solid palette(mid);
+    /* Никакого бордюра: на Wayland QTextEdit с фокусом рисовал вокруг
+       себя широкую чёрную рамку, которая перекрывала скругления. */
+    border: none;
+    outline: none;
     border-radius: 8px;
     color: palette(text);
     font-size: 13px;
@@ -170,9 +173,10 @@ QFocusFrame {
     border: none;
     background: transparent;
 }
-QTextBrowser#bbPreview {
+QTextBrowser#bbPreview, QTextBrowser#bbPreview:focus {
     background: palette(base);
-    border: 1px solid palette(mid);
+    border: none;
+    outline: none;
     border-radius: 8px;
     color: palette(text);
     padding: 8px;
@@ -624,6 +628,7 @@ class BBCodeEditorDialog(_DimmedDialog):
         editor_caption.setObjectName("bbHint")
         self.editor = QTextEdit()
         self.editor.setObjectName("bbEditor")
+        self.editor.setFrameShape(QFrame.NoFrame)
         self.editor.setAcceptRichText(False)
         self.editor.setPlainText(text or "")
         self.editor.setPlaceholderText(tr("BBCode placeholder", lang))
@@ -638,6 +643,7 @@ class BBCodeEditorDialog(_DimmedDialog):
         preview_caption.setObjectName("bbHint")
         self.preview = QTextBrowser()
         self.preview.setObjectName("bbPreview")
+        self.preview.setFrameShape(QFrame.NoFrame)
         self.preview.setOpenExternalLinks(True)
         preview_col.addWidget(preview_caption)
         preview_col.addWidget(self.preview, 1)

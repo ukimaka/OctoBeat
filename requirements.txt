@@ -4,8 +4,7 @@ mutagen
 requests
 yt-dlp
 mpris-server; sys_platform == "linux"
-syncedlyrics
-musicbrainzngs
+somedl>=1.7.0
 pydub
 numpy
 audioop-lts; python_version >= "3.13"

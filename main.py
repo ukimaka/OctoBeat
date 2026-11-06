@@ -33,7 +33,6 @@ from PyQt5.QtWidgets import QApplication
 
 import db
 from main_window import MainWindow
-from musicbrainz_client import init_musicbrainz
 from paths import migrate_old_data
 from qt_diagnostics import (
     background_left_running,
@@ -154,9 +153,6 @@ def main():
     # крупные pixmap'ы. Без этого Qt рисует иконку 22px как 22 физических
     # пикселя и растягивает её до 33 — отсюда замыливание при 150%.
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
-    # MusicBrainz блокирует запросы без корректного User-Agent.
-    init_musicbrainz()
 
     db.init_db()   # создаёт таблицы, если их нет
 

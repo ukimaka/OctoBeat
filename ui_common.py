@@ -21,6 +21,7 @@
 переиспользовать примитивы в новых изолированных виджетах.
 """
 
+import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, QObject, QRectF, QSize, Qt, pyqtSignal
@@ -303,11 +304,18 @@ class IconProvider:
         return result
 
 
+# На Windows пользователи ждут системный проводник, поэтому оставляем
+# нативный диалог. На Linux/Qt-платформах сохраняем кастомное оформление.
+_NATIVE_FILE_DIALOG = sys.platform.startswith("win")
+
+
 def _make_file_dialog(parent, caption, directory, file_filter, options=None):
     dialog = DimmedFileDialog(parent, caption, directory, file_filter)
     if options is not None:
         dialog.setOptions(options)
-    dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    dialog.setOption(
+        QFileDialog.DontUseNativeDialog, not _NATIVE_FILE_DIALOG
+    )
     return dialog
 
 
@@ -322,6 +330,10 @@ def _file_dialog_button_icon(filename, color):
 
 def _decorate_file_dialog(dialog):
     """Заменяет emoji-иконки кнопок на SVG, не трогая layout диалога."""
+    # У нативного диалога Windows нет дочерних QPushButton, которые можно
+    # оформить, и трогать его внутренности не нужно.
+    if _NATIVE_FILE_DIALOG:
+        return
     # Полируем, чтобы палитра окна соответствовала QSS темы.
     dialog.ensurePolished()
     icon_color = dialog.palette().windowText().color().name()
