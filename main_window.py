@@ -18,7 +18,7 @@ import os
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QThread, QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -46,6 +46,7 @@ from library_tab import LibraryTab
 from lyrics_manager import LyricsManager
 from lyrics_panel import LyricsPanel
 from mini_player import MiniPlayer
+from music_watcher import MusicFolderWatcher
 from player_bar import PlayerBar
 from paths import MUSIC_DIR
 from path_utils import normalize_track_path
@@ -57,7 +58,7 @@ from tray_icon import TrayIcon, application_icon
 from track_actions import TrackActions
 from track_menu import TrackContextMenu
 from translations import tr
-from qt_diagnostics import note, wait_for_background
+from qt_diagnostics import hold_worker, note, track_thread, wait_for_background
 from qt_lifecycle import retire_thread, widget_alive
 from ui_common import GlassTooltipFilter, IconProvider, apply_menu_depth
 from updater import UpdateChecker, UpdateDownloader, apply_update
@@ -133,6 +134,10 @@ class MainWindow(QMainWindow):
         self._update_progress_depth = 0
         self._update_finished_pending = None
         self._shutting_down = False
+        self._watch_scan_thread = None
+        self._watch_scan_worker = None
+        self._pending_watch_folders = set()
+        self._pending_watch_files = set()
 
         self.lyrics_manager = LyricsManager(
             settings=self.settings,
@@ -189,6 +194,13 @@ class MainWindow(QMainWindow):
             self.settings,
             self.settings.value("download_dir", str(MUSIC_FOLDER)),
             self._sync_library_on_startup,
+        )
+        self.music_watcher = MusicFolderWatcher(
+            self.settings.value("download_dir", str(MUSIC_FOLDER)),
+            parent=self,
+        )
+        self.music_watcher.scan_requested.connect(
+            self._on_music_folder_scan_requested
         )
         self.player_bar = PlayerBar(
             self.settings, self.icons, event_filter=self.event_filter
@@ -459,6 +471,9 @@ class MainWindow(QMainWindow):
         self.playlists_page.delete_track_requested.connect(self._on_playlist_track_delete_requested)
 
         self.settings_page.ui_settings_changed.connect(self._apply_ui_settings)
+        self.settings_page.music_folder_changed.connect(
+            self._on_music_folder_changed
+        )
         self.settings_page.crossfade_changed.connect(self.media_player.set_crossfade_enabled)
         self.settings_page.metadata_badges_changed.connect(self._on_metadata_badges_changed)
         self.settings_page.csv_import_requested.connect(self.library_tab.csv_import_requested)
@@ -707,6 +722,9 @@ class MainWindow(QMainWindow):
         self._shutting_down = True
         if self._mini_player is not None:
             self._mini_player.hide()
+        if hasattr(self, "music_watcher"):
+            self.music_watcher.stop()
+        self._stop_watch_scan()
         tray = getattr(self, "tray", None)
         if tray is not None:
             tray.hide()
@@ -851,6 +869,99 @@ class MainWindow(QMainWindow):
                 added += 1
         if added:
             print(f"[startup] new tracks added: {added}")
+
+    # ------------------------------------------------------------------
+    #  File Watcher: авто-импорт новых FLAC/папок
+    # ------------------------------------------------------------------
+    def _on_music_folder_changed(self, path):
+        """Пользователь выбрал другую папку музыки в настройках."""
+        path = str(path or "").strip()
+        if not path:
+            return
+        self.settings.setValue("download_dir", path)
+        self.settings.sync()
+        self.import_flow.music_folder = Path(path)
+        self.music_watcher.set_root(path)
+        self.library_tab.reload()
+        # Сразу подхватываем то, что уже лежит в новой папке.
+        self._queue_watch_scan({"folders": [path], "files": []})
+
+    def _on_music_folder_scan_requested(self, targets):
+        if self._shutting_down or self._quitting:
+            return
+        if not isinstance(targets, dict):
+            return
+        self._pending_watch_folders.update(targets.get("folders") or ())
+        self._pending_watch_files.update(targets.get("files") or ())
+        self._start_watch_scan()
+
+    def _queue_watch_scan(self, targets):
+        self._on_music_folder_scan_requested(targets)
+
+    def _start_watch_scan(self):
+        if self._watch_scan_thread is not None:
+            return
+        folders = sorted(self._pending_watch_folders)
+        files = sorted(self._pending_watch_files)
+        if not folders and not files:
+            return
+        self._pending_watch_folders.clear()
+        self._pending_watch_files.clear()
+
+        worker = workers.FolderScanWorker(folders=folders, files=files)
+        thread = QThread()
+        track_thread(thread, "music-watch-scan")
+        worker.moveToThread(thread)
+        hold_worker(thread, worker, "music-watch-scan-worker")
+        thread.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_watch_scan_finished)
+        thread.started.connect(worker.run)
+
+        self._watch_scan_thread = thread
+        self._watch_scan_worker = worker
+        note(
+            f"music watch scan start: folders={len(folders)} "
+            f"files={len(files)}"
+        )
+        thread.start()
+
+    def _on_watch_scan_finished(self, added, failed, added_paths):
+        thread = self._watch_scan_thread
+        self._watch_scan_thread = None
+        self._watch_scan_worker = None
+        if thread is not None:
+            retire_thread(thread, 2000)
+        note(
+            f"music watch scan finished: added={added} "
+            f"failed={failed}"
+        )
+        if self._shutting_down:
+            return
+        if added:
+            print(
+                f"[watch] added {added} new track(s); "
+                f"metadata errors: {failed}"
+            )
+            self.library_tab.reload()
+            self._reload_playlists()
+            self.profile_page.reload_stats()
+        elif failed:
+            print(f"[watch] metadata errors: {failed}")
+        # Пока скан шёл, watcher мог накопить следующую пачку событий.
+        self._start_watch_scan()
+
+    def _stop_watch_scan(self):
+        thread = self._watch_scan_thread
+        worker = self._watch_scan_worker
+        self._watch_scan_thread = None
+        self._watch_scan_worker = None
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        if thread is not None:
+            retire_thread(thread, 2000)
 
     def _on_library_play_requested(self, item):
         data = self._user_data(item) or {}

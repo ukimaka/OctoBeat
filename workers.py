@@ -36,6 +36,7 @@ from paths import MUSIC_DIR
 from qt_diagnostics import note
 from path_utils import (
     find_tool,
+    normalize_track_path,
     safe_replace,
     subprocess_creationflags,
     subprocess_env,
@@ -373,6 +374,116 @@ class RescanWorker(QObject):
             f"loudness={processed} failed={failed}"
         )
         self.finished.emit(meta_total, processed, failed)
+
+
+# ---------------------------------------------------------------------------
+#  FolderScanWorker — точечный авто-скан папок после File Watcher
+# ---------------------------------------------------------------------------
+
+class FolderScanWorker(QObject):
+    """Добавляет в БД аудиофайлы из конкретных папок/файлов.
+
+    В отличие от ``RescanWorker`` не перечитывает всю библиотеку и не
+    переименовывает файлы: только находит новые треки, читает их теги и
+    пакетно вставляет в SQLite. Уже известные пути пропускаются, поэтому
+    повторный вызов после лишнего события watcher'а почти ничего не стоит.
+    """
+
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(int, int, list)
+    #               added, failed, added_paths
+
+    def __init__(self, folders=(), files=()):
+        super().__init__()
+        self.setObjectName("folder-scan-worker")
+        self.folders = [str(path) for path in folders]
+        self.files = [str(path) for path in files]
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
+
+    def _interrupted(self):
+        return (
+            self._stopped
+            or QThread.currentThread().isInterruptionRequested()
+        )
+
+    def _collect_audio_files(self):
+        found = {}
+
+        for raw in self.files:
+            path = Path(raw)
+            if path.is_file() and path.suffix.lower() in AUDIO_EXTS:
+                found[normalize_track_path(path)] = str(path)
+
+        for raw in self.folders:
+            for path in find_audio_files(raw):
+                found[normalize_track_path(path)] = path
+
+        return [found[key] for key in sorted(found, key=str.casefold)]
+
+    def run(self):
+        try:
+            audio_files = self._collect_audio_files()
+        except Exception as exc:
+            print(f"[watch-scan] file collection failed: {exc}")
+            self.finished.emit(0, 1, [])
+            return
+
+        total = len(audio_files)
+        if total == 0:
+            self.progress.emit(1, 1)
+            self.finished.emit(0, 0, [])
+            return
+
+        # Один запрос вместо get_track_by_path() на каждый файл.
+        existing = {
+            normalize_track_path(row["file_path"])
+            for row in db.get_all_tracks()
+        }
+
+        pending = []
+        failed = 0
+        for index, path in enumerate(audio_files, 1):
+            if self._interrupted():
+                break
+            if normalize_track_path(path) in existing:
+                continue
+            try:
+                md = metadata.read_metadata(path)
+            except Exception as exc:
+                failed += 1
+                print(f"[watch-scan] metadata error with {path}: {exc}")
+                md = {
+                    "title": Path(path).stem,
+                    "artist": "Unknown Artist",
+                    "album": None,
+                    "duration": 0,
+                }
+            pending.append((
+                path,
+                md["title"],
+                md["artist"],
+                md["album"],
+                md["duration"],
+            ))
+            if index % 5 == 0 or index == total:
+                self.progress.emit(index, total)
+
+        added = 0
+        if pending:
+            try:
+                added, _duplicates = db.add_tracks_with_metadata(pending)
+            except Exception as exc:
+                failed += len(pending)
+                print(f"[watch-scan] batch DB insert failed: {exc}")
+                self.finished.emit(0, failed, [])
+                return
+
+        added_paths = [entry[0] for entry in pending]
+        self.progress.emit(total, total)
+        self.finished.emit(added, failed, added_paths)
 
 
 # ---------------------------------------------------------------------------

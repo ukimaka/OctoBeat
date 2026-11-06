@@ -626,7 +626,7 @@ def rename_sidecar_image(old_path, new_path):
 
 
 def read_embedded_cover(file_path):
-    """Возвращает байты встроенной обложки (ID3 APIC / MP4 covr / Ogg Opus METADATA_BLOCK_PICTURE) или None."""
+    """Байты встроенной обложки (ID3 APIC / FLAC Picture / MP4 covr / Ogg)."""
     if not file_path or not os.path.isfile(file_path):
         return None
 
@@ -636,10 +636,22 @@ def read_embedded_cover(file_path):
         print(f"[metadata] cover read failed for {file_path}: {e}")
         return None
 
-    if audio is None or audio.tags is None:
+    if audio is None:
         return None
 
     try:
+        # FLAC хранит обложку в отдельных блоках Picture, а не в тегах
+        # Vorbis. Проверяем их до audio.tags: у «чистого» FLAC без
+        # текстовых тегов audio.tags может быть None, но картинка при
+        # этом присутствует.
+        if isinstance(audio, FLAC):
+            for picture in audio.pictures or []:
+                if picture.data:
+                    return picture.data
+
+        if audio.tags is None:
+            return None
+
         # MP3 (ID3)
         if hasattr(audio.tags, 'getall'):
             for tag in audio.tags.getall('APIC'):
@@ -661,34 +673,27 @@ def read_embedded_cover(file_path):
         # только чистые байты картинки (без 47-байтового заголовка
         # структуры Picture), иначе Qt не сможет распарсить изображение.
         suffix = os.path.splitext(file_path)[1].lower()
-        if suffix in (".opus", ".ogg", ".flac"):
-            # mutagen.flac.FLAC даёт .pictures; OggOpus/AOggVorbis — через тег.
-            if isinstance(audio, FLAC):
-                pictures = audio.pictures or []
-                for picture in pictures:
-                    if picture.data:
-                        return picture.data
-            else:
-                for key in ("METADATA_BLOCK_PICTURE", "COVERART"):
-                    values = audio.tags.get(key)
-                    if not values:
-                        continue
-                    try:
-                        raw = base64.b64decode(values[0])
-                    except Exception:
-                        continue
-                    if not raw:
-                        continue
-                    # COVERART (старый тег Vorbis) хранит уже готовые
-                    # байты картинки, без заголовка FLAC Picture Block.
-                    if key == "COVERART":
-                        return raw
-                    try:
-                        picture = Picture(raw)
-                    except Exception:
-                        continue
-                    if picture.data:
-                        return picture.data
+        if suffix in (".opus", ".ogg"):
+            for key in ("METADATA_BLOCK_PICTURE", "COVERART"):
+                values = audio.tags.get(key)
+                if not values:
+                    continue
+                try:
+                    raw = base64.b64decode(values[0])
+                except Exception:
+                    continue
+                if not raw:
+                    continue
+                # COVERART (старый тег Vorbis) хранит уже готовые
+                # байты картинки, без заголовка FLAC Picture Block.
+                if key == "COVERART":
+                    return raw
+                try:
+                    picture = Picture(raw)
+                except Exception:
+                    continue
+                if picture.data:
+                    return picture.data
     except Exception as e:
         print(f"[metadata] cover tag read failed for {file_path}: {e}")
 

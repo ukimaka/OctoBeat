@@ -115,6 +115,9 @@ class SettingsPage(QWidget):
     # Сигнал «показ бейджей источников метаданных изменён» — списки обновляются.
     metadata_badges_changed = pyqtSignal(bool)
 
+    # Сигнал «папка музыки изменена» — File Watcher переподключается.
+    music_folder_changed = pyqtSignal(str)
+
     # Сигнал «нужно импортировать треки из CSV» — обрабатывает главное окно.
     csv_import_requested = pyqtSignal()
 
@@ -822,6 +825,7 @@ class SettingsPage(QWidget):
             self.music_folder_edit.setText(path)
             self.settings.setValue("download_dir", path)
             self.settings.sync()
+            self.music_folder_changed.emit(path)
 
     def _on_report_bug(self):
         QDesktopServices.openUrl(QUrl("https://github.com/ukimaka/OctoBeat/issues"))
