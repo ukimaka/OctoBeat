@@ -298,6 +298,28 @@ TRANSLATIONS = {
         "Image URL": "Image URL",
         "BBCode placeholder": "Write something about yourself… Use [b]bold[/b], [i]italic[/i], [url=https://example.com]link[/url], [img]…[/img]",
         "Live preview": "Preview updates live",
+
+        # Внешние зависимости
+        "FFmpeg is required": "FFmpeg is required",
+        "OctoBeat needs FFmpeg to download and convert music.": (
+            "OctoBeat needs FFmpeg to download and convert music."
+        ),
+        "FFmpeg and FFprobe were not found in the system PATH or in the application data folder.": (
+            "FFmpeg and FFprobe were not found in the system PATH or in "
+            "the application data folder."
+        ),
+        "Missing:": "Missing:",
+        "OctoBeat will download a static build and place it in:": (
+            "OctoBeat will download a static build and place it in:"
+        ),
+        "Download automatically": "Download automatically",
+        "Later": "Later",
+        "Downloading...": "Downloading...",
+        "Preparing download...": "Preparing download...",
+        "FFmpeg installed successfully.": "FFmpeg installed successfully.",
+        "Installation failed:": "Installation failed:",
+        "Try again": "Try again",
+        "Close": "Close",
     },
     "ru": {
         # Навигация
@@ -575,6 +597,28 @@ TRANSLATIONS = {
         "Image URL": "Адрес картинки",
         "BBCode placeholder": "Напишите о себе… Используйте [b]жирный[/b], [i]курсив[/i], [url=https://example.com]ссылка[/url], [img]…[/img]",
         "Live preview": "Предпросмотр обновляется в реальном времени",
+
+        # Внешние зависимости
+        "FFmpeg is required": "Требуется FFmpeg",
+        "OctoBeat needs FFmpeg to download and convert music.": (
+            "Для скачивания и конвертации музыки OctoBeat нужен FFmpeg."
+        ),
+        "FFmpeg and FFprobe were not found in the system PATH or in the application data folder.": (
+            "FFmpeg и FFprobe не найдены ни в системном PATH, ни в папке "
+            "данных приложения."
+        ),
+        "Missing:": "Отсутствует:",
+        "OctoBeat will download a static build and place it in:": (
+            "OctoBeat скачает статическую сборку и положит её в папку:"
+        ),
+        "Download automatically": "Скачать автоматически",
+        "Later": "Позже",
+        "Downloading...": "Скачивание...",
+        "Preparing download...": "Подготовка к скачиванию...",
+        "FFmpeg installed successfully.": "FFmpeg успешно установлен.",
+        "Installation failed:": "Ошибка установки:",
+        "Try again": "Повторить",
+        "Close": "Закрыть",
     },
 }
 

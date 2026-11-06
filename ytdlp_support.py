@@ -180,6 +180,16 @@ def build_options(
     }
     if cookies_path:
         options["cookiefile"] = str(cookies_path)
+    # Если FFmpeg установлен в папку данных приложения, yt-dlp должен
+    # использовать именно её, а не случайную системную сборку.
+    try:
+        from dependencies import ffmpeg_location
+
+        location = ffmpeg_location()
+        if location:
+            options["ffmpeg_location"] = location
+    except Exception:
+        pass
     if extra:
         options.update(extra)
     return options

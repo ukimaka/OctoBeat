@@ -31,6 +31,7 @@ from mutagen import File as MutagenFile
 from mutagen.flac import FLAC, Picture
 
 from paths import CACHE_DIR
+from path_utils import find_tool
 import playback_trace
 
 COVERS_DIR = CACHE_DIR / "covers"
@@ -236,7 +237,7 @@ def _webm_duration(path):
 
 def _ffprobe_duration(path):
     """Fallback через ffprobe для M4A/MP4 и других контейнеров."""
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = find_tool("ffprobe")
     if not ffprobe:
         return None
     try:

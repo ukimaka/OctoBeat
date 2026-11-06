@@ -39,4 +39,5 @@ from dialog_base import (
     colored_icon,
     colored_pixmap,
 )
+from dependency_dialog import DependencyDialog
 from playlist_widgets import PlaylistCoverDelegate

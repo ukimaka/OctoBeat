@@ -32,6 +32,7 @@ from PyQt5.QtGui import QPixmapCache
 from PyQt5.QtWidgets import QApplication
 
 import db
+from dependencies import DependencyManager
 from main_window import MainWindow
 from paths import migrate_old_data
 from qt_diagnostics import (
@@ -177,6 +178,10 @@ def main():
 
     window = MainWindow()
     window.show()
+    # FFmpeg проверяется в фоне уже после появления окна: запуск не ждёт
+    # диск/сеть, а диалог появляется только если зависимости отсутствуют.
+    window.dependency_manager = DependencyManager(window)
+    window.dependency_manager.start()
     signal_ticker = _install_signal_handlers(app, window)
     try:
         exit_code = app.exec_()

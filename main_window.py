@@ -720,6 +720,9 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         self._shutting_down = True
+        dependency_manager = getattr(self, "dependency_manager", None)
+        if dependency_manager is not None:
+            dependency_manager.shutdown()
         if self._mini_player is not None:
             self._mini_player.hide()
         if hasattr(self, "music_watcher"):

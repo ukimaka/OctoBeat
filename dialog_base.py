@@ -209,6 +209,20 @@ QPushButton#cdCancel {
 QPushButton#cdCancel:hover {
     background: @CANCEL_HOVER@;
 }
+QProgressBar#cdProgress {
+    background: @FIELD@;
+    border: 1px solid @BORDER@;
+    border-radius: 7px;
+    min-height: 14px;
+    max-height: 14px;
+    color: @TEXT_DIM@;
+    font-size: 10px;
+    text-align: center;
+}
+QProgressBar#cdProgress::chunk {
+    background: @ACCENT@;
+    border-radius: 6px;
+}
 """
 
 

@@ -71,12 +71,25 @@ def unique_path(path, current_path=None, is_taken=None):
 
 
 def find_tool(name):
-    """Ищет исполняемый файл рядом с приложением, затем в PATH.
+    """Ищет исполняемый файл в папке bin приложения, рядом с ним, затем в PATH.
+
+    ``<data>/bin`` — место, куда авто-установщик кладёт FFmpeg. Локальная
+    копия важнее системной, иначе скачанная сборка может «проиграть»
+    старой версии из PATH.
 
     ``RESOURCE_DIR`` — папка ресурсов (в PyInstaller это ``_MEIPASS``).
     ``shutil.which`` с явным ``path`` учитывает расширения Windows
     (``.exe``, ``.cmd``) и права на запуск на Unix.
     """
+    try:
+        from dependencies import local_tool_path
+
+        local_binary = local_tool_path(name)
+        if local_binary is not None:
+            return str(local_binary)
+    except Exception:
+        pass
+
     local = shutil.which(name, path=str(RESOURCE_DIR))
     if local:
         return local
@@ -84,9 +97,19 @@ def find_tool(name):
 
 
 def subprocess_env():
-    """Окружение для фоновых процессов с принудительным UTF-8."""
+    """Окружение для фоновых процессов с принудительным UTF-8.
+
+    Если FFmpeg скачан в ``<data>/bin``, эта папка добавляется в начало
+    PATH: SomeDL и запускаемый им yt-dlp CLI найдут именно нашу сборку.
+    """
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
+    try:
+        from dependencies import augment_environment
+
+        augment_environment(env)
+    except Exception:
+        pass
     return env
 
 
