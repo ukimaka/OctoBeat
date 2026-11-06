@@ -18,7 +18,7 @@ import os
 import random
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -45,6 +45,7 @@ from import_flow import ImportFlow
 from library_tab import LibraryTab
 from lyrics_manager import LyricsManager
 from lyrics_panel import LyricsPanel
+from mini_player import MiniPlayer
 from player_bar import PlayerBar
 from paths import MUSIC_DIR
 from path_utils import normalize_track_path
@@ -104,6 +105,7 @@ class MainWindow(QMainWindow):
                 app.setWindowIcon(app_icon)
         self._window_margin = 8
         self._quitting = False
+        self._mini_player = None
         self.title_bar = CustomTitleBar(self)
         self.title_bar.setAttribute(Qt.WA_StyledBackground, True)
 
@@ -122,6 +124,8 @@ class MainWindow(QMainWindow):
 
         self.is_dark_theme = True
         self.icons = IconProvider(is_dark=self.is_dark_theme)
+        self.title_bar.mini_button.setIcon(self.icons.icon("expand.svg"))
+        self.title_bar.mini_button.setIconSize(QSize(15, 15))
 
         self._update_checker = None
         self._update_downloader = None
@@ -431,6 +435,8 @@ class MainWindow(QMainWindow):
         self.event_filter.volume_delta_requested.connect(self.player_bar.nudge_volume)
         self.event_filter.select_all_requested.connect(self._on_select_all_shortcut)
 
+        self.title_bar.mini_player_requested.connect(self._show_mini_player)
+
         self.track_actions.changed.connect(self.library_tab.reload)
         self.track_actions.changed.connect(self.playlists_page.refresh_tracks)
         self.track_actions.favorite_changed.connect(self.profile_page.reload_stats)
@@ -536,6 +542,11 @@ class MainWindow(QMainWindow):
     def _apply_ui_settings(self):
         self.appearance.apply_ui_settings()
         self.is_dark_theme = self.appearance.is_dark_theme
+        lang = self.settings.value("language", "en")
+        self.title_bar.mini_button.setToolTip(tr("Mini player", lang))
+        self.title_bar.mini_button.setIcon(self.icons.icon("expand.svg"))
+        if self._mini_player is not None:
+            self._mini_player.apply_theme()
         if hasattr(self, "tray"):
             self.tray.refresh_menu()
         # Делегаты кэшируют тему: без явного флага текст остаётся в цветах
@@ -591,10 +602,59 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     #  Трей / завершение приложения
     # ------------------------------------------------------------------
+    def _ensure_mini_player(self):
+        """Создаёт мини-плеер один раз и связывает его с главным окном."""
+        if self._mini_player is None:
+            self._mini_player = MiniPlayer(
+                self.controller,
+                self.icons,
+                self.settings,
+                self,
+            )
+            self._mini_player.expand_requested.connect(
+                self._restore_from_mini_player
+            )
+            self._mini_player.closed.connect(
+                self._restore_from_mini_player
+            )
+        return self._mini_player
+
+    def _show_mini_player(self):
+        """Скрывает главное окно и открывает компактный мини-плеер."""
+        if self._quitting or self._shutting_down:
+            return
+        mini = self._ensure_mini_player()
+        mini.apply_theme()
+        # Показываем до скрытия главного окна: мини-плеер встаёт рядом
+        # с ним и наследует актуальное состояние контроллера.
+        mini.show()
+        self.hide()
+        mini.sync_from_controller()
+        mini.raise_()
+        mini.activateWindow()
+
+    def _restore_from_mini_player(self):
+        """Закрывает мини-плеер и возвращает главное окно."""
+        mini = self._mini_player
+        if mini is not None:
+            mini.hide()
+        if self._quitting or self._shutting_down:
+            return
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
     def show_from_tray(self):
         """Возвращает окно из трея или с панели задач."""
         if self._quitting:
             return
+        # Открытие главного окна из трея выходит из режима мини-плеера.
+        mini = self._mini_player
+        if mini is not None and mini.isVisible():
+            mini.hide()
         if self.isMinimized():
             self.showNormal()
         else:
@@ -645,6 +705,8 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         self._shutting_down = True
+        if self._mini_player is not None:
+            self._mini_player.hide()
         tray = getattr(self, "tray", None)
         if tray is not None:
             tray.hide()

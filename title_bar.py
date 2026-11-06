@@ -1,8 +1,10 @@
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 
 class CustomTitleBar(QWidget):
+    mini_player_requested = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
@@ -12,6 +14,11 @@ class CustomTitleBar(QWidget):
         self.title_label = QLabel("OctoBeat")
         self.title_label.setObjectName("titleBarLabel")
 
+        self.mini_button = QPushButton()
+        self.mini_button.setObjectName("titleBarMini")
+        self.mini_button.setToolTip("Mini player")
+        self.mini_button.setFixedSize(46, 36)
+        self.mini_button.setFlat(True)
         self.minimize_button = QPushButton("–")
         self.maximize_button = QPushButton("□")
         self.close_button = QPushButton("✕")
@@ -26,10 +33,14 @@ class CustomTitleBar(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self.title_label)
         layout.addStretch()
+        layout.addWidget(self.mini_button)
         layout.addWidget(self.minimize_button)
         layout.addWidget(self.maximize_button)
         layout.addWidget(self.close_button)
 
+        self.mini_button.clicked.connect(
+            lambda checked=False: self.mini_player_requested.emit()
+        )
         self.minimize_button.clicked.connect(
             lambda checked=False: self.window().showMinimized()
         )
