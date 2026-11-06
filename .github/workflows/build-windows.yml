@@ -1,0 +1,135 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pyinstaller>=6.0"
+
+      - name: Install VLC runtime
+        run: choco install vlc --yes --no-progress
+
+      - name: Verify VLC runtime
+        shell: pwsh
+        run: |
+          $vlc = "C:\Program Files\VideoLAN\VLC"
+          if (-not (Test-Path (Join-Path $vlc "libvlc.dll"))) {
+            throw "libvlc.dll not found in $vlc"
+          }
+          if (-not (Test-Path (Join-Path $vlc "libvlccore.dll"))) {
+            throw "libvlccore.dll not found in $vlc"
+          }
+          if (-not (Test-Path (Join-Path $vlc "plugins"))) {
+            throw "VLC plugins folder not found in $vlc"
+          }
+          "VLC_DIR=$vlc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "VLC runtime: $vlc"
+
+      - name: Build OctoBeat with PyInstaller
+        run: python -m PyInstaller --clean --noconfirm OctoBeat.spec
+
+      - name: Verify PyInstaller output
+        shell: pwsh
+        run: |
+          $exe = "dist\OctoBeat\OctoBeat.exe"
+          $internal = "dist\OctoBeat\_internal"
+          if (-not (Test-Path $exe)) {
+            throw "PyInstaller did not create $exe"
+          }
+          if (-not (Test-Path (Join-Path $internal "vlc\libvlc.dll"))) {
+            throw "Bundled libvlc.dll is missing"
+          }
+          if (-not (Test-Path (Join-Path $internal "vlc\plugins"))) {
+            throw "Bundled VLC plugins are missing"
+          }
+          $size = [math]::Round((Get-ChildItem $internal -Recurse |
+            Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+          Write-Host "OctoBeat.exe: $exe"
+          Write-Host "Internal payload: $size MB"
+
+      - name: Resolve application version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME -replace '^[vV]', ''
+          } else {
+            $match = Select-String -Path version.py `
+              -Pattern '__version__\s*=\s*"([^"]+)"'
+            $version = $match.Matches[0].Groups[1].Value
+          }
+          if (-not $version) {
+            throw "Cannot determine application version"
+          }
+          $numeric = ($version -split '-')[0] -replace '[^0-9.]', ''
+          if (-not $numeric) {
+            throw "Cannot derive numeric version from '$version'"
+          }
+          $parts = @($numeric.Split('.') | Select-Object -First 4)
+          while ($parts.Count -lt 4) {
+            $parts += "0"
+          }
+          $numeric = $parts -join '.'
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "numeric_version=$numeric" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Application version: $version ($numeric)"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Compile Windows installer
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $iscc) {
+            $iscc = (Get-Command iscc.exe -ErrorAction Stop).Source
+          }
+          Write-Host "Using $iscc"
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" "/DMyAppNumericVersion=${{ steps.version.outputs.numeric_version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path "installer_output\OctoBeat_Setup.exe")) {
+            throw "OctoBeat_Setup.exe was not created"
+          }
+          Get-Item "installer_output\OctoBeat_Setup.exe" |
+            Select-Object Name, Length
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OctoBeat-Windows-Installer
+          path: installer_output/OctoBeat_Setup.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -95,6 +95,12 @@ def _find_command() -> list[str] | None:
         _COMMAND = [executable]
         return _COMMAND
 
+    # Frozen-сборка: отдельного python.exe нет, поэтому SomeDL запускается
+    # этим же exe с внутренним флагом (обрабатывается в main.py).
+    if getattr(sys, "frozen", False):
+        _COMMAND = [sys.executable, "--somedl-cli"]
+        return _COMMAND
+
     # Последний шанс: запускаем пакет тем же интерпретатором.
     try:
         import importlib.util

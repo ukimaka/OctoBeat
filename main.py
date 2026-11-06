@@ -116,8 +116,31 @@ def _install_signal_handlers(app, window):
     return ticker
 
 
+def _run_somedl_cli():
+    """Запускает встроенный SomeDL CLI внутри frozen-сборки.
+
+    PyInstaller не поддерживает ``sys.executable -m SomeDL.main``: exe —
+    это bootloader OctoBeat, а не Python. Поэтому somedl_integration
+    вызывает этот же exe с флагом ``--somedl-cli``, а мы перенаправляем
+    аргументы в SomeDL до инициализации Qt.
+    """
+    try:
+        from SomeDL.main import main as somedl_main
+    except Exception as exc:
+        print(f"[somedl] cannot start bundled SomeDL: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    index = sys.argv.index("--somedl-cli")
+    sys.argv = [sys.argv[0], *sys.argv[index + 1:]]
+    somedl_main()
+
+
 def main():
     global _interrupted
+
+    if "--somedl-cli" in sys.argv:
+        _run_somedl_cli()
+        return
+
     install_diagnostics()
     migrate_old_data()
     # Масштаб читаем ДО создания QApplication: QT_SCALE_FACTOR применяется

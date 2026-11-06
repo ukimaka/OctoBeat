@@ -21,6 +21,7 @@ __pycache__/
 # Сборки
 build/
 dist/
+installer_output/
 *.AppImage
 *.spec
 !OctoBeat.spec
