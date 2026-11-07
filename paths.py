@@ -96,6 +96,15 @@ else:
 _ensure_dir(DATA_DIR)
 _ensure_dir(CACHE_DIR)
 
+# Flatpak: XDG_DATA_HOME указывает внутрь песочницы
+# (~/.var/app/<id>/data), поэтому нативная база в ~/.local/share/OctoBeat —
+# это другой файл. При первом запуске в Flatpak импортируем её, иначе
+# существующая библиотека (названия, исполнители, плейлисты, профиль)
+# выглядит пустой и заполняется только путями без тегов.
+FLATPAK_ID = os.environ.get("FLATPAK_ID")
+HOST_DATA_DIR = Path.home() / ".local" / "share" / APP_NAME
+HOST_CONFIG_FILE = Path.home() / ".config" / "MusicPlayer" / "MusicPlayer.conf"
+
 # Старые места хранения данных (до перехода на QStandardPaths).
 LEGACY_DATA_DIR = Path.home() / ".local" / "share" / "music_player"
 if getattr(sys, "frozen", False):
@@ -127,6 +136,28 @@ def _copy_missing(source, target):
 
 def migrate_old_data():
     """Переносит данные из старых каталогов, не затирая новые файлы."""
+    # Flatpak: первая копия нативной библиотеки (база, профиль, настройки
+    # SomeDL) в песочницу. Копируем только отсутствующие файлы, поэтому
+    # повторный запуск не затирает данные, созданные уже в Flatpak.
+    if FLATPAK_ID and HOST_DATA_DIR != DATA_DIR and HOST_DATA_DIR.is_dir():
+        _copy_missing(HOST_DATA_DIR, DATA_DIR)
+
+    # QSettings хранится отдельно от базы (~/.config против песочницы).
+    # Переносим настройки, чтобы сохранить download_dir, тему, язык и т.п.;
+    # иначе Flatpak стартует с ~/Music по умолчанию и может отфильтровать
+    # библиотеку, лежащую в другой папке.
+    if FLATPAK_ID:
+        config_base = Path(
+            os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+        )
+        target_config = config_base / "MusicPlayer" / "MusicPlayer.conf"
+        if HOST_CONFIG_FILE.is_file() and not target_config.exists():
+            try:
+                target_config.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(HOST_CONFIG_FILE, target_config)
+            except OSError as exc:
+                print(f"[paths] cannot migrate {HOST_CONFIG_FILE}: {exc}")
+
     if LEGACY_DATA_DIR.is_dir():
         _copy_missing(LEGACY_DATA_DIR, DATA_DIR)
 

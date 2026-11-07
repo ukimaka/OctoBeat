@@ -136,7 +136,10 @@ modules:
       - --disable-a52
       - --disable-flac
       - --disable-vorbis
-      - --disable-opus
+      # Keep VLC's own libopus decoder: the avcodec decoder rejects the Opus
+      # extradata emitted by VLC 3.0.24's Ogg demuxer ("Extradata version 97"),
+      # so Opus files would not play with the runtime FFmpeg 7.1.
+      - --enable-opus
       - --disable-speex
       - --disable-theora
       - --disable-faad
@@ -214,6 +217,7 @@ modules:
       - install -d ${FLATPAK_DEST}/lib/octobeat
       - cp -a -- *.py themes icons LICENSE THIRD_PARTY_LICENSES.md ${FLATPAK_DEST}/lib/octobeat/
       - install -Dm755 flatpak/octobeat.sh ${FLATPAK_DEST}/bin/octobeat
+      - install -Dm755 flatpak/diagnose.sh ${FLATPAK_DEST}/bin/octobeat-diagnose
       - install -Dm644 flatpak/io.github.ukimaka.OctoBeat.desktop ${FLATPAK_DEST}/share/applications/io.github.ukimaka.OctoBeat.desktop
       - install -Dm644 flatpak/io.github.ukimaka.OctoBeat.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.ukimaka.OctoBeat.metainfo.xml
       # "octobeat  exe installer.svg" is the square 1600x1600 version of the

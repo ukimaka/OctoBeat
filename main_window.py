@@ -838,25 +838,39 @@ class MainWindow(QMainWindow):
         if removed:
             print(f"[startup] missing tracks removed: {removed}")
 
-        # Старые записи WebM/M4A попали в БД с duration=NULL (mutagen не
-        # умеет WebM, у части M4A нет длины в заголовке). Дозаполняем их
-        # до отрисовки библиотеки, иначе исправленный metadata.py заметен
-        # только после ручного рескана.
+        # Записи без тегов (так их создавал стартовый скан до исправления)
+        # и записи без длительности (WebM/M4A: mutagen не умеет WebM, у
+        # части M4A нет длины в заголовке) перечитываем из файлов. Иначе
+        # в библиотеке остаются "Unknown Title" и пустая длительность.
+        repaired = 0
         filled = 0
         for row in db.get_all_tracks():
-            if row["duration"]:
+            needs_tags = not (row["title"] and row["artist"])
+            needs_duration = not row["duration"]
+            if not (needs_tags or needs_duration):
                 continue
             path = row["file_path"]
             if not path or not Path(path).is_file():
                 continue
             try:
-                duration = metadata.read_metadata(path)["duration"]
+                md = metadata.read_metadata(path)
             except Exception as exc:
-                print(f"[startup] duration probe failed {path}: {exc}")
+                print(f"[startup] metadata probe failed {path}: {exc}")
                 continue
-            if duration:
-                db.update_track_duration(row["id"], duration)
+            if needs_tags:
+                db.update_track_metadata(
+                    row["id"],
+                    md["title"],
+                    md["artist"],
+                    md["album"],
+                    md["duration"] or row["duration"],
+                )
+                repaired += 1
+            elif needs_duration and md["duration"]:
+                db.update_track_duration(row["id"], md["duration"])
                 filled += 1
+        if repaired:
+            print(f"[startup] metadata repaired: {repaired}")
         if filled:
             print(f"[startup] durations filled: {filled}")
 
@@ -866,12 +880,26 @@ class MainWindow(QMainWindow):
         if not download_dir.exists():
             return
         files = workers.find_audio_files(download_dir)
-        added = 0
+        known = {
+            normalize_track_path(row["file_path"])
+            for row in db.get_all_tracks()
+        }
+        entries = []
         for path in files:
-            if db.add_track(path) is not None:
-                added += 1
-        if added:
-            print(f"[startup] new tracks added: {added}")
+            if normalize_track_path(path) in known:
+                continue
+            try:
+                md = metadata.read_metadata(path)
+            except Exception as exc:
+                print(f"[startup] metadata read failed {path}: {exc}")
+                continue
+            entries.append(
+                (path, md["title"], md["artist"], md["album"], md["duration"])
+            )
+        if entries:
+            added, _duplicates = db.add_tracks_with_metadata(entries)
+            if added:
+                print(f"[startup] new tracks added: {added}")
 
     # ------------------------------------------------------------------
     #  File Watcher: авто-импорт новых FLAC/папок

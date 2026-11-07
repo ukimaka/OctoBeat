@@ -54,6 +54,45 @@ The plugin cache is not shipped: flatpak-builder strips the plugins after the
 build, which invalidates `plugins.dat`; the directory is read-only at runtime,
 so libVLC simply scans it on startup.
 
+VLC's own **libopus** decoder is enabled (`--enable-opus`).  The `avcodec`
+decoder from the runtime FFmpeg 7.1 rejects the Opus extradata produced by
+VLC 3.0.24's Ogg demuxer (`Extradata version 97 is not implemented`), which
+made every `.opus` track fail with `Codec not supported`.  With the libopus
+plugin present, `.opus` files decode normally alongside MP3/FLAC/M4A/OGG/WAV
+(which are handled by `avcodec`).
+
+## Library migration from the native installation
+
+The native build stores its database in `~/.local/share/OctoBeat/music.db`;
+inside Flatpak `XDG_DATA_HOME` points to
+`~/.var/app/io.github.ukimaka.OctoBeat/data`, so the sandbox has its own copy.
+On the first Flatpak launch `migrate_old_data()` copies the native data
+directory (database, WAL files, profile, SomeDL data) into the sandbox.
+`--filesystem=home` makes the native paths readable, so the imported
+`/home/<user>/Music/...` entries keep working unchanged.  The native
+`~/.config/MusicPlayer/MusicPlayer.conf` is copied as well, so preferences such
+as a custom `download_dir`, theme and language survive the move.
+
+The copy never overwrites files that already exist in the sandbox.  For users
+who ran an older Flatpak build (which imported files as bare paths without
+tags), the startup sync now re-reads metadata for rows with a missing
+title/artist and stores it with `update_track_metadata()`.  New files found in
+the music folder are inserted through `add_tracks_with_metadata()` instead of
+`add_track()`, so they get tags immediately.
+
+## Diagnostics
+
+The app installs a sandbox-side diagnostic command:
+
+```sh
+flatpak run --command=octobeat-diagnose io.github.ukimaka.OctoBeat
+```
+
+It prints the sandbox paths (`HOME`, `XDG_DATA_HOME`), checks access to
+`~/Music`, verifies FFmpeg and the Opus/avcodec/PulseAudio VLC plugins, reports
+the database location, counts tracks with missing tags or invisible files, and
+plays a sample track through libVLC with the dummy audio output.
+
 ## Build
 
 Requirements: `flatpak`, `flatpak-builder`, and the Flathub remote.
@@ -129,7 +168,10 @@ The manifest was built and installed locally:
 * `flatpak-builder` completed, including VLC 3.0.24 and PyGObject.
 * `flatpak run io.github.ukimaka.OctoBeat` starts; MPRIS registers.
 * `flatpak run io.github.ukimaka.OctoBeat --somedl-cli --help` works.
-* libVLC plays a WAV file (`State.Ended`, correct 1000 ms length) with the
-  `dummy` audio output.
+* libVLC plays WAV/MP3/FLAC/M4A/OGG and Opus files with the `dummy` audio
+  output (Opus previously failed with `Codec not supported`).
+* A fresh sandbox imports the native `~/.local/share/OctoBeat/music.db` with
+  titles, artists and playlists intact; a sandbox database created by the
+  older build is repaired on startup (113/113 tracks got metadata back).
 * `flatpak build-bundle` produced `OctoBeat.flatpak` (~87 MB).
 * YAML, AppStream metadata and the `.desktop` file validate.
