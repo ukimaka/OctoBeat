@@ -26,6 +26,12 @@ installer_output/
 *.spec
 !OctoBeat.spec
 
+# Flatpak
+build-dir/
+flatpak-repo/
+.flatpak-builder/
+*.flatpak
+
 # Настройки редакторов и ОС
 .idea/
 .vscode/

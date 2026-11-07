@@ -1,0 +1,6 @@
+# Build-time Python dependencies for source builds inside the Flatpak SDK.
+#
+# pycairo and PyGObject are sdists (there are no manylinux wheels). Their
+# PEP 517 backend is meson-python, which must be importable in the build
+# environment because flatpak-pip-generator uses --no-build-isolation.
+meson-python

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OctoBeat
+GenericName=Music Player
+Comment=Play and manage your local music library
+Exec=octobeat %F
+Icon=io.github.ukimaka.OctoBeat
+Terminal=false
+Categories=AudioVideo;Audio;Player;Qt;
+Keywords=music;audio;player;library;offline;
+StartupWMClass=OctoBeat
+MimeType=audio/mpeg;audio/flac;audio/ogg;audio/opus;audio/x-wav;audio/mp4;audio/x-m4a;audio/aac;

@@ -1,0 +1,23 @@
+# Python dependencies for the Flatpak build.
+#
+# PyQt5 is intentionally absent: it is provided by
+# com.riverbankcomputing.PyQt.BaseApp (base-version 5.15-25.08), which
+# ships PyQt5 and Qt5 built for the KDE 5.15 runtime.
+#
+# Versions are resolved and pinned by flatpak-pip-generator into
+# python3-modules.json. Regenerate with:
+#
+#   python3 flatpak-pip-generator.py \
+#       --runtime org.kde.Sdk//5.15-25.08 \
+#       -r flatpak/requirements.txt \
+#       -o flatpak/python3-modules
+
+python-vlc
+mutagen
+requests
+yt-dlp
+mpris-server
+somedl>=1.7.0
+pydub
+numpy
+audioop-lts; python_version >= "3.13"

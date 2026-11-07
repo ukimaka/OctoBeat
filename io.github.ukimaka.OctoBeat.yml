@@ -1,0 +1,239 @@
+# OctoBeat Flatpak manifest.
+#
+# Runtime note: OctoBeat uses PyQt5.  org.kde.Platform 6.7 is a Qt6-only
+# runtime and has no matching PyQt5 BaseApp.  The PyQt BaseApp branches are
+# 5.15-23.08 / 5.15-24.08 / 5.15-25.08, built on the Qt5 KDE runtimes.
+# 5.15-25.08 is the current, supported Qt5 runtime and provides Python 3.13.
+# Using 6.7 here would force a complete Qt5/PyQt5 build from source (and the
+# app would still need Qt5), so the PyQt5-compatible branch is used instead.
+#
+# Build:
+#   ./build-flatpak.sh
+# or manually:
+#   flatpak-builder --user --force-clean --install-deps-from=flathub \
+#       --repo=flatpak-repo build-dir io.github.ukimaka.OctoBeat.yml
+#   flatpak build-bundle flatpak-repo OctoBeat.flatpak io.github.ukimaka.OctoBeat
+#
+# Install:
+#   flatpak install --user ./OctoBeat.flatpak
+
+app-id: io.github.ukimaka.OctoBeat
+runtime: org.kde.Platform
+runtime-version: "5.15-25.08"
+sdk: org.kde.Sdk
+base: com.riverbankcomputing.PyQt.BaseApp
+base-version: "5.15-25.08"
+command: octobeat
+
+finish-args:
+  # Network: yt-dlp/SomeDL search and download tracks.
+  - --share=network
+  # Audio output.
+  - --socket=pulseaudio
+  # Display: native Wayland first, X11 fallback for XWayland/X11 sessions.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # Music library and downloads.  The player lets the user add any folder,
+  # so a broad home access is intentional; narrow to xdg-music if desired.
+  - --filesystem=home
+  # MPRIS media keys (org.mpris.MediaPlayer2.MusicPlayer).
+  - --own-name=org.mpris.MediaPlayer2.MusicPlayer
+  # Tray icon (KDE StatusNotifier) and desktop notifications.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+  # Line-buffered logs in the Flatpak journal.
+  - --env=PYTHONUNBUFFERED=1
+
+cleanup:
+  - /include
+  - /lib/debug
+  - /lib/pkgconfig
+  - /share/doc
+  - /share/info
+  - /share/man
+  - /share/vlc/lua
+  - /share/vlc/skins2
+  # The cache is generated before flatpak-builder strips the plugins, so it
+  # would be stale at runtime. Let libVLC scan the read-only plugin directory
+  # instead (it cannot rewrite the cache inside /app).
+  - /lib/vlc/plugins/plugins.dat
+  - "*.a"
+  - "*.la"
+
+modules:
+  # meson-python is needed by the pycairo/PyGObject source builds below.
+  - flatpak/python3-build-modules.json
+
+  # PyGObject/pycairo are split because PyGObject compiles against the
+  # pycairo headers, so pycairo must be installed first.
+  - flatpak/python3-pycairo.json
+  - flatpak/python3-pygobject.json
+
+  # Everything else: requests, yt-dlp, SomeDL, ytmusicapi, numpy, etc.
+  - flatpak/python3-modules.json
+  - flatpak/python3-mpris-server.json
+
+  # VLC/libvlc.  The audio-only build keeps the package small; FFmpeg
+  # (avcodec/avformat) does the actual decoding.  The runtime already ships
+  # ffmpeg/ffprobe and libav*; VLC links against those, no separate ffmpeg
+  # module is needed.
+  - name: vlc
+    buildsystem: autotools
+    config-opts:
+      - BUILDCC=/usr/bin/gcc -std=gnu99
+      - --disable-qt
+      - --disable-skins2
+      - --disable-ncurses
+      - --disable-lua
+      - --disable-vlm
+      - --disable-sout
+      - --disable-dbus
+      - --disable-xcb
+      - --disable-xvideo
+      - --disable-wayland
+      - --disable-sdl-image
+      - --disable-freetype
+      - --disable-fontconfig
+      - --disable-libass
+      - --disable-svg
+      - --disable-svgdec
+      - --disable-fribidi
+      - --disable-harfbuzz
+      - --disable-live555
+      - --disable-dvdread
+      - --disable-dvdnav
+      - --disable-bluray
+      - --disable-smbclient
+      - --disable-dsm
+      - --disable-sftp
+      - --disable-nfs
+      - --disable-smb2
+      - --disable-upnp
+      - --disable-microdns
+      - --disable-chromecast
+      - --disable-avahi
+      - --disable-mtp
+      - --disable-udev
+      - --disable-v4l2
+      - --disable-screen
+      - --disable-vcd
+      - --disable-libcddb
+      - --disable-archive
+      - --disable-notify
+      - --disable-secret
+      - --disable-kwallet
+      - --disable-libgcrypt
+      - --disable-gnutls
+      - --disable-taglib
+      - --disable-libxml2
+      - --disable-update-check
+      - --disable-oss
+      - --disable-jack
+      - --disable-sndio
+      - --disable-mad
+      - --disable-mpg123
+      - --disable-a52
+      - --disable-flac
+      - --disable-vorbis
+      - --disable-opus
+      - --disable-speex
+      - --disable-theora
+      - --disable-faad
+      - --disable-aom
+      - --disable-dav1d
+      - --disable-vpx
+      - --disable-twolame
+      - --disable-dca
+      - --disable-libmpeg2
+      - --disable-postproc
+      - --disable-x264
+      - --disable-x265
+      - --disable-png
+      - --disable-jpeg
+      - --disable-bpg
+      - --disable-x262
+      - --disable-daala
+      - --disable-openapv
+      - --disable-omxil
+      - --disable-rpi-omxil
+      - --disable-gst-decode
+      - --disable-merge-ffmpeg
+      - --disable-libplacebo
+      - --disable-vdpau
+      - --disable-libva
+      - --disable-dxva2
+      - --disable-d3d11va
+      - --disable-nls
+      - --disable-addonmanagermodules
+      - --disable-lirc
+      - --disable-srt
+      - --disable-librist
+      - --disable-projectm
+      - --disable-goom
+      - --disable-vsxu
+      - --disable-fluidsynth
+      - --disable-fluidlite
+      - --disable-zvbi
+      - --disable-aribsub
+      - --disable-aribb25
+      - --disable-kate
+      - --disable-tiger
+      - --disable-css
+      - --disable-chromaprint
+      - --disable-shout
+      - --disable-oggspots
+      - --disable-telx
+      - --disable-mod
+      - --disable-mpc
+      - --disable-crystalhd
+      - --disable-dc1394
+      - --disable-dv1394
+      - --disable-linsys
+      - --disable-opencv
+      - --disable-vnc
+      - --disable-freerdp
+      - --disable-asdcp
+      - --disable-dvbpsi
+      - --disable-gme
+      - --disable-sid
+      - --enable-avcodec
+      - --enable-avformat
+      - --enable-swscale
+      - --enable-pulse
+    sources:
+      - type: archive
+        url: https://download.videolan.org/videolan/vlc/3.0.24/vlc-3.0.24.tar.xz
+        sha256: e7cab503d1d7d5849b89d2cf0e1ee60d0ef6d012407791b644b9cfc0cc225fdf
+
+  # The application itself.  There is no setup.py/pyproject packaging, so the
+  # sources are installed as a data directory and launched by a small wrapper.
+  - name: octobeat
+    buildsystem: simple
+    build-commands:
+      - install -d ${FLATPAK_DEST}/lib/octobeat
+      - cp -a -- *.py themes icons LICENSE THIRD_PARTY_LICENSES.md ${FLATPAK_DEST}/lib/octobeat/
+      - install -Dm755 flatpak/octobeat.sh ${FLATPAK_DEST}/bin/octobeat
+      - install -Dm644 flatpak/io.github.ukimaka.OctoBeat.desktop ${FLATPAK_DEST}/share/applications/io.github.ukimaka.OctoBeat.desktop
+      - install -Dm644 flatpak/io.github.ukimaka.OctoBeat.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.ukimaka.OctoBeat.metainfo.xml
+      # "octobeat  exe installer.svg" is the square 1600x1600 version of the
+      # logo (the regular OctoBeat.svg is 1279x989 and Flatpak requires a
+      # square desktop icon).
+      - install -Dm644 "icons/octobeat  exe installer.svg" ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.ukimaka.OctoBeat.svg
+    sources:
+      - type: dir
+        path: .
+        skip:
+          - .git
+          - .venv
+          - .flatpak-builder
+          - build
+          - build-dir
+          - dist
+          - installer_output
+          - flatpak-repo
+          - __pycache__
+          - "*.pyc"
+          - "*.pyo"
+          - "*.flatpak"
+          - "*.log"

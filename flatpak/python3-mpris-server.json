@@ -1,0 +1,59 @@
+{
+  "name": "python3-mpris-server",
+  "buildsystem": "simple",
+  "build-commands": [
+    "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"mpris-server\" \"unidecode\" \"emoji\" \"pydbus\" \"strenum\" --no-build-isolation --no-deps"
+  ],
+  "sources": [
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/8f/b7/559f59d57d18b44c6d1250d2eeaa676e028b9c527431f5d0736478a73ba1/Unidecode-1.4.0-py3-none-any.whl",
+      "sha256": "c3c7606c27503ad8d501270406e345ddb480a7b5f38827eafe4fa82a137f0021",
+      "x-checker-data": {
+        "type": "pypi",
+        "name": "unidecode",
+        "packagetype": "bdist_wheel"
+      }
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/fd/8a/75e3177f374877b19dd3112820b071836ad1100f9f58424630b4783519bc/emoji-2.16.0-py3-none-any.whl",
+      "sha256": "c4230d80640def9071599ff56b1b5950fe13a2a94c0da98c5deab12431b24330",
+      "x-checker-data": {
+        "type": "pypi",
+        "name": "emoji",
+        "packagetype": "bdist_wheel"
+      }
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/ab/79/15590e73b935eb1a1bbc6adb5e2a3165d522b84b29d6c9b8ad74f56bf521/mpris_server-0.9.6-py2.py3-none-any.whl",
+      "sha256": "13e8ffaa3b6b907c743b6ba76e9a3dfe4c2274e0a8c99ca03f66d6073c39a7fe",
+      "x-checker-data": {
+        "type": "pypi",
+        "name": "mpris-server",
+        "packagetype": "bdist_wheel"
+      }
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/92/56/27148014c2f85ce70332f18612f921f682395c7d4e91ec103783be4fce00/pydbus-0.6.0-py2.py3-none-any.whl",
+      "sha256": "66b80106352a718d80d6c681dc2a82588048e30b75aab933e4020eb0660bf85e",
+      "x-checker-data": {
+        "type": "pypi",
+        "name": "pydbus",
+        "packagetype": "bdist_wheel"
+      }
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/04/94/598975013306c83df1820bf6cf7424da43c98eff190d528b733be615e8c6/strenum-0.5.0-py3-none-any.whl",
+      "sha256": "f23a35daa03c948885d616463f75ebb0f179cb13acd17c3ac3b2394bfc343967",
+      "x-checker-data": {
+        "type": "pypi",
+        "name": "strenum",
+        "packagetype": "bdist_wheel"
+      }
+    }
+  ]
+}

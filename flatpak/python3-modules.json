@@ -1,0 +1,406 @@
+{
+  "name": "python3-modules",
+  "buildsystem": "simple",
+  "build-commands": [],
+  "modules": [
+    {
+      "name": "python3-python-vlc",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"python-vlc\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/5b/ee/7d76eb3b50ccb1397621f32ede0fb4d17aa55a9aa2251bc34e6b9929fdce/python_vlc-3.0.21203-py3-none-any.whl",
+          "sha256": "1613451a31b692ec276296ceeae0c0ba82bfc2d094dabf9aceb70f58944a6320",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "python-vlc",
+            "packagetype": "bdist_wheel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-mutagen",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"mutagen\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/47/d8/a29e4e3991765e7ce4ed1f7e4074fe1ba9da03e0048639734de60f9cadb9/mutagen-1.48.1-py3-none-any.whl",
+          "sha256": "4f077fe87d3fc7fba259aa63d8c026b18382ca6a42ef37c61e16f1b1b5b82fe7",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "mutagen",
+            "packagetype": "bdist_wheel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-requests",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"requests\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl",
+          "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "certifi",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/fc/ad/d07d7862a62ffa6d79d68074d14823243dd235a77c45262acbf6adeb28bf/charset_normalizer-3.5.2-py3-none-any.whl",
+          "sha256": "b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "charset-normalizer",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl",
+          "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "idna",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl",
+          "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "requests",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+          "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "urllib3",
+            "packagetype": "bdist_wheel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-yt-dlp",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"yt-dlp\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/7f/3d/16ea7d5638cf585991f2c5705e8083688dde633d32d0871f2404e0f4d827/yt_dlp-2026.10.26-py3-none-any.whl",
+          "sha256": "a05c5b5d8562f7e8a62f5334348b406af4930d56d3a65f8021d14af0e22339ae",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "yt-dlp",
+            "packagetype": "bdist_wheel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-somedl",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"somedl>=1.7.0\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/10/cb/f2ad4230dc2eb1a74edf38f1a38b9b52277f75bef262d8908e60d957e13c/blinker-1.9.0-py3-none-any.whl",
+          "sha256": "ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "blinker",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl",
+          "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "certifi",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/fc/ad/d07d7862a62ffa6d79d68074d14823243dd235a77c45262acbf6adeb28bf/charset_normalizer-3.5.2-py3-none-any.whl",
+          "sha256": "b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "charset-normalizer",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/31/7d/164b7ffc8624fe9efb4221bf9af485d5c1e41b9ae118045d2b6dc5457d8b/click-8.5.1-py3-none-any.whl",
+          "sha256": "8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "click",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/7f/9c/34f6962f9b9e9c71f6e5ed806e0d0ff03c9d1b0b2340088a0cf4bce09b18/flask-3.1.3-py3-none-any.whl",
+          "sha256": "f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "flask",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl",
+          "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "idna",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl",
+          "sha256": "c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "itsdangerous",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl",
+          "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "jinja2",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl",
+          "sha256": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "markdown-it-py",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/38/9b/e422a865e1d5d57d0e509b4e0bf1c1a70a7f6382c29a5aa428df994c8bc8/markupsafe-3.0.4.tar.gz",
+          "sha256": "2e9ad7dd851bf45fab9f75cbff4cb493fee9979e8d8c7c9c3ee119022518edd6",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "markupsafe"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl",
+          "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "mdurl",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/47/d8/a29e4e3991765e7ce4ed1f7e4074fe1ba9da03e0048639734de60f9cadb9/mutagen-1.48.1-py3-none-any.whl",
+          "sha256": "4f077fe87d3fc7fba259aa63d8c026b18382ca6a42ef37c61e16f1b1b5b82fe7",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "mutagen",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl",
+          "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "pygments",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl",
+          "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "requests",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl",
+          "sha256": "33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "rich",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/a7/fb/bf2ed560a51058fd99f2981608089e0a6530880160af43f3587ad49b58dd/somedl-1.7.1-py3-none-any.whl",
+          "sha256": "12eccf91bfe2becef9d2a4d68388fedf60fa02565ef62f195933c68a6e644b83",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "somedl",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/da/46/7d84138a60a8bd796825b2d38ebe92d0d16501ca57d501b7c5d677401bbc/tomlkit-0.15.2-py3-none-any.whl",
+          "sha256": "05562412163a3037b94497385fb7f9204c637bc605af7a48199e41cf2272f437",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "tomlkit",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+          "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "urllib3",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/8d/57/a27182528c90ef38d82b636a11f606b0cbb0e17588ed205435f8affe3368/waitress-3.0.2-py3-none-any.whl",
+          "sha256": "c56d67fd6e87c2ee598b76abdd4e96cfad1f24cacdea5078d382b1f9d7b5ed2e",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "waitress",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/a1/38/df03f564f43cec2684823f3cccae1a652ee7face1cbaa76fb223096e64d7/werkzeug-3.1.9-py3-none-any.whl",
+          "sha256": "6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "werkzeug",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/7f/3d/16ea7d5638cf585991f2c5705e8083688dde633d32d0871f2404e0f4d827/yt_dlp-2026.10.26-py3-none-any.whl",
+          "sha256": "a05c5b5d8562f7e8a62f5334348b406af4930d56d3a65f8021d14af0e22339ae",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "yt-dlp",
+            "packagetype": "bdist_wheel"
+          }
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/29/ad/6d471ea9d81e1f59a4d01badda21e7f3f508b94ed171c677b6547b292f73/ytmusicapi-1.12.3-py3-none-any.whl",
+          "sha256": "f65db840907a43ca23b29bd563951a1e390fbe2089d7aa4ddbe2043824b2acd9",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "ytmusicapi",
+            "packagetype": "bdist_wheel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-pydub",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"pydub\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/a6/53/d78dc063216e62fc55f6b2eebb447f6a4b0a59f55c8406376f76bf959b08/pydub-0.25.1-py2.py3-none-any.whl",
+          "sha256": "65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "pydub",
+            "packagetype": "bdist_wheel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-numpy",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"numpy\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/95/b0/c7453d0b6e2073c3264468b106ee1563750cecc910965e67357e3698c83e/numpy-2.5.4.tar.gz",
+          "sha256": "9a94cf751c9ad8ebaa835bcd3d40dacf8534ad086b88c38029b65123c7999d2a",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "numpy"
+          }
+        }
+      ]
+    },
+    {
+      "name": "python3-audioop-lts",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"audioop-lts\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/38/53/946db57842a50b2da2e0c1e34bd37f36f5aadba1a929a3971c5d7841dbca/audioop_lts-0.2.2.tar.gz",
+          "sha256": "64d0c62d88e67b98a1a5e71987b7aa7b5bcffc7dcee65b635823dbdd0a8dbbd0",
+          "x-checker-data": {
+            "type": "pypi",
+            "name": "audioop-lts"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ukimaka.OctoBeat</id>
+  <name>OctoBeat</name>
+  <summary>Play and manage your local music library</summary>
+  <developer id="io.github.ukimaka">
+    <name>ukimaka</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      OctoBeat is a simple music player for local music files. It has no
+      streaming subscription and no clutter: build your library, search
+      YouTube for new tracks, download them, and manage everything in one
+      place.
+    </p>
+    <p>
+      Features include playlists, tag editing, cover art, lyrics, a trim
+      editor, a system tray icon and MPRIS media-key integration.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.ukimaka.OctoBeat.desktop</launchable>
+  <url type="homepage">https://github.com/ukimaka/OctoBeat</url>
+  <url type="bugtracker">https://github.com/ukimaka/OctoBeat/issues</url>
+  <url type="vcs-browser">https://github.com/ukimaka/OctoBeat</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>OctoBeat main window</caption>
+      <image type="source">https://raw.githubusercontent.com/ukimaka/OctoBeat/main/assets/screenshots/main.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>audio</keyword>
+    <keyword>player</keyword>
+    <keyword>library</keyword>
+    <keyword>offline</keyword>
+  </keywords>
+
+  <provides>
+    <binary>octobeat</binary>
+  </provides>
+
+  <releases>
+    <release version="1.0.0" date="2026-01-01">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>
