@@ -23,6 +23,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import traceback
 from pathlib import Path
 
 from mutagen.id3 import ID3, ID3NoHeaderError
@@ -42,6 +43,7 @@ from path_utils import (
     subprocess_env,
     unique_path,
 )
+from translations import tr
 from ytdlp_support import (
     DOWNLOAD_MODE_MP3,
     current_download_mode,
@@ -212,14 +214,22 @@ class ImportWorker(QObject):
 class RescanWorker(QObject):
     """Перечитывает метаданные + измеряет громкость у треков без loudness."""
 
+    # Прогресс в процентах: (percent, 100). Диалог сам переводит это в шкалу.
     progress = pyqtSignal(int, int)
+    # Текст текущего шага для прогресс-диалога.
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
     finished = pyqtSignal(int, int, int)
     #               metadata_updated, loudness_processed, loudness_failed
 
-    def __init__(self):
+    def __init__(self, lang="en"):
         super().__init__()
         self.setObjectName("rescan-worker")
+        self._lang = lang or "en"
         self._stopped = False
+        self._last_percent = -1
+        self._last_status = ""
+        self._somedl_total = 0
 
     def stop(self):
         self._stopped = True
@@ -229,6 +239,42 @@ class RescanWorker(QObject):
             self._stopped
             or QThread.currentThread().isInterruptionRequested()
         )
+
+    # ------------------------------------------------------------------
+    #  Прогресс
+    # ------------------------------------------------------------------
+    def _report(self, percent, message=None):
+        """Публикует процент и (при изменении) текст шага."""
+        percent = max(0, min(100, int(percent)))
+        if percent > self._last_percent or percent == 100:
+            self._last_percent = percent
+            self.progress.emit(percent, 100)
+        if message and message != self._last_status:
+            self._last_status = message
+            self.status.emit(message)
+
+    def _on_somedl_progress(self, done, total, _line):
+        self._somedl_total = total
+        percent = int(45 * done / total) if total else 0
+        self._report(
+            min(45, percent),
+            tr(
+                "Updating tags and covers: {done} of {total}",
+                self._lang,
+            ).format(done=done, total=total),
+        )
+
+    def _on_somedl_tick(self, elapsed):
+        # SomeDL может молчать между файлами (сетевые запросы). Двигаем
+        # шкалу по времени, но не дальше 44%, чтобы реальный прогресс
+        # никогда не «откатывался» назад.
+        total = self._somedl_total
+        if total <= 0:
+            return
+        estimate = max(30.0, total * 8.0)
+        percent = min(44, int(45 * elapsed / estimate))
+        if percent > self._last_percent:
+            self._report(percent)
 
     def _reset_cover_cache(self, track_id):
         """Сбрасывает старую обложку, чтобы UI прочитал новую из тегов."""
@@ -245,25 +291,69 @@ class RescanWorker(QObject):
             print(f"[rescan] cover DB reset failed {track_id}: {exc}")
 
     def run(self):
-        # SomeDL Import обновляет теги и встроенные обложки на месте,
-        # не перекачивая аудио. Выполняем один раз на всю библиотеку.
-        if db.get_all_tracks() and not self._interrupted():
+        # Любая неожиданная ошибка не должна оставить прогресс-диалог
+        # открытым навсегда: всегда сообщаем finished.
+        try:
+            self._run()
+        except Exception as exc:
+            traceback.print_exc()
+            print(f"[rescan] unexpected failure: {exc}")
+            try:
+                self.error.emit(
+                    tr(
+                        "Could not update track info:\n{e}",
+                        self._lang,
+                    ).format(e=exc)
+                )
+            except Exception:
+                pass
+            self.progress.emit(100, 100)
+            self.finished.emit(0, 0, 0)
+
+    def _run(self):
+        tracks = db.get_all_tracks()
+        if not tracks:
+            self.progress.emit(100, 100)
+            self.finished.emit(0, 0, 0)
+            return
+
+        # Фаза 1 (0–45%): SomeDL Import обновляет теги и встроенные
+        # обложки на месте, не перекачивая аудио. Это сетевой шаг и он
+        # может идти долго, поэтому прогресс строится по строкам вывода
+        # SomeDL + «живой» таймер, а не молчит до конца.
+        if not self._interrupted():
+            self._report(
+                3, tr("Updating tags and covers...", self._lang)
+            )
             try:
                 note("rescan: somedl import start")
                 somedl_integration.update_library_metadata(
-                    MUSIC_FOLDER, cancel_check=self._interrupted
+                    MUSIC_FOLDER,
+                    cancel_check=self._interrupted,
+                    progress_callback=self._on_somedl_progress,
+                    tick_callback=self._on_somedl_tick,
                 )
                 note("rescan: somedl import finished")
             except somedl_integration.SomedlCancelled:
+                self.progress.emit(100, 100)
+                self.finished.emit(0, 0, 0)
                 return
             except Exception as exc:
+                # Нет интернета / SomeDL не установлен — не блокируем
+                # локальное обновление тегов, просто продолжаем без него.
                 print(f"[rescan] somedl import failed: {exc}")
+                note(f"rescan: somedl import skipped: {exc}")
 
-        # Шаг 1: метаданные (быстро)
+        if self._interrupted():
+            self.progress.emit(100, 100)
+            self.finished.emit(0, 0, 0)
+            return
+
+        # Фаза 2 (45–90%): локальное перечитывание тегов.
         meta_rows = db.get_all_tracks()
         meta_total = len(meta_rows)
         note(f"rescan start: {meta_total} tracks")
-        for row in meta_rows:
+        for index, row in enumerate(meta_rows, 1):
             if self._interrupted():
                 break
             try:
@@ -332,25 +422,28 @@ class RescanWorker(QObject):
             except Exception as e:
                 print(f"[rescan] failed {row['file_path']}: {e}")
 
+            self._report(
+                45 + int(45 * index / max(1, meta_total)),
+                tr(
+                    "Reading tags: {done} of {total}",
+                    self._lang,
+                ).format(done=index, total=meta_total),
+            )
+
         if self._interrupted():
-            self.progress.emit(1, 1)
+            self.progress.emit(100, 100)
             self.finished.emit(0, 0, 0)
             return
 
-        # Шаг 2: громкость для треков без loudness
+        # Фаза 3 (90–100%): громкость для треков без loudness.
         loud_rows = db.get_tracks_without_loudness()
         loud_total = len(loud_rows)
         processed = failed = 0
 
-        grand_total = meta_total + loud_total
-
-        if grand_total == 0:
-            self.progress.emit(1, 1)
-            self.finished.emit(0, 0, 0)
+        if loud_total == 0:
+            self._report(100, tr("Update complete", self._lang))
+            self.finished.emit(meta_total, 0, 0)
             return
-
-        # Прогресс после первой фазы
-        self.progress.emit(meta_total, grand_total)
 
         for i, row in enumerate(loud_rows, 1):
             if self._interrupted():
@@ -367,8 +460,15 @@ class RescanWorker(QObject):
                 print(f"[loudness] error with {row['file_path']}: {e}")
 
             if i % 2 == 0 or i == loud_total:
-                self.progress.emit(meta_total + i, grand_total)
+                self._report(
+                    90 + int(10 * i / loud_total),
+                    tr(
+                        "Measuring loudness: {done} of {total}",
+                        self._lang,
+                    ).format(done=i, total=loud_total),
+                )
 
+        self._report(100, tr("Update complete", self._lang))
         note(
             f"rescan finished: meta={meta_total} "
             f"loudness={processed} failed={failed}"

@@ -108,7 +108,9 @@ class ImportFlow(QObject):
             self.parent_window.controller.media_player.release()
         except Exception as exc:
             print(f"[rescan] player release failed: {exc}")
-        worker = workers.RescanWorker()
+        worker = workers.RescanWorker(
+            self.settings.value("language", "en")
+        )
         self._run_worker_with_progress(
             worker,
             title=tr(
@@ -335,6 +337,16 @@ class ImportFlow(QObject):
                     if pending is not None:
                         pending()
 
+        def _on_status(text):
+            if self._progress_dialog is not dialog or not widget_alive(dialog):
+                return
+            try:
+                dialog.setLabelText(text)
+            except RuntimeError:
+                pass
+
+        finish_state = {"done": False}
+
         def _finish_operation(*args):
             # finished мог быть доставлен внутри dialog.setValue().
             # Замыкание должно сохранить аргументы сигнала: у разных
@@ -344,10 +356,18 @@ class ImportFlow(QObject):
                     lambda: _finish_operation(*args)
                 )
                 return
+            if finish_state["done"]:
+                return
+            finish_state["done"] = True
             try:
                 worker.progress.disconnect(_on_progress)
             except (TypeError, RuntimeError):
                 pass
+            if hasattr(worker, "status"):
+                try:
+                    worker.status.disconnect(_on_status)
+                except (TypeError, RuntimeError):
+                    pass
             if self._thread is thread:
                 self._thread = None
                 self._worker = None
@@ -356,6 +376,8 @@ class ImportFlow(QObject):
             on_finished(*args)
 
         worker.progress.connect(_on_progress)
+        if hasattr(worker, "status"):
+            worker.status.connect(_on_status)
         # Cleanup и completion выполняются одной функцией, чтобы между
         # удалением диалога и открытием модального окна не было гонки.
         worker.finished.connect(_finish_operation)

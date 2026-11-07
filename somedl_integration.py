@@ -57,6 +57,10 @@ _STAGING_ROOT = CACHE_DIR / "somedl_staging"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
+# Строка, которую ``somedl import`` печатает перед обработкой файла:
+# ``--- File Nr. 12 ---...``. По ней считается реальный прогресс импорта.
+_FILE_NR_RE = re.compile(r"File Nr\.\s*(\d+)", re.IGNORECASE)
+
 _COMMAND: list[str] | None = None
 
 
@@ -227,14 +231,27 @@ def _run_cli(
     stdin_text: str | None = None,
     cancel_check: Callable[[], bool] | None = None,
     timeout: float | None = None,
+    stall_timeout: float | None = None,
+    output_callback: Callable[[str], None] | None = None,
+    tick_callback: Callable[[float], None] | None = None,
 ) -> tuple[int, str]:
     """Запускает somedl, не блокируя Qt-поток на чтении пайпа.
 
     Вывод пишется во временный файл: так дочерний процесс не зависает,
-    если его лог окажется больше буфера pipe. Отмена завершает процесс.
+    если его лог окажется больше буфера pipe. Пока процесс работает, файл
+    дочитывается порциями, а новые строки передаются в ``output_callback``
+    (по ним UI строит прогресс). ``tick_callback`` вызывается с числом
+    секунд с момента запуска, чтобы UI мог показывать «живой» прогресс даже
+    между сообщениями SomeDL. ``stall_timeout`` завершает процесс, если он
+    молчит слишком долго (например, завис на сетевом запросе).
     """
     command = _command() + args
-    stderr_file = tempfile.TemporaryFile(mode="w+b")
+    # Отдельный файл и отдельный читающий дескриптор: чтение прогресса не
+    # двигает файловый offset дочернего процесса (это важно на Windows, где
+    # нет os.pread, и защищает от гонки на POSIX).
+    stderr_file = tempfile.NamedTemporaryFile(mode="w+b", delete=False)
+    output_path = stderr_file.name
+    reader = None
     stdin = subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL
 
     try:
@@ -248,11 +265,47 @@ def _run_cli(
         )
     except FileNotFoundError as exc:
         stderr_file.close()
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
         raise SomedlNotFoundError(
             "Не удалось запустить somedl. Проверьте установку SomeDL."
         ) from exc
 
+    output_position = 0
+    pending_line = ""
+
+    def drain_output() -> None:
+        """Дочитывает новые строки вывода и отдаёт их в колбэк."""
+        nonlocal output_position, pending_line
+        if reader is None:
+            return
+        chunks = []
+        while True:
+            reader.seek(output_position)
+            chunk = reader.read(65536)
+            if not chunk:
+                break
+            output_position += len(chunk)
+            chunks.append(chunk)
+        if not chunks or output_callback is None:
+            return
+        text = pending_line + b"".join(chunks).decode(
+            "utf-8", errors="replace"
+        )
+        pending_line = ""
+        for part in text.splitlines(keepends=True):
+            if not part.endswith(("\n", "\r")):
+                # Неполная строка: дождёмся следующей порции вывода.
+                pending_line = part
+                continue
+            line = _strip_ansi(part.rstrip("\r\n"))
+            if line.strip():
+                output_callback(line)
+
     try:
+        reader = open(output_path, "rb")
         if stdin_text is not None and process.stdin is not None:
             try:
                 process.stdin.write(stdin_text.encode("utf-8"))
@@ -261,7 +314,13 @@ def _run_cli(
                 pass
 
         started = time.monotonic()
+        last_output = started
         while process.poll() is None:
+            before = output_position
+            drain_output()
+            if output_position != before:
+                last_output = time.monotonic()
+
             if cancel_check is not None and cancel_check():
                 process.terminate()
                 try:
@@ -270,7 +329,8 @@ def _run_cli(
                     process.kill()
                     process.wait(timeout=5)
                 raise SomedlCancelled("Операция SomeDL отменена")
-            if timeout is not None and time.monotonic() - started > timeout:
+            elapsed = time.monotonic() - started
+            if timeout is not None and elapsed > timeout:
                 process.terminate()
                 try:
                     process.wait(timeout=5)
@@ -280,14 +340,48 @@ def _run_cli(
                 raise SomedlError(
                     "SomeDL не завершился за отведённое время"
                 )
+            if (
+                stall_timeout is not None
+                and time.monotonic() - last_output > stall_timeout
+            ):
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                raise SomedlError(
+                    "SomeDL не отвечает уже "
+                    f"{int(stall_timeout)} с; обновление прервано. "
+                    "Проверьте подключение к интернету."
+                )
+            if tick_callback is not None:
+                tick_callback(elapsed)
             time.sleep(0.2)
 
+        # Забираем вывод, который SomeDL успел написать перед выходом.
+        drain_output()
+
         code = process.returncode
-        stderr_file.seek(0)
-        output = stderr_file.read().decode("utf-8", errors="replace")
+        reader.seek(0)
+        output = reader.read().decode("utf-8", errors="replace")
         return code, output
     finally:
+        # Если вышли по исключению (например, из колбэка прогресса),
+        # не оставляем дочерний процесс работать в фоне.
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if reader is not None:
+            reader.close()
         stderr_file.close()
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
 
 
 def _find_audio_files(folder: Path) -> list[Path]:
@@ -329,6 +423,7 @@ def download_track(
     cookies_path: str | Path | None = None,
     cancel_check: Callable[[], bool] | None = None,
     timeout: float | None = 1800,
+    stall_timeout: float | None = 300,
 ) -> str:
     """Скачивает один трек через SomeDL и возвращает путь к файлу.
 
@@ -375,6 +470,7 @@ def download_track(
             args,
             cancel_check=cancel_check,
             timeout=timeout,
+            stall_timeout=stall_timeout,
         )
         files = _find_audio_files(staging)
         if code != 0 or not files:
@@ -407,13 +503,24 @@ def update_library_metadata(
     folder: str | Path,
     *,
     cancel_check: Callable[[], bool] | None = None,
-    timeout: float | None = 7200,
+    timeout: float | None = 3600,
+    stall_timeout: float | None = 300,
+    progress_callback: (
+        Callable[[int, int, str], None] | None
+    ) = None,
+    tick_callback: Callable[[float], None] | None = None,
 ) -> str:
     """Обновляет теги и обложки существующих файлов через ``somedl import``.
 
     Используется режим ``update``: SomeDL перезаписывает метаданные и
     встроенную обложку на месте, не перекачивая аудио и не переименовывая
     файлы. Возвращает хвост вывода SomeDL (для логов).
+
+    ``progress_callback(done, total, line)`` вызывается по мере вывода
+    SomeDL: ``done`` — номер текущего файла (если его удалось разобрать),
+    ``total`` — количество поддерживаемых файлов, ``line`` — строка вывода.
+    ``tick_callback`` вызывается несколько раз в секунду, чтобы UI мог
+    обновлять прогресс, даже когда SomeDL молчит.
     """
     root = Path(folder)
     if not root.is_dir():
@@ -427,6 +534,17 @@ def update_library_metadata(
     if not supported:
         print(f"[somedl] no supported files for import in {root}")
         return ""
+
+    total = len(supported)
+    done = 0
+
+    def on_output(line: str) -> None:
+        nonlocal done
+        match = _FILE_NR_RE.search(line)
+        if match:
+            done = min(total, max(done, int(match.group(1))))
+        if progress_callback is not None:
+            progress_callback(done, total, line)
 
     _ensure_config()
     _remove_import_junk(root)
@@ -452,9 +570,15 @@ def update_library_metadata(
             stdin_text=answers,
             cancel_check=cancel_check,
             timeout=timeout,
+            stall_timeout=stall_timeout,
+            output_callback=on_output,
+            tick_callback=tick_callback,
         )
     finally:
         _remove_import_junk(root)
+
+    if progress_callback is not None:
+        progress_callback(total, total, "")
 
     if code != 0:
         message = _tail(output) or f"somedl import завершился с кодом {code}"
