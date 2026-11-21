@@ -131,7 +131,7 @@ jobs:
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64 `
+          cmake -S . -B build-release -A x64 `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
             -DCMAKE_INSTALL_PREFIX="$PWD\dist\OctoBeat"
           cmake --build build-release --config Release -j 16

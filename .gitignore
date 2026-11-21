@@ -1,5 +1,7 @@
 # Build outputs
 build/
+# Vendored crates contain source directories named "build"; keep them tracked.
+!rust/*/vendor/**/build/
 build-release/
 desktop/build/
 rust/*/target/

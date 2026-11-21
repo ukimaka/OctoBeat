@@ -1,1 +1,3 @@
 target/
+# Vendored crates contain source directories named "target"; keep them tracked.
+!vendor/**/target/
