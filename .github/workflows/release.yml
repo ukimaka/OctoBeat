@@ -30,7 +30,6 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: qtsvg
       - name: Build helper binaries
         run: packaging/tools/build-linux.sh
       - name: Build tarball
@@ -82,7 +81,6 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y flathub \
-            org.flatpak.Builder \
             org.kde.Platform//6.11 org.kde.Sdk//6.11 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08
       - name: Build helper binaries
@@ -124,7 +122,6 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: qtsvg
       - name: Build helper binaries
         shell: pwsh
         run: packaging/tools/build-windows.ps1
