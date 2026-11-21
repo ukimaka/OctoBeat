@@ -234,6 +234,13 @@ elseif(WIN32)
         ws2_32
         advapi32
         userenv
+        # Required by the Rust standard library and windows-core:
+        # WaitOnAddress/WakeByAddress, Nt* file APIs, PropVariant and WinRT.
+        synchronization
+        ntdll
+        propsys
+        runtimeobject
+        bcrypt
     )
 else()
     target_link_libraries(octobeat PRIVATE
