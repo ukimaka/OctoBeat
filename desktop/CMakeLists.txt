@@ -240,7 +240,9 @@ elseif(WIN32)
         ntdll
         propsys
         runtimeobject
+        oleaut32
         bcrypt
+        bcryptprimitives
     )
 else()
     target_link_libraries(octobeat PRIVATE
