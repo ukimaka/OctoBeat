@@ -128,7 +128,7 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("OctoBeat"));
     QApplication::setOrganizationName(QStringLiteral("MusicPlayer"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral("1.0.0"));
     QApplication::setStyle(QStringLiteral("Fusion"));
 
     QCommandLineParser parser;
