@@ -18,7 +18,15 @@ include(GNUInstallDirs)
 
 set(RUST_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../rust/core")
 set(RUST_AUDIO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../rust/audio-engine")
+set(RUST_TARGET "" CACHE STRING "Optional Rust target triple")
+set(RUST_CARGO_TARGET_ARGS "")
 set(RUST_TARGET_DIR "${CMAKE_BINARY_DIR}/rust-target")
+if(RUST_TARGET)
+    list(APPEND RUST_CARGO_TARGET_ARGS --target "${RUST_TARGET}")
+    set(RUST_OUTPUT_DIR "${RUST_TARGET_DIR}/${RUST_TARGET}")
+else()
+    set(RUST_OUTPUT_DIR "${RUST_TARGET_DIR}")
+endif()
 if(WIN32)
     set(RUST_STATIC_PREFIX "")
     set(RUST_STATIC_SUFFIX ".lib")
@@ -26,8 +34,8 @@ else()
     set(RUST_STATIC_PREFIX "lib")
     set(RUST_STATIC_SUFFIX ".a")
 endif()
-set(RUST_CORE_LIB "${RUST_TARGET_DIR}/release/${RUST_STATIC_PREFIX}octobeat_core${RUST_STATIC_SUFFIX}")
-set(RUST_AUDIO_LIB "${RUST_TARGET_DIR}/release/${RUST_STATIC_PREFIX}octobeat_audio${RUST_STATIC_SUFFIX}")
+set(RUST_CORE_LIB "${RUST_OUTPUT_DIR}/release/${RUST_STATIC_PREFIX}octobeat_core${RUST_STATIC_SUFFIX}")
+set(RUST_AUDIO_LIB "${RUST_OUTPUT_DIR}/release/${RUST_STATIC_PREFIX}octobeat_audio${RUST_STATIC_SUFFIX}")
 
 file(GLOB_RECURSE RUST_SOURCES CONFIGURE_DEPENDS
     "${RUST_CORE_DIR}/src/*.rs"
@@ -37,7 +45,8 @@ add_custom_command(
     OUTPUT "${RUST_CORE_LIB}"
     COMMAND ${CMAKE_COMMAND} -E env
             "CARGO_TARGET_DIR=${RUST_TARGET_DIR}"
-            cargo build --release --manifest-path "${RUST_CORE_DIR}/Cargo.toml"
+            cargo build --release ${RUST_CARGO_TARGET_ARGS}
+            --manifest-path "${RUST_CORE_DIR}/Cargo.toml"
     DEPENDS ${RUST_SOURCES}
     WORKING_DIRECTORY "${RUST_CORE_DIR}"
     COMMENT "Building OctoBeat Rust core"
@@ -55,7 +64,8 @@ add_custom_command(
     OUTPUT "${RUST_AUDIO_LIB}"
     COMMAND ${CMAKE_COMMAND} -E env
             "CARGO_TARGET_DIR=${RUST_TARGET_DIR}"
-            cargo build --release --manifest-path "${RUST_AUDIO_DIR}/Cargo.toml"
+            cargo build --release ${RUST_CARGO_TARGET_ARGS}
+            --manifest-path "${RUST_AUDIO_DIR}/Cargo.toml"
     DEPENDS ${RUST_AUDIO_SOURCES}
     WORKING_DIRECTORY "${RUST_AUDIO_DIR}"
     COMMENT "Building OctoBeat native audio engine"
