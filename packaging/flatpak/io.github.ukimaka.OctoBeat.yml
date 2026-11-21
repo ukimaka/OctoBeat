@@ -45,6 +45,9 @@ modules:
       - install -Dm755 ffprobe /app/share/octobeat/tools/ffprobe
       - install -Dm755 somedl /app/share/octobeat/tools/somedl
       - install -Dm644 FFMPEG-LICENSE.txt /app/share/octobeat/tools/FFMPEG-LICENSE.txt
+      - install -Dm644 YTDLP-LICENSE.txt /app/share/octobeat/tools/YTDLP-LICENSE.txt
+      - install -Dm644 DENO-LICENSE.txt /app/share/octobeat/tools/DENO-LICENSE.txt
+      - install -Dm644 SOMEDL-LICENSE.txt /app/share/octobeat/tools/SOMEDL-LICENSE.txt
     sources:
       - type: dir
         path: ../tools/runtime

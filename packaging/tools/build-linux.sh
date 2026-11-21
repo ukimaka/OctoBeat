@@ -24,6 +24,8 @@ FFMPEG_URL="${FFMPEG_URL:-https://github.com/BtbN/FFmpeg-Builds/releases/downloa
 echo "[tools] yt-dlp"
 curl -L --fail --silent --show-error -o "$OUT/yt-dlp" "$YTDLP_URL"
 chmod +x "$OUT/yt-dlp"
+curl -L --fail --silent --show-error -o "$OUT/YTDLP-LICENSE.txt" \
+    "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/LICENSE"
 
 if [ ! -x "$OUT/deno" ]; then
     echo "[tools] deno"
@@ -31,6 +33,8 @@ if [ ! -x "$OUT/deno" ]; then
     unzip -q -o "$BUILD/deno.zip" -d "$BUILD/deno"
     cp "$BUILD/deno/deno" "$OUT/deno"
     chmod +x "$OUT/deno"
+    curl -L --fail --silent --show-error -o "$OUT/DENO-LICENSE.txt" \
+        "https://raw.githubusercontent.com/denoland/deno/main/LICENSE.md"
 fi
 
 if [ ! -x "$OUT/ffmpeg" ]; then
@@ -63,6 +67,8 @@ if [ ! -x "$OUT/somedl" ]; then
     )
     cp "$BUILD/somedl/dist/somedl" "$OUT/somedl"
     chmod +x "$OUT/somedl"
+    curl -L --fail --silent --show-error -o "$OUT/SOMEDL-LICENSE.txt" \
+        "https://raw.githubusercontent.com/ChemistryGull/SomeDL/main/LICENSE"
 fi
 
 echo "[tools] done: $OUT"

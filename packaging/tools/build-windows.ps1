@@ -12,6 +12,9 @@ Write-Host "[tools] yt-dlp"
 Invoke-WebRequest -UseBasicParsing `
     -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
     -OutFile (Join-Path $Out "yt-dlp.exe")
+Invoke-WebRequest -UseBasicParsing `
+    -Uri "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/LICENSE" `
+    -OutFile (Join-Path $Out "YTDLP-LICENSE.txt")
 
 Write-Host "[tools] deno"
 $DenoZip = Join-Path $Build "deno.zip"
@@ -20,6 +23,9 @@ Invoke-WebRequest -UseBasicParsing `
     -OutFile $DenoZip
 Expand-Archive -Force $DenoZip (Join-Path $Build "deno")
 Copy-Item (Join-Path $Build "deno/deno.exe") (Join-Path $Out "deno.exe")
+Invoke-WebRequest -UseBasicParsing `
+    -Uri "https://raw.githubusercontent.com/denoland/deno/main/LICENSE.md" `
+    -OutFile (Join-Path $Out "DENO-LICENSE.txt")
 
 Write-Host "[tools] ffmpeg"
 $FfmpegZip = Join-Path $Build "ffmpeg.zip"
@@ -49,6 +55,9 @@ Push-Location $Pyi
     (Join-Path $Root "packaging/tools/somedl_entry.py")
 Pop-Location
 Copy-Item (Join-Path $Pyi "dist/somedl.exe") $Out
+Invoke-WebRequest -UseBasicParsing `
+    -Uri "https://raw.githubusercontent.com/ChemistryGull/SomeDL/main/LICENSE" `
+    -OutFile (Join-Path $Out "SOMEDL-LICENSE.txt")
 
 Write-Host "[tools] done: $Out"
 Get-ChildItem $Out | Format-Table Name, Length
