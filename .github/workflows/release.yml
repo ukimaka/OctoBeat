@@ -45,6 +45,30 @@ jobs:
           name: linux-tar
           path: dist/*.tar.gz
 
+  arch-package:
+    needs: [linux-tar]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-tar
+          path: dist
+      - name: Build pacman package
+        run: |
+          chmod -R a+rwX .
+          docker run --rm -v "$PWD:/work" archlinux:latest bash -c '
+            pacman -Sy --noconfirm base-devel
+            useradd -m builder
+            chown -R builder:builder /work
+            su builder -c /work/packaging/arch/ci-package.sh
+          '
+          cp packaging/arch/octobeat-bin-*.pkg.tar.zst dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: dist/*.pkg.tar.zst
+
   flatpak:
     runs-on: ubuntu-24.04
     steps:
@@ -129,7 +153,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux-tar, flatpak, windows]
+    needs: [linux-tar, arch-package, flatpak, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

@@ -19,3 +19,8 @@ packaging/flatpak/repo/
 *.tar.gz
 *.flatpak
 *.log
+
+# Arch packages
+*.pkg.tar.zst
+packaging/arch/src/
+packaging/arch/pkg/

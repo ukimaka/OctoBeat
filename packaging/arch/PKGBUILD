@@ -1,0 +1,33 @@
+# Maintainer: ukimaka
+pkgname=octobeat-bin
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Music player with native Rust audio, local library and YouTube streaming"
+arch=('x86_64')
+url="https://github.com/ukimaka/OctoBeat"
+license=('GPL-3.0-or-later')
+depends=('qt6-base' 'qt6-svg' 'alsa-lib' 'hicolor-icon-theme' 'xdg-utils')
+provides=('octobeat')
+conflicts=('octobeat')
+options=('!debug' '!strip')
+source=("OctoBeat-${pkgver}-Linux-x86_64.tar.gz::https://github.com/ukimaka/OctoBeat/releases/download/v${pkgver}/OctoBeat-${pkgver}-Linux-x86_64.tar.gz")
+sha256sums=('cb734c4522b252bf46bb8e195524ab6ad6111c4b84e9c06fcc56576f68ab9b10')
+
+package() {
+    install -d "$pkgdir/usr"
+    cp -a "$srcdir/OctoBeat-${pkgver}-Linux-x86_64/." "$pkgdir/usr/"
+}
+
+post_install() {
+    gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null || true
+    update-desktop-database -q /usr/share/applications 2>/dev/null || true
+}
+
+post_upgrade() {
+    post_install
+}
+
+post_remove() {
+    gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null || true
+    update-desktop-database -q /usr/share/applications 2>/dev/null || true
+}

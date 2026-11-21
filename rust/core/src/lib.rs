@@ -32,12 +32,7 @@ impl Core {
         fs::create_dir_all(data_dir).map_err(|e| format!("data dir: {e}"))?;
         fs::create_dir_all(cache_dir).map_err(|e| format!("cache dir: {e}"))?;
 
-        let conn = Connection::open(db_path).map_err(|e| format!("open database: {e}"))?;
-        conn.busy_timeout(std::time::Duration::from_millis(5000))
-            .map_err(|e| format!("busy_timeout: {e}"))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL;")
-            .map_err(|e| format!("pragma: {e}"))?;
-        db::init_db(&conn)?;
+        let conn = Self::open_database(db_path)?;
         let missing = db::remove_missing_tracks(&conn)?;
         if missing > 0 {
             eprintln!("[octobeat-core] removed missing tracks: {missing}");
@@ -52,6 +47,63 @@ impl Core {
             covers_dir,
             last_error: Mutex::new(None),
         })
+    }
+
+    fn open_database(db_path: &str) -> Result<Connection, String> {
+        let mut last_error = String::new();
+        for attempt in 0..2 {
+            let result = (|| -> Result<Connection, String> {
+                let conn = Connection::open(db_path).map_err(|e| format!("open database: {e}"))?;
+                conn.busy_timeout(std::time::Duration::from_millis(5000))
+                    .map_err(|e| format!("busy_timeout: {e}"))?;
+                conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL;")
+                    .map_err(|e| format!("pragma: {e}"))?;
+                {
+                    let mut check = conn
+                        .prepare("PRAGMA quick_check")
+                        .map_err(|e| format!("quick_check: {e}"))?;
+                    let rows = check
+                        .query_map([], |row| row.get::<_, String>(0))
+                        .map_err(|e| format!("quick_check query: {e}"))?;
+                    for row in rows {
+                        let status = row.map_err(|e| format!("quick_check row: {e}"))?;
+                        if status != "ok" {
+                            return Err(format!("database integrity: {status}"));
+                        }
+                    }
+                }
+                db::init_db(&conn)?;
+                Ok(conn)
+            })();
+            match result {
+                Ok(conn) => return Ok(conn),
+                Err(error) => {
+                    last_error = error.clone();
+                    let corrupted = error.contains("malformed")
+                        || error.contains("not a database")
+                        || error.contains("database integrity");
+                    if attempt == 0 && corrupted {
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|value| value.as_secs())
+                            .unwrap_or(0);
+                        let backup = format!("{db_path}.corrupt-{stamp}");
+                        let backup = if fs::metadata(&backup).is_ok() {
+                            format!("{backup}-{attempt}")
+                        } else {
+                            backup
+                        };
+                        let _ = fs::rename(db_path, &backup);
+                        let _ = fs::remove_file(format!("{db_path}-wal"));
+                        let _ = fs::remove_file(format!("{db_path}-shm"));
+                        eprintln!("[octobeat-core] database is corrupted; moved to {backup}");
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        Err(last_error)
     }
 
     fn set_error(&self, message: impl Into<String>) {

@@ -37,12 +37,24 @@ tar -xzf OctoBeat-1.0.0-Linux-x86_64.tar.gz
 
 The tarball includes yt-dlp, Deno, ffmpeg/ffprobe and a frozen SomeDL binary.
 
+### Arch Linux / pacman
+
+```sh
+sudo pacman -U octobeat-bin-1.0.0-1-x86_64.pkg.tar.zst
+```
+
+Build it from the release tarball with `packaging/arch/build-package.sh`.
+
 ### Flatpak
 
 ```sh
 flatpak install --user ./OctoBeat-1.0.0.flatpak
 flatpak run io.github.ukimaka.OctoBeat
 ```
+
+If a Flatpak database from an older OctoBeat installation is corrupted, the
+core moves it to `music.db.corrupt-<timestamp>` and starts a fresh library
+instead of failing the scan.
 
 ### Windows
 
@@ -74,6 +86,7 @@ The Rust crates are vendored, so the build does not need network access.
 packaging/tools/build-linux.sh       # yt-dlp, Deno, ffmpeg, frozen SomeDL
 packaging/linux/build-tarball.sh    # dist/OctoBeat-1.0.0-Linux-*.tar.gz
 packaging/flatpak/build.sh          # dist/OctoBeat-1.0.0.flatpak
+packaging/arch/build-package.sh     # dist/octobeat-bin-1.0.0-1-x86_64.pkg.tar.zst
 ```
 
 Windows packaging is built by GitHub Actions
