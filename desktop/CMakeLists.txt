@@ -242,7 +242,6 @@ elseif(WIN32)
         runtimeobject
         oleaut32
         bcrypt
-        bcryptprimitives
     )
 else()
     target_link_libraries(octobeat PRIVATE
