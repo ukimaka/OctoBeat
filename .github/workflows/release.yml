@@ -109,7 +109,8 @@ jobs:
           path: dist/*.flatpak
 
   windows:
-    runs-on: windows-latest
+    # Keep the compiler aligned with Qt's win64_msvc2022_64 kit.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
