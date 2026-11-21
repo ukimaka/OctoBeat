@@ -167,6 +167,9 @@ bool AudioEngine::crossfadeTo(const QString &path) {
         qWarning("audio: crossfade request enabled=%d fading=%d",
                  m_crossfadeEnabled ? 1 : 0, m_fading ? 1 : 0);
     }
+    qWarning("audio: crossfade path=%s slot=%d engine_slot=%d",
+             path.toUtf8().constData(), m_active,
+             octobeat_audio_active_slot(m_engine));
     if (!octobeat_audio_crossfade(m_engine, path.toUtf8().constData())) {
         char error[1024] = {};
         octobeat_audio_take_error(m_engine, error, static_cast<int>(sizeof(error)));
@@ -177,6 +180,11 @@ bool AudioEngine::crossfadeTo(const QString &path) {
     }
 
     const qint64 remaining = duration() - position();
+    qWarning("audio: crossfade accepted remaining=%lld dur=%lld pos=%lld slot=%d",
+             static_cast<long long>(remaining),
+             static_cast<long long>(duration()),
+             static_cast<long long>(position()),
+             octobeat_audio_active_slot(m_engine));
     if (qEnvironmentVariableIsSet("OCTOBEAT_TRACE_AUDIO")) {
         qWarning("audio: crossfade remaining=%lld dur=%lld pos=%lld",
                  static_cast<long long>(remaining),
@@ -184,6 +192,7 @@ bool AudioEngine::crossfadeTo(const QString &path) {
                  static_cast<long long>(position()));
     }
     if (remaining < 600) {
+        qWarning("audio: crossfade rejected, remaining below 600");
         octobeat_audio_cancel_crossfade(m_engine);
         return false;
     }
@@ -259,6 +268,8 @@ void AudioEngine::finishFadeNow() {
         octobeat_audio_set_slot_volume(m_engine, m_active, 100);
         octobeat_audio_set_slot_volume(m_engine, 1 - m_active, 0);
     }
+    qWarning("audio: crossfade finished, active C++ slot=%d engine=%d",
+             m_active, octobeat_audio_active_slot(m_engine));
     m_endEmitted = false;
     m_aboutToFinishSent = false;
     m_lastDuration = -1;

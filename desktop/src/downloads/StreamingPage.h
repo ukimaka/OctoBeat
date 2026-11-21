@@ -139,6 +139,9 @@ private:
                                int durationSeconds);
     void handleFastStreamFailed(FastStreamService *source,
                                 const QString &message);
+    void handleStreamPrebuffered(FastStreamService *source,
+                                 const QString &path,
+                                 int durationSeconds);
     void startPreload(const SearchResult &track,
                       bool manual,
                       bool repeatOne = false);

@@ -801,6 +801,10 @@ fn render_f32(
     }
 }
 
+fn trace_audio() -> bool {
+    std::env::var_os("OCTOBEAT_TRACE_AUDIO").is_some()
+}
+
 fn engine_thread(shared: Arc<Shared>, rx: Receiver<Command>) {
     let mut engine = EngineThread::new(shared.clone());
     let (sample_tx, sample_rx) = std::sync::mpsc::sync_channel(SAMPLE_CHANNEL_CAPACITY);
@@ -814,6 +818,9 @@ fn engine_thread(shared: Arc<Shared>, rx: Receiver<Command>) {
         }
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(Command::Play { path, start_ms }) => {
+                if trace_audio() {
+                    eprintln!("[octobeat-audio] play slot=0 start_ms={start_ms} path={path}");
+                }
                 engine.stop_decoders();
                 engine.stop_output();
                 engine.drain_consumers();
@@ -849,6 +856,9 @@ fn engine_thread(shared: Arc<Shared>, rx: Receiver<Command>) {
             Ok(Command::Crossfade { path, reply }) => {
                 let active = engine.active_slot();
                 let standby = 1 - active;
+                if trace_audio() {
+                    eprintln!("[octobeat-audio] crossfade active={active} standby={standby} path={path}");
+                }
                 if engine.output.is_none() {
                     let _ = reply.send(Err("No active playback.".to_string()));
                     continue;
@@ -880,6 +890,9 @@ fn engine_thread(shared: Arc<Shared>, rx: Receiver<Command>) {
             Ok(Command::FinishCrossfade) => {
                 let active = engine.active_slot();
                 let standby = 1 - active;
+                if trace_audio() {
+                    eprintln!("[octobeat-audio] finish crossfade active={active} -> {standby}");
+                }
                 shared.slots[active]
                     .generation
                     .fetch_add(1, Ordering::Relaxed);
@@ -894,6 +907,9 @@ fn engine_thread(shared: Arc<Shared>, rx: Receiver<Command>) {
             Ok(Command::CancelCrossfade) => {
                 let active = engine.active_slot();
                 let standby = 1 - active;
+                if trace_audio() {
+                    eprintln!("[octobeat-audio] cancel crossfade active={active} standby={standby}");
+                }
                 shared.slots[standby]
                     .generation
                     .fetch_add(1, Ordering::Relaxed);
@@ -904,6 +920,9 @@ fn engine_thread(shared: Arc<Shared>, rx: Receiver<Command>) {
                 store_f32(&shared.slots[standby].volume, 0.0);
             }
             Ok(Command::Stop) => {
+                if trace_audio() {
+                    eprintln!("[octobeat-audio] stop");
+                }
                 engine.stop_decoders();
                 engine.stop_output();
                 engine.drain_consumers();

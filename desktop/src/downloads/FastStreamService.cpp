@@ -174,6 +174,9 @@ void FastStreamService::start(const QString &hlsUrl,
                 }
             });
 
+    qWarning("fast: start key=%s fifo=%s gen=%llu dur=%d",
+             safeKey.toUtf8().constData(), m_fifoPath.toUtf8().constData(),
+             static_cast<unsigned long long>(m_generation), durationSeconds);
     m_startTimeout->start();
     m_process->start();
     // The audio engine probes the FIFO as soon as it receives ready(). If the
@@ -184,6 +187,9 @@ void FastStreamService::start(const QString &hlsUrl,
 }
 
 void FastStreamService::stop() {
+    qWarning("fast: stop fifo=%s running=%d ready=%d",
+             m_fifoPath.toUtf8().constData(), isRunning() ? 1 : 0,
+             m_ready ? 1 : 0);
     m_stopping = true;
     if (m_startTimeout) {
         m_startTimeout->stop();
@@ -218,6 +224,9 @@ void FastStreamService::handleProgress() {
             if (!m_ready) {
                 m_ready = true;
                 m_startTimeout->stop();
+                qWarning("fast: data fifo=%s total=%lld -> ready",
+                         m_fifoPath.toUtf8().constData(),
+                         static_cast<long long>(totalSize));
                 emit ready(m_fifoPath, m_durationSeconds);
             }
             if (m_ready && !m_prebuffered) {
@@ -234,6 +243,10 @@ void FastStreamService::handleFfmpegFinished(int exitCode,
         return;
     }
     const bool wasReady = m_ready;
+    qWarning("fast: ffmpeg finished fifo=%s exit=%d status=%d ready=%d progress=%d",
+             m_fifoPath.toUtf8().constData(), exitCode,
+             static_cast<int>(status), wasReady ? 1 : 0,
+             m_progressSeen ? 1 : 0);
     if (m_startTimeout) {
         m_startTimeout->stop();
     }

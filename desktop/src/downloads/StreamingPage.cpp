@@ -447,6 +447,9 @@ StreamingPage::StreamingPage(const QString &musicDir,
                     setTrackPlaying(m_pending.id, true);
                     setSearchBusy(false);
                     setStatus(tr("Playing: %1").arg(m_pending.title));
+                    qWarning("stream: emitReady after cache id=%s path=%s",
+                             m_pending.id.toUtf8().constData(),
+                             path.toUtf8().constData());
                     emit streamReady(path, m_pending.title, m_pending.uploader,
                                      m_pendingDuration, 0, m_pending.thumbnail);
                 } else {
@@ -528,24 +531,17 @@ StreamingPage::StreamingPage(const QString &musicDir,
                 });
     };
     attachFastStream(m_fastStream);
-
-    connect(m_preloadStream, &FastStreamService::prebuffered, this,
-            [this](const QString &path, int durationSeconds) {
-                handlePreloadBuffered(path, durationSeconds);
-            });
-    connect(m_preloadStream, &FastStreamService::failed, this,
-            [this](const QString &message) {
-                if (!m_preloading) {
-                    return;
-                }
-                stopWatchdog();
-                m_preloading = false;
-                m_preloadReady = false;
-                m_preloadStream->stop();
-                setTrackBusy(m_preloadTrack.id, false);
-                setStatus(tr("Could not prepare the next stream: %1")
-                              .arg(message));
-            });
+    attachFastStream(m_preloadStream);
+    // Roles are swapped on every crossfade, so prebuffered must be routed by
+    // the current role as well.
+    const auto attachPrebuffered = [this](FastStreamService *stream) {
+        connect(stream, &FastStreamService::prebuffered, this,
+                [this, stream](const QString &path, int durationSeconds) {
+                    handleStreamPrebuffered(stream, path, durationSeconds);
+                });
+    };
+    attachPrebuffered(m_fastStream);
+    attachPrebuffered(m_preloadStream);
     connect(m_preloadResolveService, &YtDlpService::streamResolved, this,
             [this](const QString &url, const QString &, const QString &,
                    int durationSeconds) {
@@ -556,6 +552,9 @@ StreamingPage::StreamingPage(const QString &musicDir,
                 if (durationSeconds > 0) {
                     m_preloadDuration = durationSeconds;
                 }
+                qWarning("stream: preload resolved id=%s dur=%d url=%.80s",
+                         m_preloadTrack.id.toUtf8().constData(),
+                         m_preloadDuration, url.toUtf8().constData());
                 m_preloadStream->start(
                     url, m_streamDir,
                     m_preloadTrack.id + QStringLiteral("-preload"),
@@ -1540,6 +1539,12 @@ void StreamingPage::handleFastStreamReady(FastStreamService *source,
                                           const QString &path,
                                           int durationSeconds) {
     if (source != m_fastStream) {
+        if (source == m_preloadStream) {
+            // The objects swap roles after each crossfade; this service is the
+            // current preload pipe even though its signal name says "ready".
+            handlePreloadBuffered(path, durationSeconds);
+            return;
+        }
         source->stop();
         return;
     }
@@ -1558,6 +1563,8 @@ void StreamingPage::handleFastStreamReady(FastStreamService *source,
     setTrackPlaying(m_pending.id, true);
     setSearchBusy(false);
     setStatus(tr("Playing: %1").arg(m_pending.title));
+    qWarning("stream: emitReady cache seed id=%s path=%s",
+             m_pending.id.toUtf8().constData(), path.toUtf8().constData());
     emit streamReady(path, m_pending.title, m_pending.uploader,
                      m_pendingDuration, 0, m_pending.thumbnail);
 }
@@ -1565,6 +1572,15 @@ void StreamingPage::handleFastStreamReady(FastStreamService *source,
 void StreamingPage::handleFastStreamFailed(FastStreamService *source,
                                            const QString &message) {
     if (source != m_fastStream) {
+        if (source == m_preloadStream && m_preloading) {
+            stopWatchdog();
+            m_preloading = false;
+            m_preloadReady = false;
+            m_preloadStream->stop();
+            setTrackBusy(m_preloadTrack.id, false);
+            setStatus(tr("Could not prepare the next stream: %1")
+                          .arg(message));
+        }
         return;
     }
     if (m_fastUrl != m_pending.url) {
@@ -1614,6 +1630,9 @@ void StreamingPage::startPreload(const SearchResult &track,
     }
     emit streamPreloadCleared();
     m_preloadStream->stop();
+    qWarning("stream: preload start id=%s manual=%d queue=%d",
+             track.id.toUtf8().constData(), manual ? 1 : 0,
+             m_streamQueue.size());
     m_preloadTrack = track;
     m_preloadManual = manual;
     m_preloadRepeatOne = repeatOne;
@@ -1644,6 +1663,14 @@ void StreamingPage::startPreload(const SearchResult &track,
     m_preloadResolveService->resolveAudioHls(track.url, cookiesPath());
 }
 
+void StreamingPage::handleStreamPrebuffered(FastStreamService *source,
+                                            const QString &path,
+                                            int durationSeconds) {
+    if (source == m_preloadStream) {
+        handlePreloadBuffered(path, durationSeconds);
+    }
+}
+
 void StreamingPage::handlePreloadBuffered(const QString &path,
                                           int durationSeconds) {
     if (!m_preloading) {
@@ -1652,6 +1679,9 @@ void StreamingPage::handlePreloadBuffered(const QString &path,
     stopWatchdog();
     m_preloading = false;
     m_preloadReady = true;
+    qWarning("stream: preload buffered id=%s path=%s",
+             m_preloadTrack.id.toUtf8().constData(),
+             path.toUtf8().constData());
     m_preloadPath = path;
     if (durationSeconds > 0) {
         m_preloadDuration = durationSeconds;
@@ -1787,6 +1817,9 @@ void StreamingPage::startFastPlayback() {
 }
 
 void StreamingPage::startCacheDownload() {
+    qWarning("stream: startCacheDownload pending=%s playWhenReady=%d cacheDownloading=%d",
+             m_pending.id.toUtf8().constData(), m_playWhenReady ? 1 : 0,
+             m_cacheDownloading ? 1 : 0);
     if (m_pending.url.isEmpty()) {
         return;
     }
@@ -1821,6 +1854,9 @@ void StreamingPage::fallbackToCache() {
         m_playingState = true;
         recordPlaybackHistory();
         setTrackPlaying(m_playingId, true);
+        qWarning("stream: emitReady fallback id=%s path=%s",
+                 m_pending.id.toUtf8().constData(),
+                 m_cachedPath.toUtf8().constData());
         emit streamReady(m_cachedPath, m_pending.title, m_pending.uploader,
                          m_pendingDuration, 0, m_pending.thumbnail);
         return;
@@ -2024,6 +2060,10 @@ void StreamingPage::playAllCurrent() {
 }
 
 void StreamingPage::startBackgroundCache() {
+    qWarning("stream: startBackgroundCache pending=%s seek=%lld cacheUrl=%s",
+             m_pending.id.toUtf8().constData(),
+             static_cast<long long>(m_pendingCacheSeekMs),
+             m_bgCacheUrl.toUtf8().constData());
     if (m_pending.url.isEmpty() || m_pending.id.isEmpty()) {
         return;
     }
@@ -2087,6 +2127,8 @@ bool StreamingPage::startCachedPlayback() {
     setTrackPlaying(m_playingId, true);
     setSearchBusy(false);
     setStatus(tr("Playing: %1").arg(m_pending.title));
+    qWarning("stream: emitReady cache seed id=%s path=%s",
+             m_pending.id.toUtf8().constData(), path.toUtf8().constData());
     emit streamReady(path, m_pending.title, m_pending.uploader,
                      m_pendingDuration, 0, m_pending.thumbnail);
     return true;
@@ -2098,6 +2140,7 @@ void StreamingPage::switchToCachedSeek(qint64 targetMs) {
         setStatus(tr("Seek is not available for this stream."));
         return;
     }
+    qWarning("stream: switchToCachedSeek target=%lld", static_cast<long long>(targetMs));
     stopWatchdog();
     m_preloading = false;
     m_preloadReady = false;

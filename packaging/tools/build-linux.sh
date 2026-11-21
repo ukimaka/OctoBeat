@@ -19,7 +19,7 @@ mkdir -p "$OUT" "$BUILD"
 
 YTDLP_URL="${YTDLP_URL:-https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux}"
 DENO_URL="${DENO_URL:-https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip}"
-FFMPEG_URL="${FFMPEG_URL:-https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz}"
+FFMPEG_URL="${FFMPEG_URL:-https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz}"
 
 echo "[tools] yt-dlp"
 curl -L --fail --silent --show-error -o "$OUT/yt-dlp" "$YTDLP_URL"

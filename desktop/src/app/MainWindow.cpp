@@ -1441,13 +1441,18 @@ void MainWindow::switchToPreloaded() {
 
     const bool canCrossfade =
         m_crossfadeEnabled && m_streamingActive && m_audio->isPlaying();
+    qWarning("stream: switchToPreloaded path=%s canCrossfade=%d slot=%d",
+             path.toUtf8().constData(), canCrossfade ? 1 : 0,
+             m_audio->activeSlot());
     if (qEnvironmentVariableIsSet("OCTOBEAT_TRACE_AUDIO")) {
         qWarning("stream: switchToPreloaded canCrossfade=%d streaming=%d playing=%d",
                  canCrossfade ? 1 : 0, m_streamingActive ? 1 : 0,
                  m_audio->isPlaying() ? 1 : 0);
     }
     if (canCrossfade && m_audio->crossfadeTo(path)) {
+        qWarning("stream: crossfade accepted, begin transition");
         if (!m_streaming->beginPreloadedTransition()) {
+            qWarning("stream: beginPreloadedTransition refused");
             return;
         }
         m_streamCrossfading = true;

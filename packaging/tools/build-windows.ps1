@@ -30,7 +30,7 @@ Invoke-WebRequest -UseBasicParsing `
 Write-Host "[tools] ffmpeg"
 $FfmpegZip = Join-Path $Build "ffmpeg.zip"
 Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" `
+    -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip" `
     -OutFile $FfmpegZip
 Expand-Archive -Force $FfmpegZip (Join-Path $Build "ffmpeg")
 $FfmpegRoot = Get-ChildItem (Join-Path $Build "ffmpeg") -Directory | Select-Object -First 1
