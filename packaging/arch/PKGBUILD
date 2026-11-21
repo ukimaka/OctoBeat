@@ -11,7 +11,7 @@ provides=('octobeat')
 conflicts=('octobeat')
 options=('!debug' '!strip')
 source=("OctoBeat-${pkgver}-Linux-x86_64.tar.gz::https://github.com/ukimaka/OctoBeat/releases/download/v${pkgver}/OctoBeat-${pkgver}-Linux-x86_64.tar.gz")
-sha256sums=('9fb4ac8203fafb58d7b00acfda7e0f0a14e2ce16dae4bca15d81596977ea8e16')
+sha256sums=('53d15df2414ff8ba0692b348f3323d3a2462b3919639e701590adcb6d922c74e')
 
 package() {
     install -d "$pkgdir/usr"
