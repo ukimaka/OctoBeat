@@ -60,10 +60,10 @@ jobs:
         run: |
           chmod -R a+rwX .
           docker run --rm -v "$PWD:/work" archlinux:latest bash -c '
-            pacman -Sy --noconfirm base-devel
+            pacman -Syu --noconfirm base-devel
             useradd -m builder
             chown -R builder:builder /work
-            su builder -c /work/packaging/arch/ci-package.sh
+            su - builder -c /work/packaging/arch/ci-package.sh
           '
           cp packaging/arch/octobeat-bin-*.pkg.tar.zst dist/
       - uses: actions/upload-artifact@v4
