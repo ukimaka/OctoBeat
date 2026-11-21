@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ukimaka.OctoBeat</id>
+  <name>OctoBeat</name>
+  <summary>Play and manage your local music library</summary>
+  <developer id="io.github.ukimaka">
+    <name>ukimaka</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      OctoBeat is a local music player with YouTube search, downloads,
+      playlists, cover art, lyrics, a native Rust audio engine and MPRIS
+      media-key integration.
+    </p>
+    <p>
+      It keeps the familiar OctoBeat visual style and database format while
+      using a Rust core and Qt 6 Widgets interface.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.ukimaka.OctoBeat.desktop</launchable>
+  <url type="homepage">https://github.com/ukimaka/OctoBeat</url>
+  <url type="bugtracker">https://github.com/ukimaka/OctoBeat/issues</url>
+  <url type="vcs-browser">https://github.com/ukimaka/OctoBeat</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>OctoBeat main window</caption>
+      <image type="source">https://raw.githubusercontent.com/ukimaka/OctoBeat/main/assets/screenshots/main.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>audio</keyword>
+    <keyword>player</keyword>
+    <keyword>library</keyword>
+    <keyword>offline</keyword>
+  </keywords>
+  <provides><binary>octobeat</binary></provides>
+  <releases>
+    <release version="1.0.0" date="2026-11-21">
+      <description><p>First public Rust/Qt release.</p></description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

@@ -1,0 +1,40 @@
+[package]
+name = "oboe-sys"
+version.workspace = true
+description = "Unsafe bindings for oboe an android library for low latency audio IO"
+categories = ["external-ffi-bindings", "multimedia::audio"]
+keywords.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+include = ["/build.rs", "/src/*.rs", "/oboe/include", "/oboe/src", "/oboe-ext/include", "/oboe-ext/src", "/README.md"]
+
+[build-dependencies.fetch_unroll]
+workspace = true
+optional = true
+
+[build-dependencies.cc]
+workspace = true
+features = ["parallel"]
+
+[build-dependencies.bindgen]
+workspace = true
+optional = true
+
+[features]
+shared-link = []
+generate-bindings = ["bindgen"]
+fetch-prebuilt = ["fetch_unroll"]
+shared-stdcxx = []
+test = []
+
+[package.metadata.docs.rs]
+targets = [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
+]

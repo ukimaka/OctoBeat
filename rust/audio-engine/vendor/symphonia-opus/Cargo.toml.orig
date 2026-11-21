@@ -1,0 +1,47 @@
+[package]
+name = "symphonia-opus"
+version = "0.1.3"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Yevhen Bilyk <jiztastamablastamarang@gmail.com>"]
+description = "100% safe, pure-Rust Opus audio decoder (RFC 6716 / RFC 7845 / RFC 8251) for Symphonia."
+license = "MPL-2.0"
+repository = "https://github.com/jiztastamablastamarang/symphonia-opus"
+homepage = "https://github.com/jiztastamablastamarang/symphonia-opus"
+documentation = "https://docs.rs/symphonia-opus"
+readme = "README.md"
+categories = ["multimedia", "multimedia::audio", "multimedia::encoding"]
+keywords = ["audio", "codec", "decoder", "opus", "symphonia"]
+include = ["src/**/*", "tests/**/*", "benches/**/*", "LICENSE", "README.md", "Cargo.toml"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--document-private-items"]
+
+[dependencies]
+log = "0.4"
+symphonia-core = "0.6.1"
+thiserror = "1"
+
+[dev-dependencies]
+symphonia = { version = "0.6.1", default-features = false, features = ["ogg", "mkv"] }
+
+[[bench]]
+name = "decode"
+harness = false
+
+[lints.clippy]
+unwrap_used = "warn"
+# Numeric conversions: lossless ones use `From`, everything else goes through `src/convert.rs`.
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"
+# Iteration style.
+explicit_iter_loop = "warn"
+range_minus_one = "warn"
+range_plus_one = "warn"
+trivially_copy_pass_by_ref = "warn"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }

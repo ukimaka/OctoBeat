@@ -1,0 +1,1268 @@
+//! Self-contained and reproducible decode benchmark suite for [`symphonia_opus::OpusDecoder`].
+//!
+//! # Suites
+//!
+//! 1. **Embedded Steady-State Microbenchmarks** (always enabled, zero external files):
+//!    Exercises SILK-only, Hybrid, CELT-only (`2.5 ms` and `20 ms`), mode transitions with `5 ms`
+//!    redundant CELT frames, 3-channel Mapping Family 1 Vorbis surround, and packet-loss
+//!    concealment (`decode_lost_packet`).
+//! 2. **Full RFC 8251 Conformance Corpus** (enabled when `OPUS_TESTVECTORS_DIR` is set):
+//!    Parses `testvector01.bit` .. `testvector12.bit` (`320.6s` of Opus audio), verifies every
+//!    checked packet's `final_range()` on the warmup pass, and benchmarks full-corpus decoding at
+//!    `(48_000, 2)`, `(48_000, 1)`, and `(16_000, 1)` across both zero-copy planar `decode_ref`
+//!    and interleaved `copy_to_vec_interleaved` output paths.
+//!
+//! # CLI Flags
+//!
+//! - Default (`cargo bench --bench decode`): `3` warmup passes + `21` timed samples.
+//! - `--quick` (`cargo bench --bench decode -- --quick`): `1` warmup pass + `5` timed samples.
+//! - `--test` (`cargo test --benches`): `1` smoke-test pass per benchmark and exit `0`.
+
+#![forbid(unsafe_code)]
+#![allow(clippy::needless_return)]
+
+use std::hint::black_box;
+use std::path::{Path, PathBuf};
+use std::time::{Duration as StdDuration, Instant};
+
+use symphonia_core::audio::{Audio, Channels, GenericAudioBufferRef, Position};
+use symphonia_core::codecs::audio::well_known::CODEC_ID_OPUS;
+use symphonia_core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
+use symphonia_core::packet::PacketRef;
+use symphonia_core::units::{Duration, Timestamp};
+use symphonia_opus::OpusDecoder;
+
+/// Environment variable pointing to the unpacked RFC 8251 test vector directory.
+const VECTORS_DIR_ENV: &str = "OPUS_TESTVECTORS_DIR";
+
+/// Number of official RFC 8251 conformance bitstreams (`testvector01.bit` .. `testvector12.bit`).
+const TEST_VECTOR_COUNT: usize = 12;
+
+/// Maximum valid packet payload size in an `opus_demo` `.bit` stream (`MAX_PACKET`).
+const MAX_BIT_PACKET_BYTES: usize = 1500;
+
+/// Width in bytes of the big-endian `len` and `enc_final_range` fields in `.bit` records.
+const RECORD_HEADER_FIELD_BYTES: usize = 4;
+
+/// Maximum samples per channel in a single 120 ms Opus packet at 48 kHz.
+const MAX_PACKET_SAMPLES_48K: usize = 5760;
+
+/// Nominal 48 kHz sample rate used by all embedded microbenchmarks.
+const MICRO_SAMPLE_RATE_HZ: u32 = 48_000;
+
+/// Number of concealed 20 ms stereo frames per PLC measurement burst (`4` Hybrid + `4` CELT).
+const PLC_FRAMES_PER_BURST_HALF: usize = 4;
+
+// ============================================================================
+// Embedded Opus packet sequences (from `src/test_vectors.rs`, recorded from libopus 1.6.1)
+// ============================================================================
+
+const MONO_WB_PKT_0: [u8; 47] = [
+    0x48, 0x82, 0xb6, 0x0a, 0x70, 0x7e, 0xfb, 0xbd, 0xd2, 0x4d, 0x85, 0xcd, 0x78, 0xed, 0xb6, 0xdf,
+    0x64, 0x19, 0xe8, 0x13, 0x99, 0x45, 0x17, 0x57, 0xcb, 0xc7, 0x4b, 0xf0, 0x86, 0xdc, 0x1b, 0xe2,
+    0x1a, 0xc0, 0xd0, 0x76, 0xa0, 0xd1, 0xbd, 0x0d, 0x17, 0x34, 0xc7, 0x2b, 0xba, 0x74, 0xa0,
+];
+
+const MONO_WB_PKT_1: [u8; 73] = [
+    0x48, 0xad, 0xe4, 0x00, 0xd2, 0x1d, 0x46, 0x85, 0x7a, 0x36, 0x9b, 0x87, 0xb0, 0x89, 0xa5, 0xf7,
+    0xb4, 0xfd, 0x0f, 0x78, 0x05, 0x65, 0x14, 0x71, 0x11, 0x88, 0x36, 0xbc, 0x0f, 0xcd, 0x35, 0xa1,
+    0xe4, 0xdc, 0x77, 0xf2, 0xf8, 0x4c, 0x65, 0x3a, 0xb0, 0x69, 0x4b, 0x94, 0x60, 0xcc, 0xe8, 0x15,
+    0x48, 0x64, 0xff, 0xec, 0xf3, 0xfb, 0xc2, 0x18, 0x1f, 0x5d, 0xf2, 0x27, 0x6d, 0x86, 0x26, 0x66,
+    0x65, 0x5d, 0x41, 0xc7, 0x12, 0xd2, 0x61, 0x69, 0x62,
+];
+
+const MONO_WB_PKT_2: [u8; 27] = [
+    0x48, 0x9d, 0x68, 0xf6, 0x16, 0x52, 0xd4, 0x44, 0x2e, 0x8f, 0xec, 0xfa, 0x23, 0xdb, 0x55, 0xd6,
+    0x7c, 0x00, 0x4e, 0xe8, 0x89, 0x69, 0x21, 0x5b, 0x61, 0x48, 0x80,
+];
+
+const STEREO_MB_PKT_0: [u8; 83] = [
+    0x2c, 0xa4, 0xd1, 0xb0, 0xc4, 0xb7, 0x87, 0xab, 0x55, 0x78, 0x1c, 0x0b, 0x60, 0x22, 0xff, 0x6b,
+    0xf3, 0x0a, 0xae, 0xb0, 0x53, 0x72, 0x31, 0xd3, 0x5a, 0xdb, 0x47, 0x3d, 0x29, 0x53, 0xd7, 0xcc,
+    0x19, 0x14, 0x89, 0x5a, 0x36, 0xf2, 0xf7, 0x69, 0xfb, 0x5a, 0x69, 0xca, 0x00, 0x46, 0x96, 0x77,
+    0xb4, 0xf1, 0xa5, 0x26, 0x2d, 0xe3, 0x66, 0x13, 0x9b, 0xb4, 0x1c, 0x8e, 0x34, 0x8f, 0xca, 0x48,
+    0x87, 0xd8, 0x61, 0x43, 0xf2, 0xe4, 0xc2, 0xe0, 0x7e, 0x8a, 0x88, 0x82, 0xb6, 0x7d, 0xa8, 0x07,
+    0xe8, 0x97, 0x58,
+];
+
+const STEREO_MB_PKT_1: [u8; 81] = [
+    0x2c, 0xa9, 0x89, 0x67, 0x1d, 0xbe, 0x46, 0x11, 0x74, 0x23, 0x93, 0x7f, 0xec, 0x8b, 0xb7, 0x10,
+    0x4e, 0x98, 0xe6, 0x5d, 0x20, 0x79, 0xff, 0x19, 0x92, 0xcf, 0xf5, 0xaa, 0x90, 0xe3, 0x6b, 0x05,
+    0x4f, 0x03, 0x95, 0xfc, 0xfc, 0xbc, 0xf8, 0x45, 0xc6, 0x9d, 0x87, 0x57, 0x02, 0x67, 0x21, 0xba,
+    0x5f, 0xbf, 0x7a, 0xaa, 0x2e, 0xf4, 0xbc, 0x6e, 0xd6, 0x3f, 0xb3, 0x34, 0x02, 0x2e, 0x8a, 0xf8,
+    0x8e, 0x43, 0x6e, 0xfd, 0x81, 0x3f, 0xd7, 0xf1, 0xd1, 0x97, 0xd2, 0x79, 0x6e, 0x19, 0x0b, 0x30,
+    0x60,
+];
+
+const HYBRID_MONO_SWB_10MS_PKT_0: [u8; 40] = [
+    0x60, 0x85, 0x07, 0x40, 0xfa, 0xfa, 0x53, 0xe6, 0xc0, 0x9f, 0x7d, 0xb5, 0x6a, 0x50, 0xb8, 0x9a,
+    0x57, 0x2e, 0x95, 0x10, 0x3b, 0x56, 0x12, 0x83, 0x7c, 0x87, 0xb4, 0xb0, 0x0a, 0x31, 0x4a, 0xb9,
+    0xae, 0xbf, 0x1c, 0x93, 0xa5, 0x2f, 0xeb, 0x7b,
+];
+
+const HYBRID_MONO_SWB_10MS_PKT_1: [u8; 40] = [
+    0x60, 0xb8, 0x4e, 0xed, 0x06, 0xe9, 0x1f, 0x87, 0x3c, 0x6c, 0xcb, 0x7f, 0xef, 0x2d, 0xa9, 0xff,
+    0x43, 0x39, 0x2e, 0xd9, 0x78, 0xcd, 0xf8, 0xed, 0xb9, 0xe0, 0xf4, 0xe5, 0x0e, 0x0c, 0x92, 0x47,
+    0xb5, 0x0e, 0x3c, 0x4f, 0xdc, 0xd2, 0x53, 0xf3,
+];
+
+const HYBRID_MONO_SWB_10MS_PKT_2: [u8; 40] = [
+    0x60, 0xaf, 0x60, 0x8a, 0xa3, 0xb3, 0x6d, 0xff, 0xa7, 0x13, 0xed, 0x83, 0x1c, 0xb3, 0x63, 0xca,
+    0xd7, 0xd1, 0xb1, 0x00, 0xbd, 0xb5, 0x05, 0x26, 0x3a, 0x8f, 0xa4, 0xd7, 0xc9, 0x7e, 0x24, 0x05,
+    0xbb, 0x69, 0xf2, 0x5f, 0x1a, 0xfb, 0x7a, 0x8e,
+];
+
+const HYBRID_STEREO_FB_20MS_PKT_0: [u8; 160] = [
+    0x7c, 0xa9, 0x52, 0xb2, 0x91, 0x3d, 0x2f, 0x26, 0x03, 0xe5, 0x86, 0x5d, 0xec, 0x6d, 0x85, 0xfa,
+    0x11, 0xc5, 0xe4, 0x92, 0x65, 0x12, 0x41, 0xa3, 0x5c, 0x93, 0xee, 0xba, 0x8f, 0xf2, 0x07, 0x73,
+    0x6b, 0x1d, 0xbf, 0xcb, 0x3b, 0x8c, 0xc9, 0xf9, 0x88, 0x0e, 0x99, 0xef, 0x34, 0x55, 0xcd, 0x05,
+    0x88, 0x99, 0xd8, 0x9f, 0x6e, 0x73, 0x81, 0x6b, 0x9d, 0x51, 0x41, 0x79, 0xec, 0x8d, 0x0c, 0x76,
+    0x9e, 0xd3, 0x8f, 0x3f, 0xad, 0xd4, 0xa6, 0xca, 0x69, 0x53, 0x2f, 0x88, 0x3e, 0xfc, 0x7d, 0xe9,
+    0xc1, 0x5e, 0x2a, 0xd5, 0x42, 0x38, 0xbe, 0x2e, 0xbf, 0x97, 0xf6, 0xf4, 0xe1, 0x67, 0x72, 0xe1,
+    0x89, 0xa3, 0x22, 0x7b, 0xe0, 0x38, 0x3d, 0x37, 0xb7, 0x0d, 0x06, 0xcc, 0x66, 0xe5, 0xb6, 0xca,
+    0xa4, 0xc1, 0x45, 0x44, 0xba, 0x8c, 0x0f, 0x42, 0xb2, 0x1b, 0x19, 0x69, 0x99, 0xd5, 0x63, 0x6e,
+    0xd9, 0x19, 0xc4, 0x26, 0xde, 0xe0, 0x88, 0x14, 0x1f, 0x6d, 0xf9, 0x80, 0x15, 0x0a, 0x8b, 0xbf,
+    0x3a, 0xd5, 0x6b, 0xc6, 0xbf, 0x8d, 0xe0, 0x59, 0x90, 0x16, 0x98, 0x43, 0x84, 0xa9, 0x15, 0xb7,
+];
+
+const HYBRID_STEREO_FB_20MS_PKT_1: [u8; 160] = [
+    0x7c, 0xa9, 0x57, 0xca, 0x63, 0x2c, 0x9e, 0x94, 0x75, 0x00, 0x49, 0x8e, 0x66, 0xca, 0xfc, 0xe3,
+    0xfe, 0x6c, 0x56, 0x43, 0x5d, 0xc8, 0xa4, 0x80, 0x2e, 0x19, 0xa6, 0x3f, 0x56, 0x25, 0x31, 0xa1,
+    0x29, 0x21, 0xdc, 0x62, 0x44, 0x3c, 0xfa, 0x0f, 0xc5, 0x44, 0xae, 0xe4, 0x23, 0xb9, 0x97, 0xac,
+    0x0f, 0x49, 0xef, 0x34, 0xb4, 0xbf, 0xee, 0xf8, 0xd6, 0xc3, 0x6a, 0xdf, 0x26, 0x33, 0xd6, 0x26,
+    0xff, 0x62, 0xa9, 0xbc, 0xd8, 0x9b, 0xd8, 0x4d, 0xd1, 0x0c, 0x70, 0x5b, 0x68, 0xd1, 0x64, 0xd5,
+    0x34, 0xf7, 0x6f, 0xe3, 0x8c, 0x0c, 0x23, 0xa5, 0x4c, 0xc7, 0x10, 0xa3, 0xd3, 0x59, 0xf7, 0x06,
+    0x1d, 0x2b, 0xfe, 0xdf, 0xcc, 0x1d, 0x16, 0x90, 0x2a, 0x0b, 0x22, 0x75, 0xa8, 0x93, 0xca, 0x38,
+    0x98, 0xae, 0x64, 0x0e, 0xb1, 0xf9, 0x61, 0xd2, 0x86, 0x91, 0xf7, 0xdf, 0x2f, 0xaf, 0xb7, 0x6f,
+    0x60, 0x8f, 0x66, 0x28, 0x57, 0x35, 0xf1, 0x2b, 0x8b, 0xa8, 0x57, 0xc5, 0xf7, 0x2c, 0x59, 0x49,
+    0xfd, 0x38, 0xb9, 0xcb, 0xb8, 0x43, 0x94, 0xec, 0xf6, 0xdb, 0xce, 0x6e, 0xb6, 0x37, 0xc8, 0x23,
+];
+
+const CELT_MONO_FB_2_5MS_PKT_0: [u8; 20] = [
+    0xe0, 0x78, 0x27, 0xa4, 0xe4, 0xf0, 0xef, 0x37, 0x03, 0x60, 0x4f, 0x29, 0x11, 0x76, 0xed, 0xb6,
+    0x3f, 0x90, 0x18, 0x99,
+];
+
+const CELT_MONO_FB_2_5MS_PKT_1: [u8; 20] = [
+    0xe0, 0xb1, 0x5e, 0xc4, 0x25, 0xf4, 0xb4, 0xd9, 0xd3, 0x32, 0xdb, 0x60, 0xfb, 0x0f, 0x49, 0x8c,
+    0x67, 0x12, 0x83, 0xb2,
+];
+
+const CELT_MONO_FB_2_5MS_PKT_2: [u8; 20] = [
+    0xe0, 0xad, 0x22, 0xf0, 0x59, 0xef, 0x6e, 0x75, 0x77, 0x09, 0x5c, 0xd3, 0x3e, 0x89, 0x69, 0x23,
+    0x51, 0x07, 0xc9, 0xb2,
+];
+
+const CELT_MONO_FB_20MS_PKT_0: [u8; 160] = [
+    0xf8, 0xb5, 0x46, 0x42, 0x0d, 0x87, 0x88, 0x17, 0x51, 0xa6, 0x89, 0x6f, 0x47, 0xd7, 0x60, 0xa0,
+    0x9e, 0x53, 0x8c, 0x6f, 0x49, 0x20, 0x31, 0x43, 0x2d, 0xf9, 0x33, 0x0e, 0x05, 0xd0, 0xbf, 0x69,
+    0x97, 0x25, 0x81, 0xd6, 0xd0, 0xd2, 0x5c, 0x54, 0xf2, 0xa1, 0xb9, 0xfc, 0x4f, 0xae, 0x4e, 0xba,
+    0x6d, 0xf4, 0x7c, 0xc4, 0xe5, 0x16, 0x05, 0x8e, 0x78, 0xd1, 0x09, 0xe3, 0xc1, 0xde, 0x37, 0x2e,
+    0x48, 0xf0, 0x82, 0x42, 0x1d, 0x5d, 0xb3, 0xb4, 0xb6, 0xd4, 0xda, 0x5a, 0xca, 0x6e, 0x61, 0xb9,
+    0x86, 0xb2, 0x9c, 0x97, 0xe8, 0xd8, 0xf2, 0x65, 0xae, 0x35, 0x21, 0x25, 0xde, 0x91, 0xf2, 0xc0,
+    0x12, 0x0f, 0xa6, 0x9c, 0x72, 0x69, 0xc7, 0x26, 0x9c, 0x70, 0x95, 0x0d, 0x19, 0xa4, 0x20, 0x4c,
+    0x4f, 0x1c, 0x73, 0x6a, 0xb5, 0x5a, 0xaa, 0x19, 0x45, 0xcf, 0xb2, 0xa4, 0x7d, 0xb2, 0x7e, 0xdd,
+    0x90, 0xbe, 0xb7, 0x8f, 0xbe, 0xf3, 0x1e, 0xc6, 0x4d, 0x86, 0x5c, 0x50, 0x7d, 0x82, 0xe7, 0x2a,
+    0x4c, 0x4a, 0x68, 0x69, 0x3c, 0x87, 0x29, 0xbc, 0x1b, 0x99, 0x7d, 0x7f, 0xa7, 0x0e, 0x83, 0x72,
+];
+
+const CELT_MONO_FB_20MS_PKT_1: [u8; 160] = [
+    0xf8, 0xb3, 0x11, 0x52, 0xfd, 0xc7, 0x5e, 0xea, 0x4b, 0xfc, 0xd7, 0xb3, 0x65, 0xbb, 0x39, 0x04,
+    0x6f, 0xab, 0x97, 0xca, 0xed, 0xb4, 0x3f, 0x2a, 0x49, 0x46, 0x92, 0x49, 0x62, 0x93, 0xc4, 0x51,
+    0xe3, 0xc7, 0xe6, 0x25, 0x74, 0x91, 0xf7, 0x6f, 0x3f, 0xc5, 0x06, 0xb5, 0x60, 0xe8, 0xad, 0x01,
+    0x3f, 0x00, 0xc3, 0x4c, 0xaa, 0xc0, 0x04, 0x75, 0xf2, 0xfa, 0x09, 0x0a, 0xbf, 0xaf, 0xd0, 0xfe,
+    0x95, 0xd7, 0xed, 0xb4, 0x39, 0xe6, 0xa6, 0xa6, 0x9b, 0x7a, 0x18, 0x80, 0x57, 0xe5, 0x06, 0x08,
+    0xaa, 0xb5, 0x59, 0xf9, 0x24, 0x2d, 0xe0, 0x30, 0xca, 0xff, 0x13, 0xd2, 0x54, 0xcb, 0x50, 0x2f,
+    0x4f, 0x68, 0x67, 0xf3, 0x7d, 0x95, 0xd8, 0xd2, 0x95, 0xa8, 0x53, 0x29, 0xaa, 0x6b, 0x8a, 0x26,
+    0x00, 0x87, 0xf5, 0xc4, 0xaf, 0x9d, 0x3e, 0x49, 0xb5, 0xa2, 0x03, 0xa2, 0xf7, 0xec, 0xcc, 0x9f,
+    0x5e, 0x00, 0xd8, 0xf6, 0xff, 0xf9, 0x10, 0x82, 0x55, 0x70, 0x59, 0xc9, 0xc3, 0x2a, 0x13, 0xcb,
+    0xa8, 0x56, 0x0c, 0x83, 0x87, 0x16, 0xbc, 0xb2, 0x2f, 0xb3, 0xba, 0xb8, 0x58, 0x26, 0xc5, 0x72,
+];
+
+const CELT_MONO_FB_20MS_PKT_2: [u8; 160] = [
+    0xf8, 0xab, 0xb9, 0xc7, 0xce, 0xea, 0xb5, 0x39, 0x24, 0x41, 0xac, 0x99, 0x31, 0xb5, 0x4b, 0x64,
+    0x9e, 0xfd, 0x5a, 0x39, 0xc3, 0xb1, 0xbc, 0x74, 0x30, 0x16, 0x34, 0xa9, 0x52, 0xcf, 0x91, 0xac,
+    0xb8, 0x71, 0x77, 0xdc, 0xce, 0x9c, 0x02, 0xd1, 0xd5, 0x71, 0xfc, 0x65, 0x92, 0x89, 0xb0, 0x92,
+    0xc7, 0x53, 0xe8, 0x65, 0x48, 0x18, 0xeb, 0x9c, 0x27, 0xae, 0x18, 0x4b, 0x92, 0x14, 0x9a, 0xe1,
+    0x9c, 0xe9, 0x72, 0x01, 0x6e, 0x9d, 0x5d, 0xa8, 0x34, 0x0f, 0xa8, 0x92, 0x8d, 0xbd, 0xaa, 0x3a,
+    0xbd, 0xb1, 0x3e, 0x2d, 0xaa, 0x15, 0xae, 0x1a, 0xb9, 0x53, 0x0a, 0x7f, 0x5f, 0xf9, 0x51, 0xdb,
+    0xb7, 0xcf, 0xec, 0xae, 0xc6, 0x94, 0xcd, 0x45, 0xaf, 0x64, 0x03, 0xb2, 0x29, 0x97, 0xd9, 0x5e,
+    0x23, 0x04, 0xef, 0x63, 0x21, 0xde, 0xe3, 0x54, 0x8b, 0x27, 0x3e, 0x5e, 0x15, 0x5e, 0xef, 0xba,
+    0x33, 0x38, 0xc3, 0x74, 0x0e, 0xd8, 0x55, 0xfb, 0xc1, 0xad, 0xc4, 0xca, 0x4a, 0x97, 0x21, 0x4c,
+    0x69, 0x3b, 0xab, 0xcb, 0x3e, 0x1f, 0x36, 0xe7, 0xf1, 0xa8, 0x3e, 0x15, 0xa6, 0xe8, 0x53, 0x72,
+];
+
+const CELT_STEREO_FB_20MS_PKT_0: [u8; 240] = [
+    0xfc, 0xdf, 0xef, 0xcd, 0xd6, 0x70, 0x52, 0x6e, 0x1a, 0xdf, 0xcc, 0x9d, 0x39, 0x04, 0x04, 0x9b,
+    0xd2, 0x20, 0x81, 0x9b, 0x9b, 0x9b, 0x18, 0x11, 0x49, 0x4f, 0xcd, 0x8f, 0x1f, 0x3e, 0xfc, 0xa2,
+    0xca, 0x05, 0x9a, 0xf8, 0x06, 0xd2, 0xdd, 0xc1, 0x57, 0xf0, 0x63, 0x09, 0xd3, 0xf6, 0x2b, 0x7a,
+    0xc0, 0x6f, 0x1a, 0x90, 0x81, 0xe7, 0x52, 0x81, 0xff, 0x34, 0x21, 0xf3, 0x4f, 0xe0, 0xee, 0x7d,
+    0x94, 0xc2, 0xf7, 0x18, 0x07, 0x5d, 0x90, 0xf1, 0x17, 0x91, 0x53, 0xa0, 0x72, 0x1c, 0x94, 0xfa,
+    0x22, 0xfd, 0xcc, 0xf5, 0xee, 0x6c, 0xa0, 0x1e, 0x03, 0x97, 0x52, 0x83, 0x77, 0x79, 0x70, 0xfc,
+    0xa6, 0x24, 0xf3, 0x51, 0xf1, 0x4a, 0xfd, 0x19, 0x00, 0x3f, 0x02, 0x0b, 0xa0, 0x4d, 0x59, 0xb7,
+    0x9f, 0x0e, 0x1d, 0xe1, 0x39, 0xcd, 0x46, 0x37, 0x2d, 0x51, 0x32, 0xcf, 0xa4, 0x21, 0x15, 0x72,
+    0x32, 0x88, 0x42, 0xee, 0x1a, 0xc6, 0x53, 0x53, 0xd6, 0xa2, 0xae, 0x36, 0x01, 0xd2, 0xe3, 0x84,
+    0xf0, 0x97, 0x7a, 0xee, 0x27, 0xb8, 0x92, 0x32, 0xa3, 0xbc, 0x2d, 0x97, 0x38, 0xab, 0xd6, 0x42,
+    0x0e, 0xde, 0x9e, 0xe4, 0x97, 0xbf, 0x4c, 0xa3, 0xbf, 0xe5, 0x8b, 0xdc, 0xc1, 0xb8, 0x17, 0xfa,
+    0xa5, 0xcb, 0x06, 0x94, 0x54, 0xd7, 0xd8, 0x87, 0x4b, 0x29, 0xa4, 0x46, 0xbb, 0xad, 0x60, 0x87,
+    0x2d, 0x4f, 0x92, 0x64, 0xa8, 0x9d, 0x04, 0x5f, 0xf6, 0x34, 0x08, 0x1d, 0x92, 0xd6, 0xce, 0xe4,
+    0x70, 0x40, 0xfb, 0xfc, 0x16, 0x0f, 0x82, 0xec, 0xbe, 0x4f, 0x82, 0x0d, 0x8a, 0xe9, 0xf3, 0xd2,
+    0x0b, 0x0d, 0x1a, 0x44, 0x94, 0x80, 0x25, 0x45, 0x25, 0xca, 0xbe, 0xe7, 0xd4, 0x94, 0xc3, 0x54,
+];
+
+const CELT_STEREO_FB_20MS_PKT_1: [u8; 240] = [
+    0xfc, 0xdd, 0x89, 0xf5, 0xe2, 0x3b, 0x63, 0x17, 0x2b, 0x65, 0xc4, 0xf7, 0x7f, 0x94, 0x94, 0x54,
+    0x80, 0x38, 0x0f, 0x5b, 0x1e, 0xcc, 0xa3, 0x09, 0x5d, 0x60, 0xf8, 0xf8, 0xe2, 0x48, 0xd2, 0x7d,
+    0x40, 0x71, 0x14, 0xe0, 0x97, 0xa8, 0x0f, 0x2a, 0x5a, 0x4b, 0xa2, 0x50, 0x20, 0x40, 0xf3, 0xec,
+    0xbd, 0x0b, 0xb6, 0x33, 0x63, 0x8c, 0x7c, 0x52, 0xc5, 0x2c, 0x52, 0xbe, 0xc1, 0xd3, 0xee, 0xe3,
+    0xa7, 0xdd, 0xc5, 0x2c, 0x52, 0xc7, 0x4f, 0xee, 0xe3, 0xa7, 0xbb, 0x8e, 0x17, 0x08, 0x7d, 0xc8,
+    0x73, 0x44, 0x72, 0x10, 0xe7, 0xf6, 0x22, 0x87, 0x96, 0x0f, 0x20, 0x77, 0xe8, 0xba, 0xd7, 0x51,
+    0xe4, 0x1f, 0x3b, 0x29, 0xa8, 0x2d, 0xe3, 0xe2, 0x5d, 0xed, 0xee, 0xfc, 0x73, 0xc1, 0x45, 0xde,
+    0x4b, 0x2a, 0x25, 0xd4, 0x6b, 0xe3, 0x9e, 0x38, 0xdc, 0xed, 0xe8, 0xfb, 0x95, 0x6d, 0x7f, 0x4e,
+    0xf3, 0x37, 0xd3, 0xc7, 0x84, 0xa6, 0x43, 0x74, 0xfd, 0x41, 0xf8, 0xb2, 0xb2, 0x10, 0xa3, 0xa5,
+    0x8b, 0x63, 0x19, 0x46, 0xf9, 0x00, 0x09, 0x29, 0x72, 0x87, 0x9f, 0xdb, 0xb9, 0xa8, 0x8e, 0x87,
+    0xe3, 0xca, 0xe1, 0x12, 0x4c, 0x8b, 0x14, 0xa0, 0x85, 0x29, 0xc0, 0x65, 0xfa, 0x33, 0xb9, 0x43,
+    0xd4, 0x4d, 0x39, 0x04, 0x95, 0x7f, 0x6d, 0x70, 0x6b, 0x8c, 0x65, 0x5c, 0x0c, 0x1f, 0x34, 0x9a,
+    0xe1, 0x8d, 0xff, 0x38, 0x55, 0x03, 0x88, 0x4f, 0x09, 0xf6, 0x03, 0x87, 0xdc, 0xfd, 0x01, 0xa0,
+    0x75, 0xe3, 0xa7, 0xb2, 0xda, 0x19, 0xf0, 0x3c, 0x9b, 0xc5, 0xb8, 0x6a, 0x1e, 0xdd, 0xe0, 0xa5,
+    0xa9, 0x54, 0x5b, 0xab, 0x94, 0xf9, 0xc3, 0xae, 0x6b, 0xec, 0x7d, 0x7f, 0x26, 0x35, 0x9b, 0xe1,
+];
+
+const TRANSITION_0_SILK_WB_PKT: [u8; 120] = [
+    0x4b, 0x41, 0x02, 0x83, 0xca, 0x24, 0x8a, 0x8a, 0x11, 0x31, 0xa9, 0xa3, 0xde, 0x35, 0xde, 0x25,
+    0x0f, 0x27, 0xb6, 0xb5, 0x04, 0x8a, 0xe7, 0x96, 0xdf, 0x29, 0xbf, 0x62, 0xa1, 0x74, 0x48, 0x4e,
+    0x1d, 0x8d, 0x5d, 0x47, 0x10, 0xfd, 0xc4, 0x11, 0x94, 0x77, 0x7b, 0x6d, 0xec, 0xb4, 0xa0, 0xee,
+    0xbb, 0x26, 0xfc, 0x3f, 0x5c, 0x8f, 0x84, 0x81, 0x80, 0x74, 0x44, 0x26, 0x97, 0x36, 0xd7, 0x62,
+    0x00, 0x8e, 0xc6, 0xb4, 0x10, 0x84, 0x89, 0x87, 0xac, 0x54, 0x19, 0xe3, 0xdb, 0x90, 0xe2, 0x29,
+    0x39, 0xa2, 0xb4, 0x46, 0x0c, 0xa5, 0x36, 0xa4, 0xed, 0x71, 0x46, 0x27, 0xd4, 0x9d, 0xdc, 0x53,
+    0xdd, 0xac, 0x13, 0x17, 0x1b, 0xbd, 0x19, 0x0c, 0x48, 0x21, 0xc3, 0xd0, 0xfc, 0x33, 0x92, 0x95,
+    0x52, 0xa7, 0x74, 0xdc, 0xe7, 0xc0, 0x00, 0x00,
+];
+
+const TRANSITION_1_HYBRID_FB_PKT: [u8; 120] = [
+    0x78, 0xa6, 0x62, 0x0a, 0x23, 0x9b, 0x6b, 0x13, 0x83, 0x39, 0xed, 0x87, 0x94, 0xf2, 0xb7, 0xd6,
+    0xae, 0x50, 0xe5, 0x17, 0x75, 0xf3, 0x92, 0x01, 0xa3, 0x4a, 0xc9, 0xba, 0x0f, 0x41, 0x71, 0x8f,
+    0xfc, 0x14, 0x20, 0x3f, 0xc9, 0x3a, 0xc5, 0x2a, 0xf4, 0x68, 0xc6, 0xf4, 0x08, 0x02, 0xc4, 0xff,
+    0xc2, 0x8d, 0xc4, 0xfb, 0xc3, 0x31, 0x98, 0x0e, 0xfc, 0x6c, 0x44, 0x18, 0xc1, 0x3b, 0xe5, 0x1a,
+    0x5f, 0x29, 0x56, 0x39, 0x18, 0x22, 0x34, 0xa1, 0xe7, 0x75, 0x19, 0xc4, 0xf2, 0x02, 0xf5, 0xc5,
+    0xcc, 0xd4, 0x0a, 0xfb, 0xc7, 0x52, 0x9a, 0x88, 0x41, 0xb6, 0x1e, 0x9e, 0x9e, 0x0d, 0x9e, 0x47,
+    0x61, 0x04, 0x78, 0xad, 0x9f, 0xc6, 0x48, 0x21, 0xd4, 0x1f, 0xab, 0xb9, 0x06, 0x4b, 0xeb, 0xde,
+    0x68, 0xdc, 0xb9, 0xf6, 0xe4, 0x49, 0x08, 0xc3,
+];
+
+const TRANSITION_2_CELT_FB_PKT: [u8; 120] = [
+    0x78, 0xa6, 0xc7, 0x33, 0xe0, 0xda, 0x87, 0xcc, 0xd1, 0xfa, 0x24, 0x20, 0x3a, 0x22, 0x8b, 0xb8,
+    0xf8, 0x6f, 0xbb, 0x68, 0x12, 0x7d, 0x2a, 0xb2, 0x90, 0x11, 0x5e, 0x81, 0x41, 0x4e, 0xc5, 0xae,
+    0xf6, 0xfd, 0x96, 0xa1, 0x10, 0x45, 0xb6, 0x93, 0x5d, 0xda, 0xbc, 0xd3, 0x81, 0xa3, 0xc2, 0x73,
+    0x75, 0x2b, 0x42, 0x4c, 0x86, 0x30, 0xd5, 0x7e, 0x5a, 0xe1, 0x26, 0xb2, 0x0a, 0xc4, 0x28, 0x16,
+    0x10, 0xad, 0x51, 0x39, 0x42, 0xfd, 0xe6, 0x74, 0x2d, 0x42, 0xd6, 0x8f, 0xbd, 0xa9, 0x74, 0x07,
+    0x5b, 0x76, 0x47, 0x2a, 0x54, 0x86, 0x9c, 0x66, 0xac, 0xe8, 0x70, 0x67, 0x7e, 0x73, 0x85, 0x1d,
+    0x43, 0x8d, 0xfa, 0xd1, 0xf2, 0xb2, 0xb8, 0x26, 0x21, 0x37, 0xb3, 0x88, 0x86, 0x64, 0xcb, 0x8b,
+    0x2a, 0x34, 0x35, 0x09, 0x84, 0x8e, 0x74, 0x7a,
+];
+
+const TRANSITION_3_SILK_WB_RETURN_PKT: [u8; 120] = [
+    0x4b, 0x41, 0x02, 0x95, 0x93, 0xf7, 0x94, 0x08, 0x2b, 0xad, 0xde, 0x3b, 0xb8, 0x53, 0xe5, 0xad,
+    0xb2, 0x06, 0x73, 0x37, 0x23, 0x16, 0xf0, 0x87, 0xbc, 0x7e, 0x86, 0x25, 0xa5, 0x79, 0xc7, 0x8d,
+    0x67, 0x04, 0xf0, 0x02, 0x3f, 0xcb, 0x0e, 0xa7, 0x32, 0xee, 0x98, 0x7f, 0x00, 0x3c, 0xe2, 0x8f,
+    0x72, 0xb8, 0x8d, 0xf1, 0x27, 0x3d, 0x67, 0x4b, 0xe9, 0x29, 0xf1, 0x37, 0x75, 0x9c, 0xeb, 0x88,
+    0x60, 0x43, 0x3c, 0x6f, 0x46, 0x00, 0x34, 0x3b, 0xc4, 0x6a, 0xe7, 0x72, 0x03, 0x44, 0xd5, 0x7e,
+    0xab, 0xa7, 0x20, 0x6e, 0x1f, 0x90, 0xd3, 0x53, 0xa5, 0x92, 0x66, 0xfb, 0xfb, 0x33, 0xeb, 0x77,
+    0xe6, 0xf6, 0x68, 0x10, 0x41, 0xca, 0xf4, 0x25, 0x02, 0x2b, 0x9e, 0xab, 0x14, 0xa2, 0x4f, 0xf4,
+    0xc2, 0xf4, 0x9a, 0xd9, 0xc9, 0xe3, 0x00, 0x00,
+];
+
+const MS_3CH_PKT_0: [u8; 240] = [
+    0xfc, 0x93, 0xb5, 0x3f, 0xc1, 0x90, 0x13, 0x3e, 0xb7, 0xdb, 0xc4, 0x4f, 0x1a, 0xa3, 0xf3, 0x59,
+    0xd4, 0xf3, 0x0c, 0x94, 0xdf, 0x91, 0x4a, 0x64, 0x8d, 0xd7, 0x2c, 0xd2, 0xb9, 0x9b, 0x0d, 0x82,
+    0x63, 0x08, 0x5d, 0xa3, 0x3a, 0xb5, 0xf6, 0xbf, 0x44, 0xf2, 0xea, 0x8b, 0x97, 0x18, 0x44, 0x24,
+    0x52, 0x3f, 0x48, 0x5e, 0x55, 0x0d, 0x8c, 0x9f, 0xdb, 0xfb, 0x6c, 0xf9, 0x50, 0x41, 0x42, 0xa9,
+    0xb9, 0x7e, 0x8a, 0x41, 0x52, 0xbb, 0x74, 0xa3, 0xbe, 0x21, 0xe1, 0xb1, 0x9c, 0x5f, 0xae, 0x4f,
+    0xd0, 0xd0, 0xa5, 0xd4, 0xe4, 0xb5, 0x53, 0xdd, 0xba, 0x97, 0xa1, 0x7a, 0xa5, 0xd4, 0xd0, 0x00,
+    0x7c, 0xec, 0x7e, 0x9f, 0x64, 0x16, 0x05, 0x65, 0xde, 0x00, 0xd8, 0xe3, 0x1f, 0x13, 0x6b, 0xc9,
+    0x1a, 0xdc, 0x5a, 0x4b, 0x14, 0xc2, 0x37, 0xc2, 0xf1, 0x2d, 0x16, 0x23, 0x69, 0x48, 0x63, 0xbf,
+    0x1a, 0x64, 0x91, 0x7d, 0x59, 0x65, 0x0a, 0x55, 0xa6, 0x0d, 0x31, 0x55, 0xd0, 0x60, 0xa3, 0x20,
+    0xdb, 0xb0, 0x19, 0x3f, 0x72, 0x78, 0x84, 0x9d, 0xae, 0x42, 0x11, 0xe4, 0x26, 0xf7, 0xda, 0x80,
+    0x20, 0xb5, 0x0c, 0xbe, 0xcc, 0xc5, 0x88, 0xd4, 0x38, 0x79, 0x58, 0x38, 0xc8, 0x26, 0x34, 0xf8,
+    0x22, 0xdb, 0xc3, 0xf3, 0xf9, 0x7f, 0x3c, 0xaa, 0x00, 0xc5, 0xa3, 0x6b, 0xba, 0xfa, 0x96, 0xed,
+    0x5c, 0x5c, 0x1b, 0x55, 0xb0, 0x81, 0x6b, 0xec, 0xe0, 0xa6, 0x64, 0xac, 0x4e, 0xa9, 0xca, 0x96,
+    0x3d, 0x2e, 0x6d, 0x5d, 0x4d, 0x2a, 0x7b, 0x6d, 0xe8, 0xbc, 0x98, 0xb2, 0x60, 0x14, 0x56, 0xed,
+    0x04, 0x0b, 0x02, 0x87, 0xa8, 0x25, 0x77, 0x99, 0xb9, 0x06, 0xd7, 0x06, 0xf3, 0x42, 0x58, 0xde,
+];
+
+const MS_3CH_PKT_1: [u8; 240] = [
+    0xfc, 0x93, 0xb2, 0xfc, 0x66, 0xe6, 0x5a, 0x8e, 0x96, 0xfd, 0x2a, 0x70, 0xbe, 0x6e, 0x23, 0xa9,
+    0x5f, 0xe9, 0xf0, 0x99, 0x8a, 0x91, 0xe7, 0x7d, 0x20, 0x96, 0x87, 0xa9, 0xb3, 0x46, 0xcd, 0xbd,
+    0xaf, 0xcb, 0xa8, 0xdc, 0x62, 0xd1, 0xf2, 0xb6, 0xb4, 0xe2, 0xd3, 0x61, 0x76, 0x17, 0x61, 0x76,
+    0x17, 0x61, 0x79, 0x93, 0x90, 0x73, 0x27, 0x20, 0xe0, 0xa2, 0x07, 0xa2, 0x57, 0xbd, 0xe9, 0x91,
+    0xaa, 0x63, 0x41, 0xe8, 0xb0, 0x64, 0xfc, 0xba, 0x95, 0x5b, 0xee, 0xcd, 0xa0, 0x09, 0xe2, 0x02,
+    0x64, 0xfb, 0x12, 0x39, 0x0e, 0x54, 0xd3, 0xa5, 0xc1, 0x92, 0xc6, 0x08, 0x4f, 0xcb, 0x99, 0xc3,
+    0x03, 0x1f, 0x3d, 0x13, 0xd0, 0xdb, 0x7d, 0xfa, 0x0c, 0x1b, 0x21, 0xcf, 0xfb, 0x81, 0xf6, 0xa6,
+    0x73, 0x0d, 0xc9, 0x02, 0x5e, 0x1d, 0x74, 0xa7, 0x8a, 0xc9, 0xec, 0xfc, 0x8b, 0x0e, 0x3f, 0xf8,
+    0x67, 0x6d, 0x9b, 0x22, 0xbb, 0x5c, 0x15, 0xc3, 0x20, 0xe9, 0x42, 0xae, 0x4c, 0x7e, 0x67, 0xe8,
+    0x52, 0x32, 0xb4, 0xb9, 0x72, 0x78, 0xaa, 0xfc, 0x2b, 0x2d, 0x5d, 0x1a, 0x34, 0xed, 0xbe, 0x35,
+    0xb7, 0xa9, 0x49, 0x6a, 0x7e, 0xc2, 0x51, 0x81, 0xab, 0x0f, 0x84, 0x07, 0xb3, 0xf6, 0xcb, 0x45,
+    0x81, 0x34, 0xc1, 0xcc, 0x9b, 0x76, 0x95, 0x94, 0x2b, 0x13, 0x76, 0x59, 0x99, 0xf7, 0xd8, 0x5c,
+    0xe4, 0xe0, 0xda, 0x82, 0x3b, 0x5a, 0x16, 0x55, 0xcd, 0x01, 0xb5, 0xd1, 0x24, 0xc8, 0x44, 0x83,
+    0x5f, 0xb2, 0x2d, 0x2d, 0x50, 0x71, 0x2f, 0x28, 0xb3, 0x78, 0x58, 0x40, 0x39, 0x3c, 0xc4, 0xf0,
+    0xfa, 0x78, 0xa2, 0xd2, 0x57, 0x81, 0xc7, 0xff, 0x8c, 0x34, 0x5a, 0x9c, 0x48, 0x8f, 0xf3, 0xf2,
+];
+
+/// RFC 7845 Section 5.1.1 Mapping Family 1 `OpusHead` for 3 channels (`2` streams, `1` coupled,
+/// mapping `[0, 2, 1]`, `pre_skip = 312`, `48_000` Hz, `0.0` dB output gain).
+const MS_3CH_OPUS_HEAD: [u8; 24] = [
+    b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 1, 3, 0x38, 0x01, 0x80, 0xbb, 0x00, 0x00, 0x00,
+    0x00, 1, 2, 1, 0, 2, 1,
+];
+
+const SILK_WB_MONO_SEQ: [&[u8]; 3] = [&MONO_WB_PKT_0, &MONO_WB_PKT_1, &MONO_WB_PKT_2];
+const SILK_MB_STEREO_SEQ: [&[u8]; 2] = [&STEREO_MB_PKT_0, &STEREO_MB_PKT_1];
+const HYBRID_SWB_MONO_10MS_SEQ: [&[u8]; 3] =
+    [&HYBRID_MONO_SWB_10MS_PKT_0, &HYBRID_MONO_SWB_10MS_PKT_1, &HYBRID_MONO_SWB_10MS_PKT_2];
+const HYBRID_FB_STEREO_20MS_SEQ: [&[u8]; 2] =
+    [&HYBRID_STEREO_FB_20MS_PKT_0, &HYBRID_STEREO_FB_20MS_PKT_1];
+const CELT_FB_MONO_2_5MS_SEQ: [&[u8]; 3] =
+    [&CELT_MONO_FB_2_5MS_PKT_0, &CELT_MONO_FB_2_5MS_PKT_1, &CELT_MONO_FB_2_5MS_PKT_2];
+const CELT_FB_MONO_20MS_SEQ: [&[u8]; 3] =
+    [&CELT_MONO_FB_20MS_PKT_0, &CELT_MONO_FB_20MS_PKT_1, &CELT_MONO_FB_20MS_PKT_2];
+const CELT_FB_STEREO_20MS_SEQ: [&[u8]; 2] =
+    [&CELT_STEREO_FB_20MS_PKT_0, &CELT_STEREO_FB_20MS_PKT_1];
+const MODE_TRANSITIONS_SEQ: [&[u8]; 4] = [
+    &TRANSITION_0_SILK_WB_PKT,
+    &TRANSITION_1_HYBRID_FB_PKT,
+    &TRANSITION_2_CELT_FB_PKT,
+    &TRANSITION_3_SILK_WB_RETURN_PKT,
+];
+const MULTISTREAM_3CH_SEQ: [&[u8]; 2] = [&MS_3CH_PKT_0, &MS_3CH_PKT_1];
+
+/// Benchmark execution profile selected via command-line arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunMode {
+    /// `--test` (`cargo test --benches`): single smoke-test pass per benchmark and exit `0`.
+    SmokeTest,
+    /// `--quick`: `1` warmup pass + `5` timed samples.
+    Quick,
+    /// Default (`cargo bench`): `3` warmup passes + `21` timed samples.
+    Standard,
+}
+
+impl RunMode {
+    fn warmup_passes(self) -> usize {
+        return match self {
+            Self::SmokeTest => 0,
+            Self::Quick => 1,
+            Self::Standard => 3,
+        };
+    }
+
+    fn timed_samples(self) -> usize {
+        return match self {
+            Self::SmokeTest => 1,
+            Self::Quick => 5,
+            Self::Standard => 21,
+        };
+    }
+
+    fn label(self) -> &'static str {
+        return match self {
+            Self::SmokeTest => "smoke-test",
+            Self::Quick => "quick",
+            Self::Standard => "standard",
+        };
+    }
+}
+
+/// Parsed command-line configuration.
+struct CliConfig {
+    mode: RunMode,
+    filter: Option<String>,
+}
+
+fn parse_cli() -> CliConfig {
+    let mut saw_test = false;
+    let mut saw_quick = false;
+    let mut saw_bench = false;
+    let mut filter: Option<String> = None;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--test" => saw_test = true,
+            "--quick" => saw_quick = true,
+            "--bench" => saw_bench = true,
+            "--nocapture" | "--quiet" | "-q" => {}
+            other => {
+                if !other.starts_with('-') && filter.is_none() {
+                    filter = Some(other.to_owned());
+                }
+            }
+        }
+    }
+    let mode = match (saw_test, saw_quick, saw_bench || !cfg!(debug_assertions)) {
+        (true, _, _) => RunMode::SmokeTest,
+        (false, true, _) => RunMode::Quick,
+        (false, false, true) => RunMode::Standard,
+        (false, false, false) => RunMode::SmokeTest,
+    };
+    return CliConfig { mode, filter };
+}
+
+/// Channel layout configuration for creating an [`OpusDecoder`].
+#[derive(Clone, Copy, Debug)]
+enum DecoderSetup {
+    Mono,
+    Stereo,
+    Surround3Ch,
+}
+
+impl DecoderSetup {
+    fn channels(self) -> usize {
+        return match self {
+            Self::Mono => 1,
+            Self::Stereo => 2,
+            Self::Surround3Ch => 3,
+        };
+    }
+
+    fn name(self) -> &'static str {
+        return match self {
+            Self::Mono => "mono",
+            Self::Stereo => "stereo",
+            Self::Surround3Ch => "3ch",
+        };
+    }
+
+    fn make_decoder(self, sample_rate_hz: u32) -> OpusDecoder {
+        let mut params = AudioCodecParameters::new();
+        params.for_codec(CODEC_ID_OPUS).with_sample_rate(sample_rate_hz);
+        match self {
+            Self::Mono => {
+                params.with_channels(Channels::Positioned(Position::FRONT_CENTER));
+            }
+            Self::Stereo => {
+                params.with_channels(Channels::Positioned(
+                    Position::FRONT_LEFT | Position::FRONT_RIGHT,
+                ));
+            }
+            Self::Surround3Ch => {
+                params
+                    .with_channels(Channels::Positioned(
+                        Position::FRONT_LEFT | Position::FRONT_CENTER | Position::FRONT_RIGHT,
+                    ))
+                    .with_extra_data(Box::new(MS_3CH_OPUS_HEAD));
+            }
+        }
+        return OpusDecoder::try_new(&params, &AudioDecoderOptions::default()).unwrap_or_else(
+            |err| {
+                panic!(
+                    "failed to construct {} Hz {} OpusDecoder: {err}",
+                    sample_rate_hz,
+                    self.name()
+                )
+            },
+        );
+    }
+}
+
+/// Embedded microbenchmark descriptor.
+struct MicroCase {
+    name: &'static str,
+    setup: DecoderSetup,
+    packets: &'static [&'static [u8]],
+    expected_frames_per_pkt: usize,
+    cycles_per_batch: usize,
+}
+
+static MICRO_CASES: [MicroCase; 9] = [
+    MicroCase {
+        name: "silk_wb_mono_20ms",
+        setup: DecoderSetup::Mono,
+        packets: &SILK_WB_MONO_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 40,
+    },
+    MicroCase {
+        name: "silk_mb_stereo_20ms",
+        setup: DecoderSetup::Stereo,
+        packets: &SILK_MB_STEREO_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 60,
+    },
+    MicroCase {
+        name: "hybrid_swb_mono_10ms",
+        setup: DecoderSetup::Mono,
+        packets: &HYBRID_SWB_MONO_10MS_SEQ,
+        expected_frames_per_pkt: 480,
+        cycles_per_batch: 80,
+    },
+    MicroCase {
+        name: "hybrid_fb_stereo_20ms",
+        setup: DecoderSetup::Stereo,
+        packets: &HYBRID_FB_STEREO_20MS_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 60,
+    },
+    MicroCase {
+        name: "celt_fb_mono_2_5ms",
+        setup: DecoderSetup::Mono,
+        packets: &CELT_FB_MONO_2_5MS_SEQ,
+        expected_frames_per_pkt: 120,
+        cycles_per_batch: 320,
+    },
+    MicroCase {
+        name: "celt_fb_mono_20ms",
+        setup: DecoderSetup::Mono,
+        packets: &CELT_FB_MONO_20MS_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 40,
+    },
+    MicroCase {
+        name: "celt_fb_stereo_20ms",
+        setup: DecoderSetup::Stereo,
+        packets: &CELT_FB_STEREO_20MS_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 60,
+    },
+    MicroCase {
+        name: "mode_transitions_mono",
+        setup: DecoderSetup::Mono,
+        packets: &MODE_TRANSITIONS_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 30,
+    },
+    MicroCase {
+        name: "multistream_surround_3ch",
+        setup: DecoderSetup::Surround3Ch,
+        packets: &MULTISTREAM_3CH_SEQ,
+        expected_frames_per_pkt: 960,
+        cycles_per_batch: 60,
+    },
+];
+
+/// Summary statistics over a set of wall-clock durations (in seconds).
+#[derive(Clone, Copy, Debug)]
+struct TimingStats {
+    median_secs: f64,
+    iqr_percent: f64,
+}
+
+fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
+    let last = sorted.len() - 1;
+    let pos = q * count_f64(last);
+    let lower = whole_index(pos.floor());
+    let upper = whole_index(pos.ceil());
+    let frac = pos - count_f64(lower);
+    return sorted[lower] + (sorted[upper] - sorted[lower]) * frac;
+}
+
+fn summarize_samples(raw_secs: &[f64]) -> TimingStats {
+    assert!(!raw_secs.is_empty(), "timing sample list must not be empty");
+    let mut sorted = raw_secs.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let median_secs = quantile_sorted(&sorted, 0.50);
+    let q1 = quantile_sorted(&sorted, 0.25);
+    let q3 = quantile_sorted(&sorted, 0.75);
+    let iqr_percent = match median_secs > 0.0 {
+        true => ((q3 - q1) / median_secs) * 100.0,
+        false => 0.0,
+    };
+    return TimingStats { median_secs, iqr_percent };
+}
+
+fn format_median_time(seconds: f64) -> String {
+    let micros = seconds * 1_000_000.0;
+    return match micros < 1_000.0 {
+        true => format!("{micros:>7.1} us"),
+        false => format!("{:>7.2} ms", seconds * 1_000.0),
+    };
+}
+
+/// Observes every planar `f32` channel slice with [`black_box`] to prevent dead-code elimination
+/// and returns `(frames_per_channel, total_channel_samples)`.
+#[inline]
+fn observe_planar_output(decoded: GenericAudioBufferRef<'_>) -> (usize, usize) {
+    let GenericAudioBufferRef::F32(buf) = decoded
+    else {
+        panic!("OpusDecoder must return an F32 audio buffer");
+    };
+    let frames = buf.frames();
+    let mut plane_count = 0usize;
+    for plane in buf.iter_planes() {
+        black_box(plane);
+        plane_count += 1;
+    }
+    return (frames, frames * plane_count);
+}
+
+/// Verifies on a one-shot pass that every packet in `case` decodes to the expected frame/channel
+/// geometry and produces finite `f32` samples.
+fn verify_micro_case(decoder: &mut OpusDecoder, case: &MicroCase) {
+    decoder.reset();
+    let expected_channels = case.setup.channels();
+    for &raw_pkt in case.packets {
+        let payload = black_box(raw_pkt);
+        let packet = PacketRef::new(0, Timestamp::from(0u32), Duration::from(0u64), payload);
+        let decoded = decoder
+            .decode_ref(&packet)
+            .unwrap_or_else(|err| panic!("{} decode failed: {err}", case.name));
+        let GenericAudioBufferRef::F32(buf) = decoded
+        else {
+            panic!("{}: expected F32 buffer", case.name);
+        };
+        assert_eq!(buf.frames(), case.expected_frames_per_pkt, "{}: frame count", case.name);
+        assert_eq!(buf.num_planes(), expected_channels, "{}: channel count", case.name);
+        for plane in buf.iter_planes() {
+            assert!(plane.iter().all(|s| s.is_finite()), "{}: non-finite sample", case.name);
+        }
+    }
+    return;
+}
+
+/// Runs one batch of `cycles` passes over `case.packets`, resetting decoder state cleanly once at
+/// the start of the batch without re-allocating [`OpusDecoder`].
+fn run_micro_batch(
+    decoder: &mut OpusDecoder,
+    packets: &[&[u8]],
+    cycles: usize,
+) -> (f64, usize, usize, usize) {
+    decoder.reset();
+    let mut total_packets = 0usize;
+    let mut total_frames = 0usize;
+    let mut total_samples = 0usize;
+    let start = Instant::now();
+    for _ in 0..cycles {
+        for &raw_pkt in packets {
+            let payload = black_box(raw_pkt);
+            let packet = PacketRef::new(0, Timestamp::from(0u32), Duration::from(0u64), payload);
+            let decoded = decoder
+                .decode_ref(&packet)
+                .unwrap_or_else(|err| panic!("microbenchmark decode failed: {err}"));
+            let (frames, samples) = observe_planar_output(decoded);
+            total_packets += 1;
+            total_frames += frames;
+            total_samples += samples;
+        }
+    }
+    let elapsed_secs = start.elapsed().as_secs_f64();
+    return (elapsed_secs, total_packets, total_frames, total_samples);
+}
+
+/// Runs one batch of packet-loss concealment (`decode_lost_packet`) across both Hybrid FB stereo
+/// and CELT FB stereo streams.
+///
+/// Each burst primes `hybrid_dec` and `celt_dec` with two consecutive active frames (untimed, so
+/// CELT periodic pitch-based PLC is armed with `loss_duration == 0` and `skip_plc == false`), then
+/// times `4` Hybrid `decode_lost_packet()` calls and `4` CELT `decode_lost_packet()` calls.
+fn run_plc_batch(
+    hybrid_dec: &mut OpusDecoder,
+    celt_dec: &mut OpusDecoder,
+    bursts: usize,
+) -> (f64, usize, usize, usize) {
+    hybrid_dec.reset();
+    celt_dec.reset();
+    let mut elapsed = StdDuration::ZERO;
+    let mut total_packets = 0usize;
+    let mut total_frames = 0usize;
+    let mut total_samples = 0usize;
+
+    for _ in 0..bursts {
+        for &raw_pkt in &HYBRID_FB_STEREO_20MS_SEQ {
+            let pkt = PacketRef::new(0, Timestamp::from(0u32), Duration::from(0u64), raw_pkt);
+            let _ = hybrid_dec
+                .decode_ref(&pkt)
+                .unwrap_or_else(|err| panic!("PLC Hybrid prime failed: {err}"));
+        }
+        for &raw_pkt in &CELT_FB_STEREO_20MS_SEQ {
+            let pkt = PacketRef::new(0, Timestamp::from(0u32), Duration::from(0u64), raw_pkt);
+            let _ = celt_dec
+                .decode_ref(&pkt)
+                .unwrap_or_else(|err| panic!("PLC CELT prime failed: {err}"));
+        }
+
+        let burst_start = Instant::now();
+        for _ in 0..PLC_FRAMES_PER_BURST_HALF {
+            let concealed = black_box(&mut *hybrid_dec)
+                .decode_lost_packet()
+                .unwrap_or_else(|err| panic!("Hybrid decode_lost_packet failed: {err}"));
+            let (frames, samples) = observe_planar_output(concealed);
+            total_packets += 1;
+            total_frames += frames;
+            total_samples += samples;
+        }
+        for _ in 0..PLC_FRAMES_PER_BURST_HALF {
+            let concealed = black_box(&mut *celt_dec)
+                .decode_lost_packet()
+                .unwrap_or_else(|err| panic!("CELT decode_lost_packet failed: {err}"));
+            let (frames, samples) = observe_planar_output(concealed);
+            total_packets += 1;
+            total_frames += frames;
+            total_samples += samples;
+        }
+        elapsed += burst_start.elapsed();
+    }
+
+    return (elapsed.as_secs_f64(), total_packets, total_frames, total_samples);
+}
+
+struct BenchRow {
+    name: String,
+    packets: usize,
+    frames_per_ch: usize,
+    total_samples: usize,
+    audio_secs: f64,
+    stats: TimingStats,
+}
+
+fn print_micro_header(mode: RunMode) {
+    println!(
+        "Opus Decoder Embedded Microbenchmarks (48 kHz planar f32, {} mode: {} warmup + {} samples)",
+        mode.label(),
+        mode.warmup_passes(),
+        mode.timed_samples()
+    );
+    println!("{}", "=".repeat(96));
+    println!(
+        "{:<26} {:>6} {:>10} {:>10} {:>10} {:>7} {:>10} {:>10}",
+        "Benchmark", "Pkts", "Frames/ch", "Samples", "Median", "IQR%", "MSample/s", "x RT"
+    );
+    println!("{}", "-".repeat(96));
+    return;
+}
+
+fn print_micro_row(row: &BenchRow) {
+    let median_str = format_median_time(row.stats.median_secs);
+    let msample_per_sec = count_f64(row.total_samples) / (row.stats.median_secs * 1_000_000.0);
+    let realtime_factor = row.audio_secs / row.stats.median_secs;
+    println!(
+        "{:<26} {:>6} {:>10} {:>10} {:>10} {:>6.1}% {:>10.2} {:>9.1}x",
+        row.name,
+        row.packets,
+        row.frames_per_ch,
+        row.total_samples,
+        median_str,
+        row.stats.iqr_percent,
+        msample_per_sec,
+        realtime_factor,
+    );
+    return;
+}
+
+fn matches_filter(name: &str, filter: Option<&str>) -> bool {
+    return filter.is_none_or(|pat| name.contains(pat));
+}
+
+fn run_embedded_suite(cfg: &CliConfig) {
+    let is_smoke = cfg.mode == RunMode::SmokeTest;
+    if !is_smoke {
+        print_micro_header(cfg.mode);
+    }
+
+    let mut executed = 0usize;
+    for case in &MICRO_CASES {
+        if !matches_filter(case.name, cfg.filter.as_deref()) {
+            continue;
+        }
+        let mut decoder = case.setup.make_decoder(MICRO_SAMPLE_RATE_HZ);
+        verify_micro_case(&mut decoder, case);
+        let cycles = match is_smoke {
+            true => 1,
+            false => case.cycles_per_batch,
+        };
+        for _ in 0..cfg.mode.warmup_passes() {
+            let _ = run_micro_batch(&mut decoder, case.packets, cycles);
+        }
+        let mut raw_secs = Vec::with_capacity(cfg.mode.timed_samples());
+        let mut pkts = 0usize;
+        let mut frames = 0usize;
+        let mut samples = 0usize;
+        for _ in 0..cfg.mode.timed_samples() {
+            let (secs, p, f, s) = run_micro_batch(&mut decoder, case.packets, cycles);
+            raw_secs.push(secs);
+            pkts = p;
+            frames = f;
+            samples = s;
+        }
+        assert!(frames > 0 && samples > 0, "{}: zero decoded samples", case.name);
+        executed += 1;
+        if !is_smoke {
+            let row = BenchRow {
+                name: case.name.to_owned(),
+                packets: pkts,
+                frames_per_ch: frames,
+                total_samples: samples,
+                audio_secs: count_f64(frames) / f64::from(MICRO_SAMPLE_RATE_HZ),
+                stats: summarize_samples(&raw_secs),
+            };
+            print_micro_row(&row);
+        }
+    }
+
+    let plc_name = "plc_hybrid_and_celt";
+    if matches_filter(plc_name, cfg.filter.as_deref()) {
+        let mut hybrid_dec = DecoderSetup::Stereo.make_decoder(MICRO_SAMPLE_RATE_HZ);
+        let mut celt_dec = DecoderSetup::Stereo.make_decoder(MICRO_SAMPLE_RATE_HZ);
+        let bursts = match is_smoke {
+            true => 1,
+            false => 15,
+        };
+        for _ in 0..cfg.mode.warmup_passes() {
+            let _ = run_plc_batch(&mut hybrid_dec, &mut celt_dec, bursts);
+        }
+        let mut raw_secs = Vec::with_capacity(cfg.mode.timed_samples());
+        let mut pkts = 0usize;
+        let mut frames = 0usize;
+        let mut samples = 0usize;
+        for _ in 0..cfg.mode.timed_samples() {
+            let (secs, p, f, s) = run_plc_batch(&mut hybrid_dec, &mut celt_dec, bursts);
+            raw_secs.push(secs);
+            pkts = p;
+            frames = f;
+            samples = s;
+        }
+        assert!(frames > 0 && samples > 0, "{plc_name}: zero concealed samples");
+        executed += 1;
+        if !is_smoke {
+            let row = BenchRow {
+                name: plc_name.to_owned(),
+                packets: pkts,
+                frames_per_ch: frames,
+                total_samples: samples,
+                audio_secs: count_f64(frames) / f64::from(MICRO_SAMPLE_RATE_HZ),
+                stats: summarize_samples(&raw_secs),
+            };
+            print_micro_row(&row);
+        }
+    }
+
+    if !is_smoke {
+        println!("{}", "-".repeat(96));
+    }
+    if is_smoke {
+        println!("test decode_bench_smoke ({executed} benchmarks) ... ok");
+    }
+    return;
+}
+
+// ============================================================================
+// Full RFC 8251 Conformance Corpus Benchmark (`OPUS_TESTVECTORS_DIR`)
+// ============================================================================
+
+/// One parsed packet record from an `opus_demo` `.bit` file.
+struct BitRecord<'a> {
+    enc_final_range: u32,
+    payload: &'a [u8],
+}
+
+/// Loaded `.bit` file bytes for a single RFC 8251 vector (`testvector01` .. `testvector12`).
+struct LoadedVector {
+    number: usize,
+    name: String,
+    raw_bytes: Vec<u8>,
+}
+
+fn parse_bit_records(bytes: &[u8]) -> Result<Vec<BitRecord<'_>>, String> {
+    let mut records = Vec::new();
+    let mut rest = bytes;
+    while let Some((len_bytes, after_len)) = rest.split_first_chunk::<RECORD_HEADER_FIELD_BYTES>() {
+        let record_num = records.len();
+        let payload_len = u32::from_be_bytes(*len_bytes) as usize;
+        if payload_len > MAX_BIT_PACKET_BYTES {
+            return Err(format!("record {record_num}: payload length {payload_len} > 1500"));
+        }
+        let Some((range_bytes, after_range)) =
+            after_len.split_first_chunk::<RECORD_HEADER_FIELD_BYTES>()
+        else {
+            return Err(format!("record {record_num}: truncated encoder final_range field"));
+        };
+        let Some((payload, tail)) = after_range.split_at_checked(payload_len)
+        else {
+            return Err(format!(
+                "record {record_num}: truncated payload (expected {payload_len} bytes)"
+            ));
+        };
+        records.push(BitRecord { enc_final_range: u32::from_be_bytes(*range_bytes), payload });
+        rest = tail;
+    }
+    return Ok(records);
+}
+
+fn load_corpus_vectors(dir: &Path) -> Vec<LoadedVector> {
+    let mut loaded = Vec::with_capacity(TEST_VECTOR_COUNT);
+    for number in 1..=TEST_VECTOR_COUNT {
+        let name = format!("testvector{number:02}");
+        let path = dir.join(format!("{name}.bit"));
+        let raw_bytes = std::fs::read(&path).unwrap_or_else(|err| {
+            panic!("cannot read RFC 8251 bitstream {}: {err}", path.display())
+        });
+        loaded.push(LoadedVector { number, name, raw_bytes });
+    }
+    return loaded;
+}
+
+/// Output consumption mode for corpus benchmarks.
+#[derive(Clone, Copy, Debug)]
+enum OutputSink {
+    /// Zero-copy planar borrow via `OpusDecoder::decode_ref`.
+    PlanarRef,
+    /// Planar decode followed by interleaved `f32` copy via `copy_to_vec_interleaved`.
+    InterleavedCopy,
+}
+
+impl OutputSink {
+    fn label(self) -> &'static str {
+        return match self {
+            Self::PlanarRef => "planar decode_ref",
+            Self::InterleavedCopy => "interleaved copy",
+        };
+    }
+
+    fn slug(self) -> &'static str {
+        return match self {
+            Self::PlanarRef => "planar",
+            Self::InterleavedCopy => "interleaved",
+        };
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CorpusConfig {
+    sample_rate_hz: u32,
+    setup: DecoderSetup,
+    sink: OutputSink,
+}
+
+static CORPUS_CONFIGS: [CorpusConfig; 6] = [
+    CorpusConfig {
+        sample_rate_hz: 48_000,
+        setup: DecoderSetup::Stereo,
+        sink: OutputSink::PlanarRef,
+    },
+    CorpusConfig {
+        sample_rate_hz: 48_000,
+        setup: DecoderSetup::Stereo,
+        sink: OutputSink::InterleavedCopy,
+    },
+    CorpusConfig { sample_rate_hz: 48_000, setup: DecoderSetup::Mono, sink: OutputSink::PlanarRef },
+    CorpusConfig {
+        sample_rate_hz: 48_000,
+        setup: DecoderSetup::Mono,
+        sink: OutputSink::InterleavedCopy,
+    },
+    CorpusConfig { sample_rate_hz: 16_000, setup: DecoderSetup::Mono, sink: OutputSink::PlanarRef },
+    CorpusConfig {
+        sample_rate_hz: 16_000,
+        setup: DecoderSetup::Mono,
+        sink: OutputSink::InterleavedCopy,
+    },
+];
+
+struct VectorDecodeOutcome {
+    elapsed_secs: f64,
+    packets: usize,
+    checked_ranges: usize,
+    frames_per_ch: usize,
+    total_samples: usize,
+}
+
+/// Decodes all records of one `.bit` vector, optionally verifying `final_range()` against
+/// `enc_final_range` using the normative `opus_demo -d` rule (RFC 6716 Section 6).
+fn decode_corpus_vector(
+    decoder: &mut OpusDecoder,
+    interleaved_scratch: &mut Vec<f32>,
+    vector_num: usize,
+    records: &[BitRecord<'_>],
+    sink: OutputSink,
+    verify_range: bool,
+) -> VectorDecodeOutcome {
+    decoder.reset();
+    let mut frames_per_ch = 0usize;
+    let mut total_samples = 0usize;
+    let mut checked_ranges = 0usize;
+    let mut lost_prev = true;
+
+    let start = Instant::now();
+    for (packet_num, record) in records.iter().enumerate() {
+        let lost = record.payload.is_empty();
+        let payload = black_box(record.payload);
+        let packet = PacketRef::new(0, Timestamp::from(0u32), Duration::from(0u64), payload);
+        let decoded = decoder.decode_ref(&packet).unwrap_or_else(|err| {
+            panic!("testvector{vector_num:02} packet {packet_num} decode error: {err}")
+        });
+        match sink {
+            OutputSink::PlanarRef => {
+                let (frames, samples) = observe_planar_output(decoded);
+                frames_per_ch += frames;
+                total_samples += samples;
+            }
+            OutputSink::InterleavedCopy => {
+                let frames = decoded.frames();
+                decoded.copy_to_vec_interleaved(interleaved_scratch);
+                black_box(interleaved_scratch.as_slice());
+                frames_per_ch += frames;
+                total_samples += interleaved_scratch.len();
+            }
+        }
+        if verify_range {
+            let should_check = record.enc_final_range != 0 && !lost && !lost_prev;
+            checked_ranges += usize::from(should_check);
+            let actual_range = decoder.final_range();
+            if should_check && actual_range != record.enc_final_range {
+                panic!(
+                    "testvector{vector_num:02} packet {packet_num}: final_range mismatch \
+                     (expected 0x{:08x}, got 0x{actual_range:08x})",
+                    record.enc_final_range
+                );
+            }
+            lost_prev = lost;
+        }
+    }
+    let elapsed_secs = start.elapsed().as_secs_f64();
+
+    return VectorDecodeOutcome {
+        elapsed_secs,
+        packets: records.len(),
+        checked_ranges,
+        frames_per_ch,
+        total_samples,
+    };
+}
+
+struct CorpusSummaryRow {
+    label: String,
+    audio_secs: f64,
+    total_samples: usize,
+    checked_ranges: usize,
+    stats: TimingStats,
+}
+
+fn run_corpus_config(
+    parsed_vectors: &[(usize, &str, Vec<BitRecord<'_>>)],
+    corpus_cfg: CorpusConfig,
+    mode: RunMode,
+) -> CorpusSummaryRow {
+    let mut decoder = corpus_cfg.setup.make_decoder(corpus_cfg.sample_rate_hz);
+    let mut interleaved_scratch =
+        Vec::with_capacity(MAX_PACKET_SAMPLES_48K * corpus_cfg.setup.channels());
+
+    let warmup_passes = mode.warmup_passes().max(1);
+    let timed_samples = mode.timed_samples();
+    let mut verified_ranges = 0usize;
+
+    for pass in 0..warmup_passes {
+        let verify_now = pass == 0;
+        let mut pass_checked = 0usize;
+        for &(vec_num, _, ref records) in parsed_vectors {
+            let out = decode_corpus_vector(
+                &mut decoder,
+                &mut interleaved_scratch,
+                vec_num,
+                records,
+                corpus_cfg.sink,
+                verify_now,
+            );
+            pass_checked += out.checked_ranges;
+        }
+        if verify_now {
+            verified_ranges = pass_checked;
+        }
+    }
+
+    let vec_count = parsed_vectors.len();
+    let mut per_vec_secs: Vec<Vec<f64>> =
+        (0..vec_count).map(|_| Vec::with_capacity(timed_samples)).collect();
+    let mut per_vec_meta: Vec<(usize, usize, usize)> = vec![(0, 0, 0); vec_count];
+    let mut total_pass_secs = Vec::with_capacity(timed_samples);
+
+    for _ in 0..timed_samples {
+        let mut pass_secs = 0.0f64;
+        for (slot, &(vec_num, _, ref records)) in parsed_vectors.iter().enumerate() {
+            let out = decode_corpus_vector(
+                &mut decoder,
+                &mut interleaved_scratch,
+                vec_num,
+                records,
+                corpus_cfg.sink,
+                false,
+            );
+            per_vec_secs[slot].push(out.elapsed_secs);
+            per_vec_meta[slot] = (out.packets, out.frames_per_ch, out.total_samples);
+            pass_secs += out.elapsed_secs;
+        }
+        total_pass_secs.push(pass_secs);
+    }
+
+    println!();
+    println!(
+        "RFC 8251 Corpus: {} Hz, {} ch ({}), {} | final_range: OK ({verified_ranges} checked)",
+        corpus_cfg.sample_rate_hz,
+        corpus_cfg.setup.channels(),
+        corpus_cfg.setup.name(),
+        corpus_cfg.sink.label(),
+    );
+    println!("{}", "-".repeat(96));
+    println!(
+        "{:<24} {:>7} {:>9} {:>11} {:>10} {:>7} {:>11} {:>10}",
+        "Vector", "Pkts", "Audio(s)", "Samples", "Median", "IQR%", "MSample/s", "x RT"
+    );
+    println!("{}", "-".repeat(96));
+
+    let mut grand_packets = 0usize;
+    let mut grand_frames = 0usize;
+    let mut grand_samples = 0usize;
+
+    for (slot, &(_, vec_name, _)) in parsed_vectors.iter().enumerate() {
+        let (pkts, frames, samples) = per_vec_meta[slot];
+        let audio_secs = count_f64(frames) / f64::from(corpus_cfg.sample_rate_hz);
+        let stats = summarize_samples(&per_vec_secs[slot]);
+        let median_ms = stats.median_secs * 1_000.0;
+        let msample_s = count_f64(samples) / (stats.median_secs * 1_000_000.0);
+        let rt = audio_secs / stats.median_secs;
+        println!(
+            "{:<24} {:>7} {:>8.1}s {:>11} {:>7.2} ms {:>6.1}% {:>11.2} {:>9.1}x",
+            vec_name, pkts, audio_secs, samples, median_ms, stats.iqr_percent, msample_s, rt,
+        );
+        grand_packets += pkts;
+        grand_frames += frames;
+        grand_samples += samples;
+    }
+
+    let total_audio_secs = count_f64(grand_frames) / f64::from(corpus_cfg.sample_rate_hz);
+    let total_stats = summarize_samples(&total_pass_secs);
+    let total_median_ms = total_stats.median_secs * 1_000.0;
+    let total_msample_s = count_f64(grand_samples) / (total_stats.median_secs * 1_000_000.0);
+    let total_rt = total_audio_secs / total_stats.median_secs;
+    let total_label = format!("TOTAL ({total_audio_secs:.1}s audio)");
+
+    println!("{}", "-".repeat(96));
+    println!(
+        "{:<24} {:>7} {:>8.1}s {:>11} {:>7.2} ms {:>6.1}% {:>11.2} {:>9.1}x",
+        total_label,
+        grand_packets,
+        total_audio_secs,
+        grand_samples,
+        total_median_ms,
+        total_stats.iqr_percent,
+        total_msample_s,
+        total_rt,
+    );
+    println!("{}", "-".repeat(96));
+
+    let summary_label = format!(
+        "({:>5}, {}) {:<11}",
+        corpus_cfg.sample_rate_hz,
+        corpus_cfg.setup.channels(),
+        corpus_cfg.sink.slug(),
+    );
+    return CorpusSummaryRow {
+        label: summary_label,
+        audio_secs: total_audio_secs,
+        total_samples: grand_samples,
+        checked_ranges: verified_ranges,
+        stats: total_stats,
+    };
+}
+
+fn run_rfc8251_corpus_suite(dir: &Path, cfg: &CliConfig) {
+    let loaded = load_corpus_vectors(dir);
+    let parsed_vectors: Vec<(usize, &str, Vec<BitRecord<'_>>)> = loaded
+        .iter()
+        .map(|vec_file| {
+            let records = parse_bit_records(&vec_file.raw_bytes).unwrap_or_else(|err| {
+                panic!("malformed {}.bit in {}: {err}", vec_file.name, dir.display())
+            });
+            (vec_file.number, vec_file.name.as_str(), records)
+        })
+        .collect();
+
+    let mut summaries = Vec::new();
+    for &corpus_cfg in &CORPUS_CONFIGS {
+        let config_tag = format!(
+            "corpus_{}hz_{}ch_{}",
+            corpus_cfg.sample_rate_hz,
+            corpus_cfg.setup.channels(),
+            corpus_cfg.sink.slug(),
+        );
+        if !matches_filter(&config_tag, cfg.filter.as_deref()) {
+            continue;
+        }
+        summaries.push(run_corpus_config(&parsed_vectors, corpus_cfg, cfg.mode));
+    }
+
+    if summaries.is_empty() {
+        return;
+    }
+
+    println!();
+    println!(
+        "RFC 8251 Full-Corpus Summary (testvector01..12, {} samples)",
+        cfg.mode.timed_samples()
+    );
+    println!("{}", "=".repeat(96));
+    println!(
+        "{:<26} {:>9} {:>11} {:>9} {:>10} {:>7} {:>9} {:>8}",
+        "Config (Hz, ch) mode",
+        "Audio(s)",
+        "Samples",
+        "Checked",
+        "Median",
+        "IQR%",
+        "MSample/s",
+        "x RT"
+    );
+    println!("{}", "-".repeat(96));
+    for item in &summaries {
+        let median_ms = item.stats.median_secs * 1_000.0;
+        let msample_s = count_f64(item.total_samples) / (item.stats.median_secs * 1_000_000.0);
+        let rt = item.audio_secs / item.stats.median_secs;
+        println!(
+            "{:<26} {:>8.1}s {:>11} {:>9} {:>7.2} ms {:>6.1}% {:>9.2} {:>7.1}x",
+            item.label,
+            item.audio_secs,
+            item.total_samples,
+            item.checked_ranges,
+            median_ms,
+            item.stats.iqr_percent,
+            msample_s,
+            rt,
+        );
+    }
+    println!("{}", "-".repeat(96));
+    return;
+}
+
+fn main() {
+    let cfg = parse_cli();
+    run_embedded_suite(&cfg);
+    if cfg.mode == RunMode::SmokeTest {
+        return;
+    }
+
+    let Some(dir_os) = std::env::var_os(VECTORS_DIR_ENV)
+    else {
+        println!(
+            "Note: set {VECTORS_DIR_ENV}=/path/to/opus_newvectors cargo bench \
+             to enable the full RFC 8251 corpus benchmark."
+        );
+        return;
+    };
+    let dir = PathBuf::from(dir_os);
+    run_rfc8251_corpus_suite(&dir, &cfg);
+    return;
+}
+
+/// Converts a frame or sample count to `f64`, exact for every count a benchmark reaches (far
+/// below `2^53`).
+#[expect(clippy::cast_precision_loss, reason = "counts below 2^53 are exact in f64")]
+fn count_f64(n: usize) -> f64 {
+    debug_assert!(u64::try_from(n).is_ok_and(|n| n < 1 << f64::MANTISSA_DIGITS));
+    return n as f64;
+}
+
+/// Converts an integral, non-negative position inside a sample slice to its index.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "integral, non-negative and below the slice length"
+)]
+fn whole_index(x: f64) -> usize {
+    debug_assert!(x >= 0.0 && x.fract() == 0.0);
+    return x as usize;
+}

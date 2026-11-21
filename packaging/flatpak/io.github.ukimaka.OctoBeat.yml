@@ -1,0 +1,76 @@
+app-id: io.github.ukimaka.OctoBeat
+runtime: org.kde.Platform
+runtime-version: "6.11"
+sdk: org.kde.Sdk
+command: octobeat
+
+finish-args:
+  - --share=network
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --filesystem=home
+  - --own-name=org.mpris.MediaPlayer2.octobeat
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+
+cleanup:
+  - /include
+  - /lib/debug
+  - /lib/pkgconfig
+  - /share/doc
+  - /share/info
+  - /share/man
+  - "*.a"
+  - "*.la"
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/octobeat/cargo
+    CARGO_NET_OFFLINE: "true"
+
+modules:
+  - name: octobeat-tools
+    buildsystem: simple
+    build-commands:
+      - install -d /app/share/octobeat/tools
+      - install -Dm755 yt-dlp /app/share/octobeat/tools/yt-dlp
+      - install -Dm755 deno /app/share/octobeat/tools/deno
+      - install -Dm755 ffmpeg /app/share/octobeat/tools/ffmpeg
+      - install -Dm755 ffprobe /app/share/octobeat/tools/ffprobe
+      - install -Dm755 somedl /app/share/octobeat/tools/somedl
+      - install -Dm644 FFMPEG-LICENSE.txt /app/share/octobeat/tools/FFMPEG-LICENSE.txt
+    sources:
+      - type: dir
+        path: ../tools/runtime
+
+  - name: octobeat
+    buildsystem: cmake
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    build-commands:
+      - cmake --build . -j ${FLATPAK_BUILDER_N_JOBS}
+      - cmake --install . --prefix /app
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .github
+          - build
+          - build-release
+          - dist
+          - desktop/build
+          - packaging/tools/.build
+          - packaging/tools/runtime
+          - rust/core/target
+          - rust/audio-engine/target
+          - "*.tar.gz"
+          - "*.flatpak"
+          - "*.log"
