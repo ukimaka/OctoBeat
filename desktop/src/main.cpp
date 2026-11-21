@@ -282,6 +282,10 @@ int main(int argc, char *argv[]) {
     QCommandLineOption trackMenuOption(
         QStringLiteral("track-menu"),
         QStringLiteral("Open the track context menu (for screenshots)."));
+    QCommandLineOption librarySortOption(
+        QStringLiteral("library-sort"),
+        QStringLiteral("Sort the library by key (for screenshots)."),
+        QStringLiteral("key"));
     QCommandLineOption screenshotDelayOption(
         QStringLiteral("screenshot-delay"),
         QStringLiteral("Delay before taking the screenshot, in milliseconds."),
@@ -363,6 +367,7 @@ int main(int argc, char *argv[]) {
     parser.addOption(karaokeOption);
     parser.addOption(playTrackOption);
     parser.addOption(trackMenuOption);
+    parser.addOption(librarySortOption);
     parser.addOption(screenshotDelayOption);
     parser.addOption(demoDownloadOption);
     parser.addOption(demoStreamingOption);
@@ -735,8 +740,14 @@ int main(int argc, char *argv[]) {
             });
         }
     }
+    if (parser.isSet(librarySortOption)) {
+        const QString key = parser.value(librarySortOption);
+        QTimer::singleShot(1200, &window, [&window, key] {
+            window.setLibrarySort(key);
+        });
+    }
     if (parser.isSet(trackMenuOption)) {
-        QTimer::singleShot(1500, &window, [&window] {
+        QTimer::singleShot(2800, &window, [&window] {
             window.demoTrackContextMenu();
         });
     }

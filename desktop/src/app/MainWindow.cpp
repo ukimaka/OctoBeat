@@ -1750,6 +1750,12 @@ void MainWindow::addTrackToQueue(qint64 trackId) {
     }
 }
 
+void MainWindow::setLibrarySort(const QString &key) {
+    if (m_library) {
+        m_library->setSort(key, true);
+    }
+}
+
 void MainWindow::demoTrackContextMenu() {
     const QVector<qint64> ids = m_library->orderedTrackIds();
     if (ids.isEmpty()) {

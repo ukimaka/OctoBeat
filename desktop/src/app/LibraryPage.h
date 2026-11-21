@@ -33,6 +33,7 @@ public:
     void applyTheme();
     void toggleSelectAll();
     bool allTracksSelected() const;
+    void setSort(const QString &key, bool ascending);
 
 signals:
     void playRequested(qint64 trackId);

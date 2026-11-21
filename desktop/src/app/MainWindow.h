@@ -67,6 +67,7 @@ public:
                               const QVector<qint64> &selectedIds,
                               bool playlistScope);
     void demoTrackContextMenu();
+    void setLibrarySort(const QString &key);
     void demoLyricsPanel();
     void demoKaraoke();
     void playTrackById(qint64 trackId);

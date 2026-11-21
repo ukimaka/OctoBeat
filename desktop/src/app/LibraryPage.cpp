@@ -432,6 +432,17 @@ QTreeWidgetItem *LibraryPage::makeFolderItem(const Folder &folder) {
     return item;
 }
 
+void LibraryPage::setSort(const QString &key, bool ascending) {
+    m_sortKey = key;
+    m_sortAscending = ascending;
+    const int index = m_sort->findData(key);
+    if (index >= 0) {
+        m_sort->setCurrentIndex(index);
+    }
+    updateSortIndicator();
+    rebuild();
+}
+
 void LibraryPage::updateSortIndicator() {
     if (!m_sort) {
         return;
