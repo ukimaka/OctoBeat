@@ -1,0 +1,6 @@
+# Keep source line endings stable across platforms.
+* text=auto eol=lf
+
+# Cargo verifies checksums of vendored crate files byte-for-byte.
+# Never let Git convert their line endings on Windows.
+rust/*/vendor/** -text
