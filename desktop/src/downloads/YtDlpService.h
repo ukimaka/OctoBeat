@@ -52,6 +52,8 @@ private:
     enum class Mode { None, Search, Download, Stream };
     enum class StreamAttempt { None, AudioHls, EmbeddedHls };
 
+    void startNextStreamClient();
+
     void start(Mode mode, const QStringList &args);
     void stopProcess();
     void armTimeout(int milliseconds);
@@ -73,6 +75,9 @@ private:
     QString m_downloadCookies;
     bool m_downloadEmbedded = true;
     QString m_streamUrl;
+    QString m_streamCookies;
+    QStringList m_streamClients;
+    int m_streamClientIndex = 0;
     StreamAttempt m_streamAttempt = StreamAttempt::None;
     QTimer *m_timeout = nullptr;
     QTimer *m_stallTimer = nullptr;

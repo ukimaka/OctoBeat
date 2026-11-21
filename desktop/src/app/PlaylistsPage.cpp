@@ -3,11 +3,13 @@
 #include "AddTracksDialog.h"
 #include "CoverCache.h"
 #include "IconUtils.h"
+#include "LocalizedMessageBox.h"
 #include "PlaylistCoverDelegate.h"
 #include "SmoothListWidget.h"
 #include "Theme.h"
 #include "TrackDelegate.h"
 
+#include <QApplication>
 #include <QColor>
 #include <QComboBox>
 #include <QContextMenuEvent>
@@ -92,12 +94,12 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        const QColor bottom = palette().color(QPalette::Window);
+        const QColor bottom = QApplication::palette().color(QPalette::Window);
         const bool dark = bottom.lightness() < 128;
         QColor top = m_topColor.isValid()
-                         ? blend(m_topColor, bottom, dark ? 0.25 : 0.80)
+                         ? blend(m_topColor, bottom, dark ? 0.25 : 0.04)
                          : bottom;
-        const QColor mid = blend(top, bottom, dark ? 0.55 : 0.65);
+        const QColor mid = blend(top, bottom, dark ? 0.55 : 0.60);
         QLinearGradient gradient(0, 0, 0, height());
         gradient.setColorAt(0.0, top);
         gradient.setColorAt(0.45, mid);
@@ -122,8 +124,9 @@ public:
         setAttribute(Qt::WA_Hover, true);
     }
 
-    void setCover(const QPixmap &cover) {
+    void setCover(const QPixmap &cover, bool circular = false) {
         m_cover = cover;
+        m_circular = circular;
         update();
     }
 
@@ -146,7 +149,11 @@ protected:
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         const QRectF rect = this->rect();
         QPainterPath clip;
-        clip.addRoundedRect(rect, 8, 8);
+        if (m_circular) {
+            clip.addEllipse(rect);
+        } else {
+            clip.addRoundedRect(rect, 8, 8);
+        }
         painter.setClipPath(clip);
         if (!m_cover.isNull()) {
             painter.drawPixmap(this->rect(), m_cover);
@@ -215,6 +222,7 @@ private:
     QPixmap m_cover;
     QPixmap m_pencil;
     bool m_hover = false;
+    bool m_circular = false;
 };
 
 PlaylistsPage::PlaylistsPage(CoreClient *core,
@@ -306,17 +314,7 @@ PlaylistsPage::PlaylistsPage(CoreClient *core,
     m_detailTitle->setObjectName(QStringLiteral("playlistDetailTitle"));
     m_detailTitle->setStyleSheet(
         QStringLiteral("font-size: 32px; font-weight: bold;"));
-    auto *add = new QPushButton(QStringLiteral("+"), m_gradientPage);
-    add->setObjectName(QStringLiteral("playlistAdd"));
-    add->setFixedSize(32, 32);
-    add->setCursor(Qt::PointingHandCursor);
-    add->setToolTip(tr("Add tracks"));
-    add->setStyleSheet(QStringLiteral(
-        "QPushButton { font-size: 22px; font-weight: 600; border: none;"
-        " border-radius: 16px; background: transparent; padding: 0; }"
-        "QPushButton:hover { background: #5151ab; color: #ffffff; }"));
     nameRow->addWidget(m_detailTitle);
-    nameRow->addWidget(add, 0, Qt::AlignVCenter);
     nameRow->addStretch(1);
     right->addLayout(nameRow);
 
@@ -329,6 +327,15 @@ PlaylistsPage::PlaylistsPage(CoreClient *core,
     m_detailDescription->setSizePolicy(QSizePolicy::Expanding,
                                        QSizePolicy::Preferred);
     right->addWidget(m_detailDescription);
+
+    auto *add = new QPushButton(tr("Add tracks"), m_gradientPage);
+    add->setObjectName(QStringLiteral("playlistAdd"));
+    add->setCursor(Qt::PointingHandCursor);
+    add->setIcon(IconUtils::tinted(QStringLiteral("add-music.svg"),
+                                   Theme::iconColor(), 16));
+    add->setIconSize(QSize(16, 16));
+    add->setToolTip(tr("Add tracks"));
+    right->addWidget(add, 0, Qt::AlignLeft);
     right->addStretch(1);
     top->addLayout(right, 1);
 
@@ -454,7 +461,7 @@ PlaylistsPage::PlaylistsPage(CoreClient *core,
                 } else if (chosen == cover) {
                     changePlaylistCover(playlistId);
                 } else if (chosen == remove) {
-                    const auto answer = QMessageBox::question(
+                    const auto answer = LocalizedMessageBox::question(
                         this, tr("Delete playlist"),
                         tr("Delete playlist '%1'?").arg(playlistName),
                         QMessageBox::Yes | QMessageBox::No,
@@ -686,6 +693,7 @@ void PlaylistsPage::refresh() {
         return;
     }
     m_playlists = m_core->playlists();
+    const QString avatarPath = m_core->profile().avatarPath;
     m_grid->clear();
     for (const Playlist &playlist : m_playlists) {
         Playlist display = playlist;
@@ -699,6 +707,8 @@ void PlaylistsPage::refresh() {
         item->setData(TrackIdRole, playlist.id);
         item->setData(TrackTitleRole, playlist.name);
         item->setData(TrackCoverRole, display.coverPath);
+        item->setData(TrackCoverIsAvatarRole,
+                      CoverCache::sameImage(display.coverPath, avatarPath));
         item->setSizeHint(QSize(180, 210));
     }
 
@@ -785,7 +795,9 @@ void PlaylistsPage::refreshDetail() {
         coverPath = m_currentTracks.first().coverPath;
     }
     const QPixmap cover = CoverCache::cover(coverPath, 140);
-    m_detailCover->setCover(cover);
+    const QString avatarPath = m_core ? m_core->profile().avatarPath : QString();
+    m_detailCover->setCover(cover,
+                            CoverCache::sameImage(coverPath, avatarPath));
     auto *page = static_cast<PlaylistDetailPage *>(m_gradientPage);
     page->setCoverColor(averageColor(cover));
 
@@ -938,7 +950,7 @@ void PlaylistsPage::deleteCurrentPlaylist() {
     if (!m_core || m_currentPlaylistId <= 0) {
         return;
     }
-    const auto answer = QMessageBox::question(
+    const auto answer = LocalizedMessageBox::question(
         this, tr("Delete playlist"), tr("Delete this playlist?"));
     if (answer != QMessageBox::Yes) {
         return;

@@ -2,6 +2,7 @@
 
 #include "CoverCache.h"
 #include "IconUtils.h"
+#include "LocalizedMessageBox.h"
 #include "SmoothTreeWidget.h"
 #include "Theme.h"
 #include "TrackDelegate.h"
@@ -11,6 +12,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QContextMenuEvent>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QFont>
 #include <QHash>
@@ -21,6 +23,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSettings>
@@ -149,8 +152,8 @@ LibraryPage::LibraryPage(CoreClient *core, QWidget *parent)
     m_tree->setObjectName(QStringLiteral("libraryList"));
     m_tree->setHeaderHidden(true);
     m_tree->setColumnCount(1);
-    m_tree->setRootIsDecorated(true);
-    m_tree->setIndentation(6);
+    m_tree->setRootIsDecorated(false);
+    m_tree->setIndentation(18);
     m_tree->setUniformRowHeights(true);
     m_tree->setAnimated(false);
     m_tree->setExpandsOnDoubleClick(false);
@@ -206,7 +209,27 @@ LibraryPage::LibraryPage(CoreClient *core, QWidget *parent)
     connect(m_tree, &QTreeWidget::customContextMenuRequested, this,
             [this](const QPoint &pos) {
                 QTreeWidgetItem *item = m_tree->itemAt(pos);
-                if (!item || item->data(0, IsFolderRole).toBool()) {
+                if (!item) {
+                    return;
+                }
+                if (item->data(0, IsFolderRole).toBool()) {
+                    QMenu menu(this);
+                    QAction *rename = menu.addAction(
+                        IconUtils::tinted(QStringLiteral("pencil.svg"),
+                                          Theme::iconColor(), 16),
+                        tr("Rename folder"));
+                    menu.addSeparator();
+                    QAction *remove = menu.addAction(
+                        IconUtils::tinted(QStringLiteral("trash.svg"),
+                                          QColor(0xE0, 0x5A, 0x4A), 16),
+                        tr("Delete folder"));
+                    QAction *chosen =
+                        menu.exec(m_tree->viewport()->mapToGlobal(pos));
+                    if (chosen == rename) {
+                        renameFolder(item);
+                    } else if (chosen == remove) {
+                        deleteFolder(item);
+                    }
                     return;
                 }
                 if (!item->isSelected()) {
@@ -219,16 +242,33 @@ LibraryPage::LibraryPage(CoreClient *core, QWidget *parent)
                     m_tree->viewport()->mapToGlobal(pos),
                     item->data(0, TrackIdRole).toLongLong(), ids);
             });
-    connect(m_tree, &QTreeWidget::itemDoubleClicked, this,
+    connect(m_tree, &QTreeWidget::itemClicked, this,
             [this](QTreeWidgetItem *item, int) {
-                if (item && item->data(0, IsFolderRole).toBool()) {
-                    item->setExpanded(!item->isExpanded());
+                if (!item || !item->data(0, IsFolderRole).toBool()) {
                     return;
                 }
-                activateItem(item);
+                const qint64 id = item->data(0, FolderIdRole).toLongLong();
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                if (id == m_lastFolderClickId &&
+                    now - m_lastFolderClickMs < 350) {
+                    return;
+                }
+                m_lastFolderClickId = id;
+                m_lastFolderClickMs = now;
+                item->setExpanded(!item->isExpanded());
+            });
+    connect(m_tree, &QTreeWidget::itemDoubleClicked, this,
+            [this](QTreeWidgetItem *item, int) {
+                if (item && !item->data(0, IsFolderRole).toBool()) {
+                    activateItem(item);
+                }
             });
     connect(m_tree, &QTreeWidget::itemActivated, this,
-            [this](QTreeWidgetItem *item, int) { activateItem(item); });
+            [this](QTreeWidgetItem *item, int) {
+                if (item && !item->data(0, IsFolderRole).toBool()) {
+                    activateItem(item);
+                }
+            });
     connect(m_tree, &QTreeWidget::itemExpanded, this,
             [this](QTreeWidgetItem *item) {
                 if (!item) {
@@ -418,7 +458,6 @@ void LibraryPage::activateItem(QTreeWidgetItem *item) {
         return;
     }
     if (item->data(0, IsFolderRole).toBool()) {
-        item->setExpanded(!item->isExpanded());
         return;
     }
     const qint64 id = item->data(0, TrackIdRole).toLongLong();
@@ -444,6 +483,49 @@ void LibraryPage::createFolder() {
                              tr("A folder with this name already exists."));
         return;
     }
+    rebuild();
+}
+
+void LibraryPage::renameFolder(QTreeWidgetItem *item) {
+    if (!m_core || !item) {
+        return;
+    }
+    const qint64 id = item->data(0, FolderIdRole).toLongLong();
+    const QString current = item->data(0, FolderNameRole).toString();
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, tr("Rename folder"), tr("Folder name:"), QLineEdit::Normal,
+        current, &ok);
+    if (!ok || name.trimmed().isEmpty() || name.trimmed() == current) {
+        return;
+    }
+    if (!m_core->renameFolder(id, name.trimmed())) {
+        LocalizedMessageBox::warning(
+            this, tr("Rename folder"),
+            tr("Could not rename the folder. The name may already exist."));
+        return;
+    }
+    rebuild();
+}
+
+void LibraryPage::deleteFolder(QTreeWidgetItem *item) {
+    if (!m_core || !item) {
+        return;
+    }
+    const qint64 id = item->data(0, FolderIdRole).toLongLong();
+    const QString name = item->data(0, FolderNameRole).toString();
+    const auto answer = LocalizedMessageBox::question(
+        this, tr("Delete folder"),
+        tr("Delete folder '%1'? Tracks will stay in the library.").arg(name));
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    if (!m_core->deleteFolder(id)) {
+        LocalizedMessageBox::warning(this, tr("Delete folder"),
+                                     tr("Could not delete the folder."));
+        return;
+    }
+    m_collapsed.remove(id);
     rebuild();
 }
 

@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QCommandLineParser>
+#include <QDateTime>
 #include <QGuiApplication>
 #include <QDir>
 #include <QFile>
@@ -11,6 +12,7 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QMutex>
 #include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
@@ -18,6 +20,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <cstdlib>
 
 #include "app/MainWindow.h"
 #include "app/ResourcePaths.h"
@@ -31,6 +34,65 @@
 #include "audio/AudioEngine.h"
 
 namespace {
+
+QMutex g_logMutex;
+QString g_logPath;
+
+void logMessageHandler(QtMsgType type,
+                       const QMessageLogContext &,
+                       const QString &message) {
+    const char *level = "INFO";
+    switch (type) {
+    case QtDebugMsg:
+        level = "DEBUG";
+        break;
+    case QtInfoMsg:
+        level = "INFO";
+        break;
+    case QtWarningMsg:
+        level = "WARN";
+        break;
+    case QtCriticalMsg:
+        level = "ERROR";
+        break;
+    case QtFatalMsg:
+        level = "FATAL";
+        break;
+    }
+    const QString line = QStringLiteral("%1 [%2] %3\n")
+                             .arg(QDateTime::currentDateTime()
+                                      .toString(Qt::ISODateWithMs),
+                                  QString::fromLatin1(level), message);
+    const QByteArray utf8 = line.toUtf8();
+    {
+        QMutexLocker locker(&g_logMutex);
+        if (!g_logPath.isEmpty()) {
+            QFile file(g_logPath);
+            if (file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+                file.write(utf8);
+            }
+        }
+    }
+#ifndef Q_OS_WIN
+    std::fwrite(utf8.constData(), 1, static_cast<size_t>(utf8.size()), stderr);
+    std::fflush(stderr);
+#endif
+    if (type == QtFatalMsg) {
+        std::abort();
+    }
+}
+
+void installLogging(const QString &dataDir) {
+    QDir().mkpath(dataDir);
+    g_logPath = QDir(dataDir).filePath(QStringLiteral("octobeat.log"));
+    const QFileInfo info(g_logPath);
+    if (info.size() > 8LL * 1024 * 1024) {
+        const QString previous = g_logPath + QStringLiteral(".1");
+        QFile::remove(previous);
+        QFile::rename(g_logPath, previous);
+    }
+    qInstallMessageHandler(logMessageHandler);
+}
 
 QString defaultDataDir() {
     const QString base =
@@ -342,6 +404,7 @@ int main(int argc, char *argv[]) {
 
     QDir().mkpath(dataDir);
     QDir().mkpath(cacheDir);
+    installLogging(dataDir);
 
     // Keep the pre-port database safe. Only the first launch creates this
     // snapshot; later launches keep the original backup.

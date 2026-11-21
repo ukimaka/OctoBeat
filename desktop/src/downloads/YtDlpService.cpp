@@ -56,12 +56,10 @@ YtDlpService::YtDlpService(QObject *parent) : QObject(parent) {
             return;
         }
         const Mode mode = m_mode;
-        if (mode == Mode::Stream && m_streamAttempt == StreamAttempt::AudioHls &&
-            !m_streamUrl.isEmpty()) {
-            const QString url = m_streamUrl;
-            const QString cookies = m_downloadCookies;
+        if (mode == Mode::Stream && m_streamClientIndex < m_streamClients.size()) {
+            qWarning("yt-dlp: stream client timed out, trying next");
             stopProcess();
-            resolveStream(url, cookies);
+            startNextStreamClient();
             return;
         }
         stopProcess();
@@ -158,8 +156,9 @@ void YtDlpService::startDownloadAttempt(bool embed) {
     args << QStringLiteral("--no-playlist")
          << QStringLiteral("--newline")
          << QStringLiteral("--no-warnings")
-         << QStringLiteral("--retries") << QStringLiteral("3")
-         << QStringLiteral("--fragment-retries") << QStringLiteral("3")
+         << QStringLiteral("--retries") << QStringLiteral("4")
+         << QStringLiteral("--fragment-retries") << QStringLiteral("4")
+         << QStringLiteral("--retry-sleep") << QStringLiteral("1")
          << QStringLiteral("--embed-metadata");
     if (mp3) {
         args << QStringLiteral("-f") << QStringLiteral("bestaudio/best")
@@ -181,6 +180,34 @@ void YtDlpService::startDownloadAttempt(bool embed) {
     start(Mode::Download, args);
 }
 
+void YtDlpService::startNextStreamClient() {
+    if (m_streamClientIndex >= m_streamClients.size()) {
+        emit failed(tr("Could not resolve the stream."));
+        return;
+    }
+    const QString client = m_streamClients.at(m_streamClientIndex++);
+    m_streamAttempt = client == QStringLiteral("android_music")
+                          ? StreamAttempt::AudioHls
+                          : StreamAttempt::EmbeddedHls;
+    qWarning("yt-dlp: stream client=%s attempt=%d",
+             client.toUtf8().constData(), m_streamClientIndex);
+
+    QStringList args = commonArgs(
+        m_streamCookies, client != QStringLiteral("android_music"));
+    args << QStringLiteral("--extractor-args")
+         << (QStringLiteral("youtube:player_client=") + client)
+         << QStringLiteral("-g")
+         << QStringLiteral("--print") << QStringLiteral("%(duration)s")
+         << QStringLiteral("-f")
+         << QStringLiteral("234/233/bestaudio/best")
+         << QStringLiteral("--no-playlist")
+         << QStringLiteral("--no-warnings")
+         << QStringLiteral("--socket-timeout") << QStringLiteral("8")
+         << QStringLiteral("--retries") << QStringLiteral("1")
+         << m_streamUrl;
+    start(Mode::Stream, args);
+}
+
 void YtDlpService::resolveAudioHls(const QString &url,
                                    const QString &cookiesPath) {
     if (url.isEmpty()) {
@@ -188,23 +215,13 @@ void YtDlpService::resolveAudioHls(const QString &url,
         return;
     }
     m_streamUrl = url;
+    m_streamCookies = cookiesPath;
     m_downloadCookies = cookiesPath;
-    m_streamAttempt = StreamAttempt::AudioHls;
-
-    QStringList args = commonArgs(cookiesPath, false);
-    // android_music exposes an audio-only HLS track (itag 234/233). It does
-    // not carry the fake "available_at" delay of regular download formats.
-    args << QStringLiteral("--extractor-args")
-         << QStringLiteral("youtube:player_client=android_music")
-         << QStringLiteral("-g")
-         << QStringLiteral("--print") << QStringLiteral("%(duration)s")
-         << QStringLiteral("-f") << QStringLiteral("234/233")
-         << QStringLiteral("--no-playlist")
-         << QStringLiteral("--no-warnings")
-         << QStringLiteral("--socket-timeout") << QStringLiteral("8")
-         << QStringLiteral("--retries") << QStringLiteral("1")
-         << url;
-    start(Mode::Stream, args);
+    m_streamClients = {QStringLiteral("android_music"),
+                       QStringLiteral("web_embedded"),
+                       QStringLiteral("tv")};
+    m_streamClientIndex = 0;
+    startNextStreamClient();
 }
 
 void YtDlpService::resolveStream(const QString &url, const QString &cookiesPath) {
@@ -213,23 +230,11 @@ void YtDlpService::resolveStream(const QString &url, const QString &cookiesPath)
         return;
     }
     m_streamUrl = url;
+    m_streamCookies = cookiesPath;
     m_downloadCookies = cookiesPath;
-    m_streamAttempt = StreamAttempt::EmbeddedHls;
-
-    QStringList args = commonArgs(cookiesPath);
-    // web_embedded exposes muxed HLS. ffmpeg extracts the audio track; the
-    // native engine does not consume HLS directly, so the segment redirect
-    // handling stays in ffmpeg.
-    args << QStringLiteral("--extractor-args")
-         << QStringLiteral("youtube:player_client=web_embedded")
-         << QStringLiteral("-g")
-         << QStringLiteral("-f") << QStringLiteral("91/92/93/94/95/96/best")
-         << QStringLiteral("--no-playlist")
-         << QStringLiteral("--no-warnings")
-         << QStringLiteral("--socket-timeout") << QStringLiteral("8")
-         << QStringLiteral("--retries") << QStringLiteral("1")
-         << url;
-    start(Mode::Stream, args);
+    m_streamClients = {QStringLiteral("web_embedded")};
+    m_streamClientIndex = 0;
+    startNextStreamClient();
 }
 
 void YtDlpService::downloadForStream(const QString &url,
@@ -250,8 +255,9 @@ void YtDlpService::downloadForStream(const QString &url,
          << QStringLiteral("--no-playlist")
          << QStringLiteral("--newline")
          << QStringLiteral("--no-warnings")
-         << QStringLiteral("--retries") << QStringLiteral("2")
-         << QStringLiteral("--fragment-retries") << QStringLiteral("2")
+         << QStringLiteral("--retries") << QStringLiteral("4")
+         << QStringLiteral("--fragment-retries") << QStringLiteral("4")
+         << QStringLiteral("--retry-sleep") << QStringLiteral("1")
          << QStringLiteral("--concurrent-fragments") << QStringLiteral("4")
          << QStringLiteral("--print") << QStringLiteral("after_move:filepath")
          << QStringLiteral("-o")
@@ -335,6 +341,7 @@ void YtDlpService::start(Mode mode, const QStringList &args) {
         return;
     }
 
+    qWarning("yt-dlp: start mode=%d", static_cast<int>(mode));
     m_mode = mode;
     m_output.clear();
     m_lastError.clear();
@@ -421,6 +428,8 @@ void YtDlpService::handleFinished(int exitCode, QProcess::ExitStatus exitStatus)
         const int end = m_output.lastIndexOf(QLatin1Char('}'));
         if (exitCode != 0 || start < 0 || end < start) {
             m_lastError = cleanOutput(m_output);
+            qWarning("yt-dlp: search failed exit=%d: %s", exitCode,
+                     m_lastError.toUtf8().constData());
             emit failed(m_lastError.isEmpty() ? tr("YouTube search failed.") : m_lastError);
             return;
         }
@@ -469,6 +478,8 @@ void YtDlpService::handleFinished(int exitCode, QProcess::ExitStatus exitStatus)
         trace(QStringLiteral("download finished exit=%1 file=%2").arg(exitCode).arg(m_output.right(300)));
         if (exitCode != 0) {
             m_lastError = cleanOutput(m_output);
+            qWarning("yt-dlp: download failed exit=%d: %s", exitCode,
+                     m_lastError.toUtf8().constData());
             const QString lower = m_lastError.toLower();
             if (m_downloadEmbedded &&
                 (lower.contains(QStringLiteral("thumbnail")) ||
@@ -523,19 +534,15 @@ void YtDlpService::handleFinished(int exitCode, QProcess::ExitStatus exitStatus)
                 }
             }
         }
-
-        const bool needsHlsFallback =
-            url.isEmpty() ||
-            (m_streamAttempt == StreamAttempt::AudioHls &&
-             !url.contains(QStringLiteral("m3u8")) &&
-             !url.contains(QStringLiteral("manifest")));
-        if (needsHlsFallback && m_streamAttempt == StreamAttempt::AudioHls &&
-            !m_streamUrl.isEmpty()) {
-            resolveStream(m_streamUrl, m_downloadCookies);
-            return;
-        }
         if (url.isEmpty()) {
             m_lastError = cleanOutput(m_output);
+            qWarning("yt-dlp: stream resolve failed exit=%d: %s", exitCode,
+                     m_lastError.toUtf8().constData());
+            if (m_streamClientIndex < m_streamClients.size()) {
+                QTimer::singleShot(0, this,
+                                   &YtDlpService::startNextStreamClient);
+                return;
+            }
             emit failed(m_lastError.isEmpty() ? tr("Could not resolve the stream.")
                                              : m_lastError);
             return;
@@ -557,6 +564,7 @@ void YtDlpService::handleError() {
     }
     m_mode = Mode::None;
     m_lastError = m_process->errorString();
+    qWarning("yt-dlp: process error: %s", m_lastError.toUtf8().constData());
     trace(QStringLiteral("process error: %1").arg(m_lastError));
     m_process->deleteLater();
     m_process = nullptr;

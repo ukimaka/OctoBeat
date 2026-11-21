@@ -163,6 +163,16 @@ qint64 CoreClient::createFolder(const QString &name) {
     return octobeat_core_create_folder(m_core, name.toUtf8().constData());
 }
 
+bool CoreClient::renameFolder(qint64 folderId, const QString &name) {
+    return m_core &&
+           octobeat_core_rename_folder(m_core, folderId,
+                                       name.toUtf8().constData()) == 0;
+}
+
+bool CoreClient::deleteFolder(qint64 folderId) {
+    return m_core && octobeat_core_delete_folder(m_core, folderId) == 0;
+}
+
 bool CoreClient::moveTrackToFolder(qint64 trackId, qint64 folderId) {
     return m_core &&
            octobeat_core_move_track_to_folder(m_core, trackId, folderId) == 0;
@@ -375,5 +385,18 @@ bool CoreClient::scan(const std::function<void(int, int)> &progress) {
     }
     ScanContext context;
     context.progress = &progress;
-    return octobeat_core_scan(m_core, scanProgress, &context) == 0;
+    const bool ok =
+        octobeat_core_scan(m_core, scanProgress, &context) == 0;
+    if (!ok) {
+        m_lastError = takeString(octobeat_core_last_error(m_core));
+    } else {
+        m_lastError.clear();
+    }
+    return ok;
+}
+
+void CoreClient::cancelScan() {
+    if (m_core) {
+        octobeat_core_cancel_scan(m_core);
+    }
 }

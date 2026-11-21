@@ -3,6 +3,11 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
+#include <QDirIterator>
+#include <QFutureWatcher>
+#include <QProgressDialog>
+#include <QSet>
+#include <QtConcurrent>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -11,9 +16,11 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QMessageBox>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QShortcut>
 #include <QPainter>
@@ -24,10 +31,16 @@
 #include <QTabWidget>
 #include <QToolButton>
 #include <QUrl>
+#include <QWindow>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <random>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <windowsx.h>
+#endif
 
 #include "CoverCache.h"
 #include "IconUtils.h"
@@ -38,6 +51,7 @@
 #include "downloads/StreamingPage.h"
 #include "FullscreenLyrics.h"
 #include "LibraryPage.h"
+#include "LocalizedMessageBox.h"
 #include "LyricsPanel.h"
 #include "LyricsService.h"
 #include "ProfilePage.h"
@@ -61,6 +75,23 @@ QString mprisArtUrl(const QString &coverPath) {
         return coverPath;
     }
     return QUrl::fromLocalFile(coverPath).toString();
+}
+
+int countAudioFiles(const QString &directory) {
+    static const QSet<QString> extensions = {
+        QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"),
+        QStringLiteral("m4a"), QStringLiteral("wav"), QStringLiteral("webm"),
+        QStringLiteral("opus")};
+    int count = 0;
+    QDirIterator iterator(directory, QDir::Files | QDir::NoSymLinks,
+                          QDirIterator::Subdirectories);
+    while (iterator.hasNext()) {
+        iterator.next();
+        if (extensions.contains(iterator.fileInfo().suffix().toLower())) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 QWidget *placeholderPage(const QString &text, QWidget *parent) {
@@ -147,9 +178,10 @@ MainWindow::MainWindow(CoreClient *core,
     layout->addWidget(m_lyricsPanel);
     layout->addWidget(m_playerBar);
     setCentralWidget(root);
+    createResizeHandles();
 
     connect(m_library, &LibraryPage::playRequested, this, &MainWindow::playTrack);
-    connect(m_library, &LibraryPage::scanRequested, this, &MainWindow::scanLibrary);
+    connect(m_library, &LibraryPage::scanRequested, this, [this] { scanLibrary(); });
     connect(m_library, &LibraryPage::randomRequested, this, &MainWindow::playRandom);
     connect(m_library, &LibraryPage::importFilesRequested, this,
             &MainWindow::importFiles);
@@ -195,7 +227,7 @@ MainWindow::MainWindow(CoreClient *core,
         }
     });
     connect(m_settings, &SettingsPage::clearCacheRequested, this, [this] {
-        const auto answer = QMessageBox::question(
+        const auto answer = LocalizedMessageBox::question(
             this, tr("Clear ALL Cache"),
             tr("Delete all cached images and profile avatars/banners? "
                "This cannot be undone."),
@@ -226,17 +258,28 @@ MainWindow::MainWindow(CoreClient *core,
                 if (!m_core || path.isEmpty()) {
                     return;
                 }
+                const int count = countAudioFiles(path);
+                if (count > 1000) {
+                    const auto answer = LocalizedMessageBox::question(
+                        this, tr("Scan library"),
+                        tr("The selected folder contains %1 audio files. "
+                           "Scanning may take a while. Continue?")
+                            .arg(count));
+                    if (answer != QMessageBox::Yes) {
+                        return;
+                    }
+                }
                 m_core->setMusicDir(path);
                 m_musicDir = path;
                 QSettings settings(QStringLiteral("MusicPlayer"),
                                    QStringLiteral("MusicPlayer"));
                 settings.setValue(QStringLiteral("download_dir"), path);
-                scanLibrary();
+                scanLibrary(false);
             });
     connect(m_streaming, &StreamingPage::streamReady,
             this, &MainWindow::playStream);
     connect(m_streaming, &StreamingPage::libraryChanged, this,
-            &MainWindow::scanLibrary);
+            [this] { scanLibrary(); });
     connect(m_streaming, &StreamingPage::queueChanged, this,
             [this](int size) {
                 m_streamQueueSize = size;
@@ -466,11 +509,20 @@ MainWindow::MainWindow(CoreClient *core,
             m_streaming->isTransitioning()) {
             return;
         }
-        if (m_streamingActive && (m_preloadedReady || m_streamCrossfading)) {
+        if (m_streamingActive && m_streamCrossfading) {
+            return;
+        }
+        if (m_streamingActive && m_preloadedReady) {
+            // The end arrived before the position timer switched to the
+            // prepared track. Use it now instead of silently stopping.
+            switchToPreloaded();
             return;
         }
         if (m_streamingActive && m_streaming) {
             const bool continues = m_streaming->setPlaybackEnded();
+            qWarning("stream: end continues=%d queue=%d preloaded=%d",
+                     continues ? 1 : 0, m_streamQueueSize,
+                     m_preloadedReady ? 1 : 0);
             if (!continues) {
                 m_streamTimer->stop();
                 freezeStreamClock();
@@ -499,6 +551,7 @@ MainWindow::MainWindow(CoreClient *core,
     connect(m_audio, &AudioEngine::crossfadeFinished, this,
             &MainWindow::completeCrossfade);
     connect(m_audio, &AudioEngine::errorOccurred, this, [this](const QString &message) {
+        qWarning("audio: error: %s", message.toUtf8().constData());
         if (m_streamingFast) {
             m_streamingFast = false;
             m_streamingActive = false;
@@ -617,7 +670,7 @@ MainWindow::MainWindow(CoreClient *core,
     m_playerBar->setVolume(volume);
     m_audio->setVolume(volume);
     m_crossfadeEnabled =
-        settings.value(QStringLiteral("enable_crossfade"), false).toBool();
+        settings.value(QStringLiteral("enable_crossfade"), true).toBool();
     m_audio->setCrossfadeEnabled(m_crossfadeEnabled);
     m_streaming->setShuffleEnabled(m_shuffle);
     m_streaming->setRepeatMode(m_repeatMode);
@@ -756,9 +809,9 @@ void MainWindow::restoreOriginalOrder() {
 }
 
 void MainWindow::autoScan() {
-    // Match the Python app: every launch repairs missing tracks, refills
-    // metadata and extracts covers. With 114 Opus files this is ~0.2 s.
-    scanLibrary();
+    // Scan in the background on every launch; large libraries get a progress
+    // dialog, but no confirmation prompt for the folder the user already chose.
+    scanLibrary(false);
 }
 
 void MainWindow::setTabIndex(int index) {
@@ -873,7 +926,7 @@ void MainWindow::importCsvFile(const QString &path) {
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowModality(Qt::WindowModal);
     connect(dialog, &CsvImportDialog::libraryChanged, this,
-            &MainWindow::scanLibrary);
+            [this] { scanLibrary(); });
     dialog->show();
     dialog->start();
 }
@@ -1038,22 +1091,91 @@ void MainWindow::loadTracks() {
     updateNextTrack();
 }
 
-void MainWindow::scanLibrary() {
-    if (m_scanning || !m_core) {
+void MainWindow::scanLibrary(bool confirmLarge) {
+    if (!m_core) {
         return;
     }
+    if (m_scanning) {
+        m_scanPending = true;
+        m_core->cancelScan();
+        return;
+    }
+
+    const int total = countAudioFiles(m_musicDir);
+    if (confirmLarge && total > 1000) {
+        const auto answer = LocalizedMessageBox::question(
+            this, tr("Scan library"),
+            tr("The selected folder contains %1 audio files. Scanning may "
+               "take a while. Continue?")
+                .arg(total));
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
     m_scanning = true;
     m_library->setStatus(tr("Scanning library..."));
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    const bool ok = m_core->scan();
-    QApplication::restoreOverrideCursor();
-    m_scanning = false;
-    CoverCache::clear();
-    if (!ok) {
-        QMessageBox::warning(this, tr("Scan failed"),
-                             tr("Could not scan the music folder."));
+
+    QProgressDialog *dialog = nullptr;
+    if (total > 1000) {
+        dialog = new QProgressDialog(tr("Scanning library..."), tr("Cancel"),
+                                     0, total, this);
+        dialog->setWindowModality(Qt::WindowModal);
+        dialog->setMinimumDuration(300);
+        dialog->setAutoClose(false);
+        dialog->setAutoReset(false);
+        connect(dialog, &QProgressDialog::canceled, this, [this] {
+            if (m_core) {
+                m_core->cancelScan();
+            }
+        });
+        dialog->show();
     }
-    loadTracks();
+
+    auto *watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcher<bool>::finished, this,
+            [this, watcher, dialog] {
+                const bool ok = watcher->result();
+                watcher->deleteLater();
+                if (dialog) {
+                    dialog->close();
+                    dialog->deleteLater();
+                }
+                m_scanning = false;
+                CoverCache::clear();
+                const QString error = m_core ? m_core->lastError() : QString();
+                const bool canceled =
+                    error.contains(QStringLiteral("canceled"),
+                                   Qt::CaseInsensitive);
+                if (!ok && !canceled) {
+                    LocalizedMessageBox::warning(
+                        this, tr("Scan failed"),
+                        tr("Could not scan the music folder."));
+                } else if (canceled) {
+                    m_library->setStatus(tr("Scan canceled"));
+                }
+                loadTracks();
+                if (m_scanPending) {
+                    m_scanPending = false;
+                    scanLibrary();
+                }
+            });
+
+    CoreClient *core = m_core;
+    watcher->setFuture(QtConcurrent::run([core, dialog] {
+        return core->scan([dialog](int done, int total) {
+            if (!dialog) {
+                return;
+            }
+            QMetaObject::invokeMethod(
+                dialog,
+                [dialog, done, total] {
+                    dialog->setMaximum(total);
+                    dialog->setValue(done);
+                },
+                Qt::QueuedConnection);
+        });
+    }));
 }
 
 void MainWindow::playTrack(qint64 trackId) {
@@ -1124,6 +1246,8 @@ void MainWindow::playStream(const QString &url,
     m_contextName = tr("Streaming");
     m_streamingActive = true;
     m_streamingFast = url.contains(QStringLiteral("/octobeat-stream/stream-"));
+    qWarning("stream: playStream fast=%d duration=%d",
+             m_streamingFast ? 1 : 0, durationSeconds);
     m_streamDurationMs =
         qMax(0, durationSeconds) * 1000LL;
     m_streamTitle = title;
@@ -1888,7 +2012,7 @@ void MainWindow::removeTracksFromLibrary(const QVector<qint64> &trackIds) {
     if (!m_core || trackIds.isEmpty()) {
         return;
     }
-    const auto answer = QMessageBox::question(
+    const auto answer = LocalizedMessageBox::question(
         this, tr("Remove from library"),
         trackIds.size() > 1
             ? tr("Delete %1 tracks from the library and from disk? "
@@ -1990,6 +2114,42 @@ void MainWindow::nextTrack() {
     int next = m_currentIndex + 1;
     if (next >= m_context.size()) {
         if (m_repeatMode == QStringLiteral("all")) {
+            if (m_shuffle && m_contextOriginal.size() > 1) {
+                const QVector<Track> previous = m_context;
+                const auto sameOrder = [](const QVector<Track> &a,
+                                          const QVector<Track> &b) {
+                    if (a.size() != b.size()) {
+                        return false;
+                    }
+                    for (int i = 0; i < a.size(); ++i) {
+                        if (a[i].id != b[i].id) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                QVector<Track> shuffled = m_contextOriginal;
+                std::mt19937 rng(static_cast<unsigned>(
+                    QRandomGenerator::global()->generate()));
+                for (int attempt = 0; attempt < 8; ++attempt) {
+                    std::shuffle(shuffled.begin(), shuffled.end(), rng);
+                    if (!sameOrder(shuffled, previous)) {
+                        break;
+                    }
+                }
+                if (shuffled.first().id == previous.last().id) {
+                    for (int i = 1; i < shuffled.size(); ++i) {
+                        if (shuffled[i].id != previous.last().id) {
+                            std::swap(shuffled[0], shuffled[i]);
+                            break;
+                        }
+                    }
+                }
+                m_context = shuffled;
+                m_currentIndex = 0;
+                playIndex(0);
+                return;
+            }
             next = 0;
         } else {
             m_mprisStopped = true;
@@ -2143,6 +2303,194 @@ void MainWindow::showMiniPlayer() {
     m_miniPlayer->setPlaying(m_audio->isPlaying());
     m_miniPlayer->show();
     hide();
+}
+
+bool MainWindow::nativeEvent(const QByteArray &eventType,
+                              void *message,
+                              qintptr *result) {
+#ifdef Q_OS_WIN
+    if ((eventType == "windows_generic_MSG" ||
+         eventType == "windows_dispatcher_MSG") &&
+        message && result && !isMaximized() && !isFullScreen()) {
+        auto *msg = static_cast<MSG *>(message);
+        if (msg->message == WM_NCHITTEST) {
+            RECT windowRect{};
+            if (::GetWindowRect(reinterpret_cast<HWND>(winId()),
+                                &windowRect)) {
+                const int x = GET_X_LPARAM(msg->lParam);
+                const int y = GET_Y_LPARAM(msg->lParam);
+                const int border =
+                    qMax(6, ::GetSystemMetrics(SM_CXSIZEFRAME) + 2);
+                const bool left = x >= windowRect.left &&
+                                  x < windowRect.left + border;
+                const bool right = x < windowRect.right &&
+                                   x >= windowRect.right - border;
+                const bool top = y >= windowRect.top &&
+                                 y < windowRect.top + border;
+                const bool bottom = y < windowRect.bottom &&
+                                    y >= windowRect.bottom - border;
+                if (top && left) {
+                    *result = HTTOPLEFT;
+                    return true;
+                }
+                if (top && right) {
+                    *result = HTTOPRIGHT;
+                    return true;
+                }
+                if (bottom && left) {
+                    *result = HTBOTTOMLEFT;
+                    return true;
+                }
+                if (bottom && right) {
+                    *result = HTBOTTOMRIGHT;
+                    return true;
+                }
+                if (left) {
+                    *result = HTLEFT;
+                    return true;
+                }
+                if (right) {
+                    *result = HTRIGHT;
+                    return true;
+                }
+                if (top) {
+                    *result = HTTOP;
+                    return true;
+                }
+                if (bottom) {
+                    *result = HTBOTTOM;
+                    return true;
+                }
+            }
+        }
+    }
+#endif
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+void MainWindow::createResizeHandles() {
+    const struct {
+        int edges;
+        Qt::CursorShape cursor;
+    } definitions[] = {
+        {static_cast<int>(Qt::LeftEdge), Qt::SizeHorCursor},
+        {static_cast<int>(Qt::RightEdge), Qt::SizeHorCursor},
+        {static_cast<int>(Qt::TopEdge), Qt::SizeVerCursor},
+        {static_cast<int>(Qt::BottomEdge), Qt::SizeVerCursor},
+        {static_cast<int>(Qt::LeftEdge | Qt::TopEdge), Qt::SizeFDiagCursor},
+        {static_cast<int>(Qt::RightEdge | Qt::TopEdge), Qt::SizeBDiagCursor},
+        {static_cast<int>(Qt::LeftEdge | Qt::BottomEdge), Qt::SizeBDiagCursor},
+        {static_cast<int>(Qt::RightEdge | Qt::BottomEdge), Qt::SizeFDiagCursor},
+    };
+    for (const auto &definition : definitions) {
+        auto *handle = new QWidget(this);
+        handle->setObjectName(QStringLiteral("resizeHandle"));
+        handle->setProperty("resizeEdges", definition.edges);
+        handle->setCursor(definition.cursor);
+        handle->setAttribute(Qt::WA_NoSystemBackground, true);
+        handle->setAutoFillBackground(false);
+        handle->installEventFilter(this);
+        m_resizeHandles.push_back(handle);
+    }
+    positionResizeHandles();
+}
+
+void MainWindow::positionResizeHandles() {
+    if (m_resizeHandles.size() != 8) {
+        return;
+    }
+    const int border = 6;
+    const int width = this->width();
+    const int height = this->height();
+    const bool visible = !isMaximized() && !isFullScreen();
+    const QVector<QRect> rects = {
+        QRect(0, border, border, height - border * 2),
+        QRect(width - border, border, border, height - border * 2),
+        QRect(border, 0, width - border * 2, border),
+        QRect(border, height - border, width - border * 2, border),
+        QRect(0, 0, border, border),
+        QRect(width - border, 0, border, border),
+        QRect(0, height - border, border, border),
+        QRect(width - border, height - border, border, border),
+    };
+    for (int i = 0; i < m_resizeHandles.size(); ++i) {
+        QWidget *handle = m_resizeHandles.at(i);
+        handle->setGeometry(rects.at(i));
+        handle->setVisible(visible);
+        if (visible) {
+            handle->raise();
+        }
+    }
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    auto *handle = qobject_cast<QWidget *>(watched);
+    if (handle && m_resizeHandles.contains(handle)) {
+        const auto edges =
+            static_cast<Qt::Edges>(handle->property("resizeEdges").toInt());
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                if (QWindow *window = windowHandle()) {
+                    if (window->startSystemResize(edges)) {
+                        return true;
+                    }
+                }
+                m_manualResizing = true;
+                m_manualResizeEdges = edges;
+                m_manualResizeStart = mouse->globalPosition().toPoint();
+                m_manualResizeGeometry = geometry();
+                handle->grabMouse();
+                return true;
+            }
+        }
+        if (m_manualResizing && event->type() == QEvent::MouseMove) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            const QPoint delta =
+                mouse->globalPosition().toPoint() - m_manualResizeStart;
+            QRect target = m_manualResizeGeometry;
+            if (edges & Qt::LeftEdge) {
+                target.setLeft(target.left() + delta.x());
+            }
+            if (edges & Qt::RightEdge) {
+                target.setRight(target.right() + delta.x());
+            }
+            if (edges & Qt::TopEdge) {
+                target.setTop(target.top() + delta.y());
+            }
+            if (edges & Qt::BottomEdge) {
+                target.setBottom(target.bottom() + delta.y());
+            }
+            const QSize minimum = minimumSize();
+            if (target.width() < minimum.width()) {
+                if (edges & Qt::LeftEdge) {
+                    target.setLeft(target.right() - minimum.width() + 1);
+                } else {
+                    target.setWidth(minimum.width());
+                }
+            }
+            if (target.height() < minimum.height()) {
+                if (edges & Qt::TopEdge) {
+                    target.setTop(target.bottom() - minimum.height() + 1);
+                } else {
+                    target.setHeight(minimum.height());
+                }
+            }
+            setGeometry(target);
+            return true;
+        }
+        if (m_manualResizing && event->type() == QEvent::MouseButtonRelease) {
+            m_manualResizing = false;
+            handle->releaseMouse();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    positionResizeHandles();
 }
 
 void MainWindow::changeEvent(QEvent *event) {

@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg Network)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg Network Concurrent)
 if(UNIX AND NOT APPLE)
     find_package(Qt6 REQUIRED COMPONENTS DBus)
     find_package(PkgConfig REQUIRED)
@@ -189,12 +189,23 @@ add_executable(octobeat
     src/app/Translations.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
+    src/app/LocalizedMessageBox.cpp
+    src/app/LocalizedMessageBox.h
     src/app/MprisService.cpp
     src/app/MprisService.h
 )
 
 if(WIN32)
     target_compile_definitions(octobeat PRIVATE OCTOBEAT_NO_MPRIS)
+    # GUI subsystem: do not open a console window for the desktop app.
+    set_target_properties(octobeat PROPERTIES WIN32_EXECUTABLE TRUE)
+    set(OCTOBEAT_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../icons/icon.ico")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/octobeat.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/octobeat.rc"
+        @ONLY
+    )
+    target_sources(octobeat PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/octobeat.rc")
 endif()
 
 if(MSVC)
@@ -222,6 +233,7 @@ if(UNIX AND NOT APPLE)
         Qt6::Widgets
         Qt6::Svg
         Qt6::Network
+        Qt6::Concurrent
         Qt6::DBus
         octobeat_core
         octobeat_audio
@@ -235,6 +247,7 @@ elseif(WIN32)
         Qt6::Widgets
         Qt6::Svg
         Qt6::Network
+        Qt6::Concurrent
         octobeat_core
         octobeat_audio
         ole32
@@ -258,6 +271,7 @@ else()
         Qt6::Widgets
         Qt6::Svg
         Qt6::Network
+        Qt6::Concurrent
         octobeat_core
         octobeat_audio
     )

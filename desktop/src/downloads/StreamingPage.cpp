@@ -344,6 +344,11 @@ StreamingPage::StreamingPage(const QString &musicDir,
     connect(m_service, &YtDlpService::streamResolved, this,
             [this](const QString &url, const QString &, const QString &,
                    int durationSeconds) {
+                if (!m_resolving || m_resolvingForUrl != m_pending.url) {
+                    qWarning("stream: ignoring stale resolve for %s",
+                             m_pending.id.toUtf8().constData());
+                    return;
+                }
                 m_resolving = false;
                 m_resolvedUrl = url;
                 if (durationSeconds > 0) {
@@ -363,8 +368,27 @@ StreamingPage::StreamingPage(const QString &musicDir,
                 if (m_suppressCancel) {
                     return;
                 }
+                if (m_cacheDownloading && m_downloadForUrl != m_pending.url) {
+                    qWarning("stream: ignoring stale cache failure");
+                    return;
+                }
+                if (m_resolving && m_resolvingForUrl != m_pending.url) {
+                    qWarning("stream: ignoring stale resolve failure");
+                    return;
+                }
+                qWarning("stream: yt-dlp failed: %s",
+                         message.toUtf8().constData());
                 if (m_cacheDownloading) {
                     m_cacheDownloading = false;
+                    if (m_cacheDownloadRetries < 1 && m_playWhenReady) {
+                        ++m_cacheDownloadRetries;
+                        qWarning("stream: retrying cache download: %s",
+                                 message.toUtf8().constData());
+                        setStatus(tr("Stream interrupted. Retrying…"));
+                        QTimer::singleShot(1500, this,
+                                           &StreamingPage::startCacheDownload);
+                        return;
+                    }
                     m_playWhenReady = false;
                     setTrackBusy(m_pending.id, false);
                     setSearchBusy(false);
@@ -389,10 +413,15 @@ StreamingPage::StreamingPage(const QString &musicDir,
     });
     connect(m_service, &YtDlpService::downloadFinished, this,
             [this](const QString &path) {
-                if (!m_cacheDownloading) {
+                if (!m_cacheDownloading ||
+                    m_downloadForUrl != m_pending.url) {
+                    qWarning("stream: ignoring stale cache file %s",
+                             path.toUtf8().constData());
                     return;
                 }
                 m_cacheDownloading = false;
+                m_cacheDownloadRetries = 0;
+                m_downloadForUrl.clear();
                 m_cachedPath = path;
                 m_cachedUrl = m_pending.url;
                 if (m_playWhenReady) {
@@ -448,9 +477,8 @@ StreamingPage::StreamingPage(const QString &musicDir,
     connect(m_cacheService, &YtDlpService::failed, this,
             [this](const QString &message) {
                 m_bgCacheDownloading = false;
-                if (qEnvironmentVariableIsSet("OCTOBEAT_TRACE_STREAM")) {
-                    qWarning("stream: cache failed: %s", message.toUtf8().constData());
-                }
+                qWarning("stream: cache failed: %s",
+                         message.toUtf8().constData());
                 if (m_bgCacheRetries < 2 && m_bgCacheUrl == m_pending.url) {
                     ++m_bgCacheRetries;
                     if (m_pendingCacheSeekMs >= 0) {
@@ -1345,6 +1373,8 @@ void StreamingPage::startStreamCollection(
         return;
     }
     m_streamContext = playable;
+    qWarning("stream: collection tracks=%d shuffle=%d", playable.size(),
+             m_shuffle ? 1 : 0);
     if (m_shuffle) {
         std::mt19937 rng(static_cast<unsigned>(
             QRandomGenerator::global()->generate()));
@@ -1398,6 +1428,9 @@ void StreamingPage::playTrackInternal(const SearchResult &track) {
         emit streamToggleRequested();
         return;
     }
+    qWarning("stream: play id=%s title=%s queue=%d",
+             track.id.toUtf8().constData(),
+             track.title.toUtf8().constData(), m_streamQueue.size());
     m_suggestTimer->stop();
     m_suppressCancel = true;
     m_service->cancel();
@@ -1424,6 +1457,9 @@ void StreamingPage::playTrackInternal(const SearchResult &track) {
     m_resolvingForUrl = track.url;
     m_cachedUrl.clear();
     m_cachedPath.clear();
+    m_cacheDownloading = false;
+    m_cacheDownloadRetries = 0;
+    m_downloadForUrl.clear();
     m_bgCacheUrl.clear();
     m_bgCachePath.clear();
     m_bgCacheKey.clear();
@@ -1499,6 +1535,7 @@ void StreamingPage::handleFastStreamReady(FastStreamService *source,
     if (durationSeconds > 0) {
         m_pendingDuration = durationSeconds;
     }
+    qWarning("stream: fast ready id=%s", m_pending.id.toUtf8().constData());
     m_fastPlaybackStarted = true;
     m_playingId = m_pending.id;
     m_playingState = true;
@@ -1509,7 +1546,6 @@ void StreamingPage::handleFastStreamReady(FastStreamService *source,
     setStatus(tr("Playing: %1").arg(m_pending.title));
     emit streamReady(path, m_pending.title, m_pending.uploader,
                      m_pendingDuration, 0, m_pending.thumbnail);
-    m_cacheStartTimer->start();
 }
 
 void StreamingPage::handleFastStreamFailed(FastStreamService *source,
@@ -1520,6 +1556,9 @@ void StreamingPage::handleFastStreamFailed(FastStreamService *source,
     if (m_fastUrl != m_pending.url) {
         return;
     }
+    qWarning("stream: fast failed id=%s: %s",
+             m_pending.id.toUtf8().constData(),
+             message.toUtf8().constData());
     m_fastUrl.clear();
     m_resolvedUrl.clear();
     m_resolvedForUrl.clear();
@@ -1698,12 +1737,13 @@ void StreamingPage::finishPreloadedTransition() {
     m_preloadRepeatOne = false;
     m_preloadCachedPath.clear();
     m_preloadCachedUrl.clear();
-    if (m_cachedUrl != m_pending.url) {
-        m_cacheStartTimer->start();
-    }
 }
 
 void StreamingPage::startFastPlayback() {
+    if (!m_resolvedUrl.isEmpty() && m_resolvedForUrl != m_pending.url) {
+        qWarning("stream: resolved URL belongs to another track");
+        m_resolvedUrl.clear();
+    }
 #ifdef Q_OS_WIN
     // Windows has no POSIX FIFO. Play from the full background cache until a
     // native pipe path is implemented.
@@ -1739,6 +1779,7 @@ void StreamingPage::startCacheDownload() {
     m_fastStream->stop();
     m_fastUrl.clear();
     m_cacheDownloading = true;
+    m_downloadForUrl = m_pending.url;
     m_playWhenReady = true;
     m_cachedPath.clear();
     m_cachedUrl = m_pending.url;
@@ -1858,6 +1899,8 @@ void StreamingPage::setPlaybackPlaying(bool playing) {
 
 bool StreamingPage::setPlaybackEnded() {
     if (m_transitioning || (m_preloading && m_preloadManual)) {
+        qWarning("stream: end swallowed transitioning=%d preloading=%d",
+                 m_transitioning ? 1 : 0, m_preloading ? 1 : 0);
         return true;
     }
     m_playingState = false;

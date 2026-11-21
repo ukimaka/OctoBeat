@@ -151,7 +151,7 @@ void FastStreamService::start(const QString &hlsUrl,
     m_process->setProgram(ffmpeg);
     m_process->setArguments(arguments);
     // HLS seeks need a little more time to fetch the first segment.
-    m_startTimeout->setInterval(m_startMs > 0 ? 12000 : 7000);
+    m_startTimeout->setInterval(m_startMs > 0 ? 15000 : 12000);
     m_process->setProcessChannelMode(QProcess::SeparateChannels);
     connect(m_process, &QProcess::readyReadStandardOutput, this,
             &FastStreamService::handleProgress);
@@ -176,16 +176,10 @@ void FastStreamService::start(const QString &hlsUrl,
 
     m_startTimeout->start();
     m_process->start();
-    // Hand the FIFO to the audio engine immediately so its output is initialised
-    // while ffmpeg is still fetching the first HLS segment. The dummy
-    // read/write descriptor above keeps the FIFO open until the audio engine connects.
-    QTimer::singleShot(0, this, [this] {
-        if (!m_process || m_ready) {
-            return;
-        }
-        m_ready = true;
-        emit ready(m_fifoPath, m_durationSeconds);
-    });
+    // The audio engine probes the FIFO as soon as it receives ready(). If the
+    // FIFO is still empty at that point, probing fails with "no suitable
+    // format reader found". Wait until ffmpeg reports that it has muxed the
+    // first bytes before handing the pipe over.
 #endif
 }
 
@@ -221,13 +215,15 @@ void FastStreamService::handleProgress() {
         }
         if (totalSize > 0) {
             m_progressSeen = true;
-        }
-        if (m_ready) {
-            m_startTimeout->stop();
-        }
-        if (totalSize > 0 && m_ready && !m_prebuffered) {
-            m_prebuffered = true;
-            emit prebuffered(m_fifoPath, m_durationSeconds);
+            if (!m_ready) {
+                m_ready = true;
+                m_startTimeout->stop();
+                emit ready(m_fifoPath, m_durationSeconds);
+            }
+            if (m_ready && !m_prebuffered) {
+                m_prebuffered = true;
+                emit prebuffered(m_fifoPath, m_durationSeconds);
+            }
         }
     }
 }

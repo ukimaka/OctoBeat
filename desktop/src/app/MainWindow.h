@@ -77,9 +77,16 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void changeEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    bool nativeEvent(const QByteArray &eventType,
+                     void *message,
+                     qintptr *result) override;
 
 private:
-    void scanLibrary();
+    void createResizeHandles();
+    void positionResizeHandles();
+    void scanLibrary(bool confirmLarge = true);
     void playTrack(qint64 trackId);
     void commitTrackStart(int index, bool startPlayback);
     bool prepareCrossfade();
@@ -168,7 +175,13 @@ private:
     QVector<Track> m_contextOriginal;
     QVector<qint64> m_queue;
     int m_currentIndex = -1;
+    QVector<QWidget *> m_resizeHandles;
+    bool m_manualResizing = false;
+    Qt::Edges m_manualResizeEdges;
+    QPoint m_manualResizeStart;
+    QRect m_manualResizeGeometry;
     bool m_scanning = false;
+    bool m_scanPending = false;
     bool m_quitRequested = false;
     QString m_repeatMode = QStringLiteral("off");
     bool m_shuffle = false;

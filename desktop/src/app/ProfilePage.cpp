@@ -360,9 +360,10 @@ public:
         setStyleSheet(QStringLiteral(
             "QTextBrowser { background: transparent; border: none; }"
             "QScrollBar:vertical { background: transparent; width: 8px;"
-            " margin: 0; }"
+            " margin: 2px 0; border: none; border-radius: 4px; }"
             "QScrollBar::handle:vertical {"
-            " background: #b4b4c3; border-radius: 4px; min-height: 24px; }"
+            " background: #b4b4c3; border: none; border-radius: 4px;"
+            " min-height: 24px; }"
             "QScrollBar::handle:vertical:hover { background: #d7d7e6; }"
             "QScrollBar::add-line:vertical,"
             "QScrollBar::sub-line:vertical { height: 0; }"
@@ -784,7 +785,11 @@ void ProfilePage::reload() {
                 coverPath = tracks.first().coverPath;
             }
         }
-        const QPixmap cover = CoverCache::cover(coverPath, 92);
+        const bool avatarCover =
+            CoverCache::sameImage(coverPath, data.avatarPath);
+        const QPixmap cover = avatarCover
+                                  ? CoverCache::circularCover(coverPath, 92)
+                                  : CoverCache::cover(coverPath, 92);
         QIcon icon;
         if (!cover.isNull()) {
             icon = QIcon(cover);

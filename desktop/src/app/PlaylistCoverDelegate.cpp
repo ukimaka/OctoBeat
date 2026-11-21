@@ -63,7 +63,11 @@ void PlaylistCoverDelegate::paint(QPainter *painter,
     const QColor textColor = option.palette.color(QPalette::Text);
 
     QPainterPath clip;
-    clip.addRoundedRect(cover, CoverRadius, CoverRadius);
+    if (index.data(TrackCoverIsAvatarRole).toBool()) {
+        clip.addEllipse(cover);
+    } else {
+        clip.addRoundedRect(cover, CoverRadius, CoverRadius);
+    }
     painter->save();
     painter->setClipPath(clip);
     const QPixmap pixmap = CoverCache::cover(

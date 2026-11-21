@@ -9,6 +9,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <utility>
 
 SmoothTreeWidget::SmoothTreeWidget(QWidget *parent) : QTreeWidget(parent) {
     setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -18,8 +19,16 @@ SmoothTreeWidget::SmoothTreeWidget(QWidget *parent) : QTreeWidget(parent) {
 }
 
 void SmoothTreeWidget::dropEvent(QDropEvent *event) {
-    QTreeWidgetItem *source = currentItem();
-    if (!source || source->data(0, IsFolderRole).toBool()) {
+    QList<QTreeWidgetItem *> sources = selectedItems();
+    if (sources.isEmpty()) {
+        if (QTreeWidgetItem *current = currentItem()) {
+            sources.push_back(current);
+        }
+    }
+    sources.removeIf([](QTreeWidgetItem *item) {
+        return !item || item->data(0, IsFolderRole).toBool();
+    });
+    if (sources.isEmpty()) {
         event->ignore();
         return;
     }
@@ -31,31 +40,38 @@ void SmoothTreeWidget::dropEvent(QDropEvent *event) {
                            ? target
                            : target->parent();
     }
-    if (target == source ||
-        (source->parent() == targetFolder &&
-         source->parent() == nullptr && target == nullptr)) {
+
+    bool moved = false;
+    QTreeWidgetItem *lastCopy = nullptr;
+    for (QTreeWidgetItem *source : std::as_const(sources)) {
+        if (!source || source == target || source->parent() == targetFolder) {
+            continue;
+        }
+        QTreeWidgetItem *copy = source->clone();
+        if (source->parent()) {
+            source->parent()->removeChild(source);
+        } else {
+            const int row = indexOfTopLevelItem(source);
+            if (row >= 0) {
+                takeTopLevelItem(row);
+            }
+        }
+        delete source;
+        if (targetFolder) {
+            targetFolder->addChild(copy);
+            targetFolder->setExpanded(true);
+        } else {
+            addTopLevelItem(copy);
+        }
+        lastCopy = copy;
+        moved = true;
+    }
+
+    if (!moved) {
         event->ignore();
         return;
     }
-
-    QTreeWidgetItem *copy = source->clone();
-    if (source->parent()) {
-        source->parent()->removeChild(source);
-    } else {
-        const int row = indexOfTopLevelItem(source);
-        if (row >= 0) {
-            takeTopLevelItem(row);
-        }
-    }
-    delete source;
-
-    if (targetFolder) {
-        targetFolder->addChild(copy);
-        targetFolder->setExpanded(true);
-    } else {
-        addTopLevelItem(copy);
-    }
-    setCurrentItem(copy);
+    setCurrentItem(lastCopy);
     event->acceptProposedAction();
     emit itemsMoved();
 }

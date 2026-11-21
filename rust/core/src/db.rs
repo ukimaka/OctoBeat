@@ -611,6 +611,23 @@ pub fn create_folder(conn: &Connection, name: &str) -> Result<i64, String> {
     Ok(conn.last_insert_rowid())
 }
 
+pub fn rename_folder(conn: &Connection, folder_id: i64, name: &str) -> Result<bool, String> {
+    let changed = conn
+        .execute(
+            "UPDATE folders SET name = ?1 WHERE id = ?2",
+            params![name, folder_id],
+        )
+        .map_err(|e| format!("rename folder: {e}"))?;
+    Ok(changed > 0)
+}
+
+pub fn delete_folder(conn: &Connection, folder_id: i64) -> Result<bool, String> {
+    let changed = conn
+        .execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
+        .map_err(|e| format!("delete folder: {e}"))?;
+    Ok(changed > 0)
+}
+
 pub fn move_track_to_folder(
     conn: &Connection,
     track_id: i64,

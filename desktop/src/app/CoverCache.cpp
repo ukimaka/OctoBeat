@@ -1,6 +1,11 @@
 #include "CoverCache.h"
 
+#include <QCryptographicHash>
+#include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
+#include <QHash>
+#include <QPainterPath>
 #include <QImageReader>
 #include <QPainter>
 #include <QPixmapCache>
@@ -64,6 +69,61 @@ QPixmap cover(const QString &path, int size) {
         QPixmapCache::insert(key, pixmap);
     }
     return pixmap;
+}
+
+QPixmap circularCover(const QString &path, int size) {
+    const QPixmap source = cover(path, size);
+    if (source.isNull() || size <= 0) {
+        return {};
+    }
+    const QSize target = source.deviceIndependentSize().toSize();
+    QImage image(target * source.devicePixelRatio(),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(source.devicePixelRatio());
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPainterPath circle;
+    circle.addEllipse(QRectF(0, 0, image.width(), image.height()));
+    painter.setClipPath(circle);
+    painter.drawPixmap(0, 0, source);
+    painter.end();
+    return QPixmap::fromImage(image);
+}
+
+bool sameImage(const QString &first, const QString &second) {
+    if (first.isEmpty() || second.isEmpty()) {
+        return false;
+    }
+    const QFileInfo firstInfo(first);
+    const QFileInfo secondInfo(second);
+    if (!firstInfo.isFile() || !secondInfo.isFile()) {
+        return false;
+    }
+    if (firstInfo.canonicalFilePath() == secondInfo.canonicalFilePath()) {
+        return true;
+    }
+    if (firstInfo.size() != secondInfo.size()) {
+        return false;
+    }
+    static QHash<QString, QByteArray> hashes;
+    const auto digest = [](const QFileInfo &info) {
+        const QString path = info.canonicalFilePath();
+        const auto cached = hashes.constFind(path);
+        if (cached != hashes.constEnd()) {
+            return *cached;
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return QByteArray();
+        }
+        const QByteArray hash =
+            QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256);
+        hashes.insert(path, hash);
+        return hash;
+    };
+    const QByteArray firstHash = digest(firstInfo);
+    return !firstHash.isEmpty() && firstHash == digest(secondInfo);
 }
 
 QPixmap square(const QPixmap &source, int size) {

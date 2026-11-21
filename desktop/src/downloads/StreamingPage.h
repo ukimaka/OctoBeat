@@ -224,6 +224,7 @@ private:
     QString m_resolvingForUrl;
     QString m_cachedUrl;
     QString m_cachedPath;
+    QString m_downloadForUrl;
     QString m_bgCacheUrl;
     QString m_bgCachePath;
     QString m_bgCacheKey;
@@ -234,6 +235,7 @@ private:
     bool m_playingState = false;
     bool m_resolving = false;
     bool m_cacheDownloading = false;
+    int m_cacheDownloadRetries = 0;
     bool m_bgCacheDownloading = false;
     int m_bgCacheRetries = 0;
     qint64 m_pendingCacheSeekMs = -1;

@@ -53,6 +53,8 @@ private:
     void updateSortIndicator();
     void activateItem(QTreeWidgetItem *item);
     void createFolder();
+    void renameFolder(QTreeWidgetItem *item);
+    void deleteFolder(QTreeWidgetItem *item);
     void syncFoldersToDatabase();
     QTreeWidgetItem *makeTrackItem(const Track &track, int index);
     QTreeWidgetItem *makeFolderItem(const Folder &folder);
@@ -76,4 +78,6 @@ private:
     QString m_sortKey = QStringLiteral("added");
     bool m_sortAscending = false;
     QSet<qint64> m_collapsed;
+    qint64 m_lastFolderClickId = 0;
+    qint64 m_lastFolderClickMs = 0;
 };

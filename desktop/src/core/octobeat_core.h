@@ -38,6 +38,7 @@ typedef void (*OctoScanProgress)(int done, int total, void *user_data);
 int octobeat_core_scan(OctoCore *core,
                        OctoScanProgress progress,
                        void *user_data);
+int octobeat_core_cancel_scan(OctoCore *core);
 
 int octobeat_core_set_music_dir(OctoCore *core, const char *music_dir);
 char *octobeat_core_folders_json(OctoCore *core);
@@ -45,6 +46,10 @@ int64_t octobeat_core_create_folder(OctoCore *core, const char *name);
 int octobeat_core_move_track_to_folder(OctoCore *core,
                                        int64_t track_id,
                                        int64_t folder_id);
+int octobeat_core_rename_folder(OctoCore *core,
+                                int64_t folder_id,
+                                const char *name);
+int octobeat_core_delete_folder(OctoCore *core, int64_t folder_id);
 char *octobeat_core_track_lyrics_json(OctoCore *core, int64_t track_id);
 int octobeat_core_update_track_lyrics(OctoCore *core,
                                       int64_t track_id,

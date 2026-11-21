@@ -183,7 +183,7 @@ QWidget *SettingsPage::buildGeneral() {
 
     auto *crossfade = new QCheckBox(tr("Enable Crossfade"), page);
     crossfade->setChecked(
-        settings.value(QStringLiteral("enable_crossfade"), false).toBool());
+        settings.value(QStringLiteral("enable_crossfade"), true).toBool());
     crossfade->setCursor(Qt::PointingHandCursor);
     crossfade->setToolTip(
         tr("Smoothly blend the end of the current track into the next one."));
@@ -308,7 +308,7 @@ QWidget *SettingsPage::buildYouTube() {
 
     auto *format = new QComboBox(page);
     configureCombo(format, 280);
-    format->addItem(tr("Speed (original format)"), QStringLiteral("native"));
+    format->addItem(tr("Fast mode (original format)"), QStringLiteral("native"));
     format->addItem(tr("Compatibility (MP3 320 kbps)"), QStringLiteral("mp3"));
     const int formatIndex = format->findData(
         settings.value(QStringLiteral("youtube_download_mode"),
@@ -320,8 +320,8 @@ QWidget *SettingsPage::buildYouTube() {
     });
     layout->addWidget(makeRow(
         tr("Download format"),
-        tr("Speed keeps the original M4A/Opus audio without re-encoding. "
-           "Compatibility converts to MP3 320 kbps."),
+        tr("Fast mode keeps the original M4A/Opus/WebM audio without "
+           "re-encoding. Compatibility converts to MP3 320 kbps."),
         format, page));
 
     auto *cookiesRow = new QWidget(page);

@@ -199,12 +199,28 @@ void TrackDelegate::paint(QPainter *painter,
 
     if (isFolder) {
         const QColor folderColor = Theme::iconColor();
-        painter->drawPixmap(rect.x() + 6,
+        const bool expanded = option.state & QStyle::State_Open;
+        const int chevronX = rect.x() + 9;
+        const int chevronY = rect.y() + rect.height() / 2;
+        painter->setPen(QPen(folderColor, 1.6, Qt::SolidLine,
+                             Qt::RoundCap, Qt::RoundJoin));
+        QPolygonF chevron;
+        if (expanded) {
+            chevron << QPointF(chevronX - 3, chevronY - 2)
+                    << QPointF(chevronX, chevronY + 2)
+                    << QPointF(chevronX + 3, chevronY - 2);
+        } else {
+            chevron << QPointF(chevronX - 2, chevronY - 3)
+                    << QPointF(chevronX + 2, chevronY)
+                    << QPointF(chevronX - 2, chevronY + 3);
+        }
+        painter->drawPolyline(chevron);
+        painter->drawPixmap(rect.x() + 22,
                             rect.y() + (rect.height() - 22) / 2,
                             folderIcon(folderColor));
         painter->setFont(m_folderFont);
         painter->setPen(textColor);
-        const int textLeft = rect.x() + 36;
+        const int textLeft = rect.x() + 50;
         const int textWidth = qMax(0, rect.right() - textLeft - 12);
         const QString name = m_folderMetrics->elidedText(
             index.data(FolderNameRole).toString(), Qt::ElideRight, textWidth);

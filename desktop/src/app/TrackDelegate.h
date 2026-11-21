@@ -19,6 +19,7 @@ enum TrackRole {
     FolderNameRole,
     FolderIdRole,
     TrackExistsRole,
+    TrackCoverIsAvatarRole,
 };
 
 class TrackDelegate : public QStyledItemDelegate {

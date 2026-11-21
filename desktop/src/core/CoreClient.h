@@ -76,6 +76,8 @@ public:
     QVector<Playlist> playlists();
     QVector<Folder> folders();
     qint64 createFolder(const QString &name);
+    bool renameFolder(qint64 folderId, const QString &name);
+    bool deleteFolder(qint64 folderId);
     bool moveTrackToFolder(qint64 trackId, qint64 folderId);
     LyricsData trackLyrics(qint64 trackId);
     bool updateTrackLyrics(qint64 trackId,
@@ -106,6 +108,7 @@ public:
     bool removeTrackFromPlaylist(qint64 playlistId, qint64 trackId);
 
     bool scan(const std::function<void(int, int)> &progress = {});
+    void cancelScan();
 
 private:
     OctoCore *m_core = nullptr;

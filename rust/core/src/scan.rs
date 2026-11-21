@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Connection;
 use walkdir::WalkDir;
@@ -20,6 +21,7 @@ pub fn scan_library(
     conn: &Mutex<Connection>,
     music_dir: &Path,
     covers_dir: &Path,
+    cancel: &AtomicBool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<ScanResult, String> {
     {
@@ -35,6 +37,9 @@ pub fn scan_library(
         .into_iter()
         .filter_map(Result::ok)
     {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("scan canceled".to_string());
+        }
         if !entry.file_type().is_file() {
             continue;
         }
@@ -59,6 +64,9 @@ pub fn scan_library(
     };
 
     for (index, path) in files.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("scan canceled".to_string());
+        }
         let normalized = db::normalize_path(&path.to_string_lossy());
         let meta = metadata::read(path);
 

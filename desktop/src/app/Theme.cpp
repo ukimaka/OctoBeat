@@ -156,17 +156,20 @@ QString styleSheet(const QString &name) {
                "#playerBar { background-color: %7; background-image: none;"
                " border: none; border-radius: 12px; }"
                "QScrollBar:vertical { background: transparent; width: 8px;"
-               " margin: 0; }"
-               "QScrollBar::handle:vertical { background: %8;"
+               " margin: 2px 0; border: none; border-radius: 4px; }"
+               "QScrollBar::handle:vertical { background: %8; border: none;"
                " border-radius: 4px; min-height: 30px; }"
                "QScrollBar::handle:vertical:hover,"
                "QScrollBar::handle:vertical:pressed { background: %9; }"
                "QScrollBar:horizontal { background: transparent; height: 8px;"
-               " margin: 0; }"
-               "QScrollBar::handle:horizontal { background: %8;"
+               " margin: 0 2px; border: none; border-radius: 4px; }"
+               "QScrollBar::handle:horizontal { background: %8; border: none;"
                " border-radius: 4px; min-width: 30px; }"
                "QScrollBar::handle:horizontal:hover,"
                "QScrollBar::handle:horizontal:pressed { background: %9; }"
+               "QScrollBar::groove:vertical, QScrollBar::groove:horizontal,"
+               "QAbstractScrollArea::corner, QScrollBar::add-page,"
+               "QScrollBar::sub-page { background: transparent; border: none; }"
                "QListWidget#settingsNav { background-color: %2;"
                " border: 1px solid %3; border-radius: 14px; padding: 8px;"
                " selection-background-color: palette(highlight);"
@@ -279,7 +282,13 @@ void apply(const QString &name) {
 
 QString current() {
     QSettings settings(QStringLiteral("MusicPlayer"), QStringLiteral("MusicPlayer"));
-    return settings.value(QStringLiteral("theme"), QStringLiteral("dark")).toString();
+    QString theme =
+        settings.value(QStringLiteral("theme"), QStringLiteral("dark")).toString();
+    if (!availableThemes().contains(theme)) {
+        theme = QStringLiteral("dark");
+        settings.setValue(QStringLiteral("theme"), theme);
+    }
+    return theme;
 }
 
 } // namespace Theme

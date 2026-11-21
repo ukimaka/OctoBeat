@@ -12,6 +12,7 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Connection;
 
@@ -20,6 +21,7 @@ pub struct Core {
     music_dir: Mutex<PathBuf>,
     covers_dir: PathBuf,
     last_error: Mutex<Option<CString>>,
+    scan_cancel: AtomicBool,
 }
 
 impl Core {
@@ -46,6 +48,7 @@ impl Core {
             music_dir: Mutex::new(PathBuf::from(music_dir)),
             covers_dir,
             last_error: Mutex::new(None),
+            scan_cancel: AtomicBool::new(false),
         })
     }
 
@@ -391,11 +394,18 @@ pub extern "C" fn octobeat_core_scan(
             return -1;
         }
     };
-    let result = scan::scan_library(&core.conn, &music_dir, &core.covers_dir, |done, total| {
-        if let Some(callback) = progress {
-            callback(done as i32, total as i32, user_data);
-        }
-    });
+    core.scan_cancel.store(false, Ordering::SeqCst);
+    let result = scan::scan_library(
+        &core.conn,
+        &music_dir,
+        &core.covers_dir,
+        &core.scan_cancel,
+        |done, total| {
+            if let Some(callback) = progress {
+                callback(done as i32, total as i32, user_data);
+            }
+        },
+    );
 
     match result {
         Ok(result) => {
@@ -410,6 +420,15 @@ pub extern "C" fn octobeat_core_scan(
             -1
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn octobeat_core_cancel_scan(core: *mut Core) -> i32 {
+    let Some(core) = (unsafe { core.as_ref() }) else {
+        return -1;
+    };
+    core.scan_cancel.store(true, Ordering::SeqCst);
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -467,6 +486,47 @@ pub extern "C" fn octobeat_core_create_folder(core: *mut Core, name: *const c_ch
         Err(error) => {
             core.set_error(error);
             0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn octobeat_core_rename_folder(
+    core: *mut Core,
+    folder_id: i64,
+    name: *const c_char,
+) -> i32 {
+    let Some(core) = (unsafe { core.as_ref() }) else {
+        return -1;
+    };
+    let result = c_string(name, "").and_then(|name| {
+        core.lock_db()
+            .and_then(|conn| db::rename_folder(&conn, folder_id, &name))
+    });
+    match result {
+        Ok(true) => 0,
+        Ok(false) => -1,
+        Err(error) => {
+            core.set_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn octobeat_core_delete_folder(core: *mut Core, folder_id: i64) -> i32 {
+    let Some(core) = (unsafe { core.as_ref() }) else {
+        return -1;
+    };
+    match core
+        .lock_db()
+        .and_then(|conn| db::delete_folder(&conn, folder_id))
+    {
+        Ok(true) => 0,
+        Ok(false) => -1,
+        Err(error) => {
+            core.set_error(error);
+            -1
         }
     }
 }
