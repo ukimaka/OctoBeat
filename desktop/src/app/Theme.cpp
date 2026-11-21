@@ -91,7 +91,11 @@ QStringList availableThemes() {
     const QStringList files = QDir(themesDir()).entryList(
         {QStringLiteral("*.qss")}, QDir::Files, QDir::Name);
     for (const QString &file : files) {
-        names.push_back(QFileInfo(file).completeBaseName());
+        const QString name = QFileInfo(file).completeBaseName();
+        if (name == QStringLiteral("soft_light")) {
+            continue;
+        }
+        names.push_back(name);
     }
     return names;
 }
