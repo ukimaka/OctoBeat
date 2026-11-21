@@ -454,5 +454,6 @@
   "Scan canceled": "Сканирование отменено",
   "Could not rename the folder. The name may already exist.": "Не удалось переименовать папку. Возможно, такое имя уже существует.",
   "Could not delete the folder.": "Не удалось удалить папку.",
-  "Delete folder '%1'? Tracks will stay in the library.": "Удалить папку «%1»? Треки останутся в библиотеке."
+  "Delete folder '%1'? Tracks will stay in the library.": "Удалить папку «%1»? Треки останутся в библиотеке.",
+  "YouTube blocked the request. Import cookies.txt in Settings or try again later.": "YouTube заблокировал запрос. Импортируйте cookies.txt в настройках или повторите позже."
 }

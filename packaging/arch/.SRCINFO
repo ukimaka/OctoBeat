@@ -15,6 +15,6 @@ pkgbase = octobeat-bin
 	options = !debug
 	options = !strip
 	source = OctoBeat-1.0.0-Linux-x86_64.tar.gz::https://github.com/ukimaka/OctoBeat/releases/download/v1.0.0/OctoBeat-1.0.0-Linux-x86_64.tar.gz
-	sha256sums = cb734c4522b252bf46bb8e195524ab6ad6111c4b84e9c06fcc56576f68ab9b10
+	sha256sums = 9fb4ac8203fafb58d7b00acfda7e0f0a14e2ce16dae4bca15d81596977ea8e16
 
 pkgname = octobeat-bin

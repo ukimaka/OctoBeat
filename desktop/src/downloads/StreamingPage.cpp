@@ -43,6 +43,20 @@
 namespace {
 constexpr int SearchBarMinWidth = 420;
 constexpr int SearchBarMaxWidth = 860;
+
+QString friendlyStreamError(const QString &message) {
+    const QString lower = message.toLower();
+    if (lower.contains(QStringLiteral("403")) ||
+        lower.contains(QStringLiteral("forbidden")) ||
+        lower.contains(QStringLiteral("sign in")) ||
+        lower.contains(QStringLiteral("not a bot"))) {
+        return QCoreApplication::translate(
+            "StreamingPage",
+            "YouTube blocked the request. Import cookies.txt in Settings or "
+            "try again later.");
+    }
+    return message;
+}
 } // namespace
 
 StreamingPage::StreamingPage(const QString &musicDir,
@@ -392,7 +406,7 @@ StreamingPage::StreamingPage(const QString &musicDir,
                     m_playWhenReady = false;
                     setTrackBusy(m_pending.id, false);
                     setSearchBusy(false);
-                    setStatus(message);
+                    setStatus(friendlyStreamError(message));
                     return;
                 }
                 if (m_resolving) {
@@ -1578,7 +1592,8 @@ void StreamingPage::handleFastStreamFailed(FastStreamService *source,
     m_playWhenReady = false;
     setTrackBusy(m_pending.id, false);
     setSearchBusy(false);
-    setStatus(tr("Stream unavailable: %1").arg(message));
+    setStatus(tr("Stream unavailable: %1")
+                  .arg(friendlyStreamError(message)));
 }
 
 void StreamingPage::startPreload(const SearchResult &track,

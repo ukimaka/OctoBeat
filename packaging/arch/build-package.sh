@@ -8,5 +8,7 @@ if [ ! -f "$TARBALL" ]; then
 fi
 cp "$TARBALL" "$ROOT/packaging/arch/"
 cd "$ROOT/packaging/arch"
+sha256sums="$(sha256sum OctoBeat-1.0.0-Linux-x86_64.tar.gz | cut -d' ' -f1)"
+sed -i "s/^sha256sums=.*/sha256sums=('$sha256sums')/" PKGBUILD
 makepkg -f
 cp octobeat-bin-*.pkg.tar.zst "$ROOT/dist/"
