@@ -187,6 +187,11 @@ if(WIN32)
     target_compile_definitions(octobeat PRIVATE OCTOBEAT_NO_MPRIS)
 endif()
 
+if(MSVC)
+    # Sources contain UTF-8 UI strings; keep the standard value of __cplusplus.
+    target_compile_options(octobeat PRIVATE /utf-8 /Zc:__cplusplus)
+endif()
+
 target_include_directories(octobeat PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
