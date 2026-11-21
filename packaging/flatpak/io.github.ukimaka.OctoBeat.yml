@@ -63,11 +63,16 @@ modules:
         skip:
           - .git
           - .github
+          - .flatpak-builder
           - build
           - build-release
           - dist
           - desktop/build
+          - packaging/flatpak/build-dir
+          - packaging/flatpak/repo
           - packaging/tools/.build
+          - packaging/tools/.build-win
+          - packaging/tools/.flatpak-somedl
           - packaging/tools/runtime
           - rust/core/target
           - rust/audio-engine/target
