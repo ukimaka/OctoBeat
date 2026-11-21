@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QIcon>
+#include <QPainter>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QElapsedTimer>
@@ -905,7 +906,13 @@ int main(int argc, char *argv[]) {
             }
             QWidget *active = QApplication::activeWindow();
             if (QWidget *popup = QApplication::activePopupWidget()) {
-                popup->grab().save(path);
+                QPixmap base = window.grab();
+                const QPixmap overlay = popup->grab();
+                QPainter painter(&base);
+                painter.drawPixmap(
+                    popup->mapTo(&window, QPoint(0, 0)), overlay);
+                painter.end();
+                base.save(path);
             } else if (QWidget *modal = QApplication::activeModalWidget()) {
                 modal->grab().save(path);
             } else if (active && active != &window) {
