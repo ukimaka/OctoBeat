@@ -1586,7 +1586,13 @@ void StreamingPage::handleFastStreamFailed(FastStreamService *source,
     if (m_playWhenReady && !m_fastRetryTried) {
         m_fastRetryTried = true;
         setStatus(tr("Retrying stream…"));
-        m_service->resolveAudioHls(m_pending.url, cookiesPath());
+        // This is a new request, not a stale answer to the previous one.
+        m_resolving = true;
+        m_resolvingForUrl = m_pending.url;
+        m_resolvedUrl.clear();
+        // The android_music HLS sometimes resolves but its first segment is
+        // not readable by ffmpeg. Try the muxed web_embedded stream instead.
+        m_service->resolveStream(m_pending.url, cookiesPath());
         return;
     }
     m_playWhenReady = false;
