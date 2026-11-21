@@ -186,9 +186,8 @@ void FastStreamService::start(const QString &hlsUrl,
         m_ready = true;
         emit ready(m_fifoPath, m_durationSeconds);
     });
-}
-
 #endif
+}
 
 void FastStreamService::stop() {
     m_stopping = true;
