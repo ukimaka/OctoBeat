@@ -266,6 +266,9 @@ MainWindow::MainWindow(CoreClient *core,
                            "Scanning may take a while. Continue?")
                             .arg(count));
                     if (answer != QMessageBox::Yes) {
+                        if (m_settings) {
+                            m_settings->setMusicFolderPath(m_musicDir);
+                        }
                         return;
                     }
                 }

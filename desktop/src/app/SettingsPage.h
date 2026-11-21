@@ -18,6 +18,7 @@ public:
                  QWidget *parent = nullptr);
 
     void applyTheme();
+    void setMusicFolderPath(const QString &path);
 
 signals:
     void themeChanged(const QString &theme);

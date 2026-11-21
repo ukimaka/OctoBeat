@@ -475,6 +475,13 @@ void SettingsPage::applyTheme() {
     }
 }
 
+void SettingsPage::setMusicFolderPath(const QString &path) {
+    m_musicDir = path;
+    if (m_musicPath) {
+        m_musicPath->setText(path);
+    }
+}
+
 void SettingsPage::updateCookiesStatus() {
     if (!m_cookiesStatus) {
         return;
